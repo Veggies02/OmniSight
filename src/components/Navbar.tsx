@@ -1,6 +1,9 @@
 import { Link, NavLink } from "react-router-dom";
+import { useCart } from "../hooks/useCart";
 
 export function Navbar() {
+  const { totalUnits } = useCart();
+
   return (
     <header className="navbar">
       <div className="navbar-container">
@@ -32,10 +35,13 @@ export function Navbar() {
             className={({ isActive }) =>
               `nav-link cart-link ${isActive ? "nav-link-active" : ""}`
             }
-            aria-label="Shopping Cart"
+            aria-label={`Shopping Cart with ${totalUnits} items`}
           >
             <span className="cart-icon" aria-hidden="true">🛒</span>
             <span>Cart</span>
+            <span className="cart-badge" aria-label={`${totalUnits} items in cart`}>
+              {totalUnits}
+            </span>
           </NavLink>
         </nav>
       </div>
