@@ -1582,3 +1582,69 @@ button {
     gap: 1.5rem;
   }
 }
+
+/* ==========================================================================
+   Controlled UI Defect Scenarios (OmniSight Test-Bed)
+   These styles ONLY take effect when explicitly triggered via ?defect=<id>
+   ========================================================================== */
+
+/* Defect 1: Product Image Distortion */
+.defect-product-image-distortion .product-card-media {
+  aspect-ratio: auto;
+  height: 380px;
+}
+
+.defect-product-image-distortion .product-image {
+  object-fit: fill; /* Stretches and distorts aspect ratio */
+  width: 100%;
+  height: 100%;
+  transform: scaleY(1.45) scaleX(0.75);
+}
+
+/* Defect 2: Product Card Layout Breakage */
+.defect-product-card-layout-break {
+  display: block;
+  overflow: visible;
+  padding: 0;
+}
+
+.defect-product-card-layout-break .product-card-body {
+  position: relative;
+  display: block;
+  padding: 0;
+  margin-top: -40px; /* Overlaps card image and title */
+}
+
+.defect-product-card-layout-break .product-card-footer {
+  position: absolute;
+  bottom: -45px; /* Pushes action buttons outside card boundary */
+  left: 0;
+  right: -30px;
+  background-color: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+/* Defect 3: Low-Contrast Text Element */
+.defect-low-contrast-text .product-snippet,
+.defect-low-contrast-text .product-title-link,
+.defect-low-contrast-text .product-price {
+  color: #cbd5e1 !important; /* Low contrast light grey against white */
+}
+
+/* Defect 4: Mobile Navigation Overflow */
+@media (max-width: 640px) {
+  .navbar.defect-mobile-nav-overflow .navbar-container {
+    width: 650px; /* Intentionally forces container beyond 390px mobile viewport */
+    min-width: 650px;
+  }
+
+  .navbar.defect-mobile-nav-overflow .navbar-nav {
+    gap: 2.5rem;
+    min-width: 450px;
+  }
+
+  .navbar.defect-mobile-nav-overflow .nav-link {
+    white-space: nowrap;
+    padding: 0.75rem 1.75rem;
+  }
+}
