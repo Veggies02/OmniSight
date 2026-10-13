@@ -141,26 +141,84 @@ npm run build
 npm run test:e2e
 ```
 
+### 5. Run Visual Evidence Capture Harness
+```bash
+npm run capture:evidence
+```
+Captures deterministic clean baseline and defective screenshot pairs, DOM snapshots, and quantitative visual measurements across all seeded defect scenarios.
+
 ---
 
-## 7. Automated Test Suite & Coverage
+## 7. Visual Evidence Capture Harness (Step 4.2)
+
+### Overview & Purpose
+The **Visual Evidence Capture Harness** (`scripts/capture-visual-evidence.ts`) is designed to generate paired, deterministic evaluation datasets for the OmniSight multimodal VLM inspection pipeline. For each seeded defect, the harness executes paired inspections (clean baseline vs. defective state) under identical browser viewports and settings.
+
+### Artifacts Directory Layout
+Each capture session generates an isolated, timestamped run directory under `artifacts/visual-evidence/<run-id>/`:
+
+```text
+artifacts/visual-evidence/<run-id>/
+├── manifest.json                  # Overall run summary, status, and scenario index
+├── model_facing_evidence.json     # Blind model-facing payload (WITHOUT ground-truth defect labels)
+├── ground_truth_eval.json         # Evaluation record with expected defect IDs and measured deltas
+├── product-image-distortion/
+│   ├── baseline.png               # Clean image screenshot (1440x900)
+│   ├── defective.png              # Distorted image screenshot (1440x900)
+│   ├── dom-baseline.html          # Clean DOM snapshot (metadata stripped)
+│   ├── dom-defective.html         # Defective DOM snapshot (metadata stripped)
+│   ├── measurements-baseline.json # Bounding boxes and computed styles (clean)
+│   ├── measurements-defective.json# Bounding boxes and computed styles (defective)
+│   └── measurements.json          # Paired delta measurements
+├── product-card-layout-break/
+├── low-contrast-text/
+└── mobile-nav-overflow/
+```
+
+### Separation of Ground Truth vs. Model Input
+To ensure rigorous evaluation without data leakage:
+- **`model_facing_evidence.json` & `dom-*.html`**: Contain only screenshots, page metadata, console logs, and cleaned DOM snapshots. All hidden defect metadata tags (`#omnisight-defect-metadata`), attributes (`data-defect-applied`), and internal defect classes (`.defect-*`) are completely stripped.
+- **`ground_truth_eval.json`**: Preserves ground-truth defect IDs, expected categories, expected symptoms, target component names, and calculated metric deltas for automated benchmark scoring.
+
+### Measured Metrics by Scenario
+1. **Product Image Distortion (`product-image-distortion`)**:
+   - `object-fit` (`cover` vs `fill`)
+   - Rendered media container height (`265px` vs `380px`)
+   - Natural vs rendered image aspect ratios
+2. **Product Card Layout Breakage (`product-card-layout-break`)**:
+   - Card, body, and footer bounding boxes
+   - Footer positioning (`static` vs `absolute`, `bottom: -45px`)
+   - Physical footer protrusion below card boundary (`0px` baseline vs `28px` defective)
+3. **Low-Contrast Text Element (`low-contrast-text`)**:
+   - Foreground and background rendered sRGB colors
+   - Relative luminance and calculated WCAG 2.1 contrast ratio (`4.76:1` baseline vs `1.48:1` defective)
+   - WCAG AA (`>= 4.5:1`) compliance evaluation
+4. **Mobile Navigation Overflow (`mobile-nav-overflow`)**:
+   - Viewport dimensions (`390px × 844px`)
+   - Document `clientWidth` (`390px`) vs `scrollWidth` (`390px` baseline vs `650px` defective)
+   - Calculated horizontal overflow (`0px` vs `260px`)
+
+---
+
+## 8. Automated Test Suite & Coverage
 
 The automated test suite runs via `@playwright/test` against the local Vite server:
 
 | Test File | Test Cases | Status | Description |
 |---|---|---|---|
 | `tests/defect-injection.spec.ts` | 8 | Passed | Disabled-by-default behavior, production safety guard check (disabled state ignores query params), unknown ID fail-safety, activation and visual symptoms for Scenarios 1–4, reversibility, mobile overflow detection, and cart state preservation during defect activation |
+| `tests/evidence-harness.spec.ts` | 5 | Passed | Scenario definition coverage for all registered defects, WCAG contrast calculation accuracy, effective color resolution, DOM sanitization for model-facing inputs, and complete harness execution with manifest validation |
 | `tests/shopping-cart.spec.ts` | 10 | Passed | Catalog rendering, dynamic routes, 404 fallback, out-of-stock disabling, single and multiple adds, quantity increments/decrements, item removal, cart clearing, refresh persistence, corrupted JSON handling, and invalid ID filtering |
 | `tests/checkout.spec.ts` | 2 | Passed | Empty-cart checkout prevention, shipping form required field validation, and demo order placement clearing the cart |
 | `tests/responsive.spec.ts` | 9 | Passed | Desktop (1440x900), Tablet (768x1024), and Mobile (390x844) zero-overflow checks (`scrollWidth <= clientWidth`) on Home, Catalog, and Cart |
 | `tests/screenshots.spec.ts` | 1 (7 captures) | Passed | Baseline screenshots for Home, Catalog, Details, Cart, Checkout, Mobile Catalog, and Mobile Cart |
 
 **Test Results Summary**:
-- **Total Tests**: **31 passed in ~6.8s** (0 failed, 0 flaky)
+- **Total Tests**: **36 passed in ~10.1s** (0 failed, 0 flaky)
 
 ---
 
-## 8. Known Limitations & Next Steps
+## 9. Known Limitations & Next Steps
 - **Demo Scope**: Checkout does not connect to real payment processors (intentionally simulated for UI testing).
 - **Upcoming Milestones**:
   - Integration of Playwright visual capture harness with OmniSight VLM inspection pipeline (Yuvraj).
