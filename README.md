@@ -147,6 +147,23 @@ npm run capture:evidence
 ```
 Captures deterministic clean baseline and defective screenshot pairs, DOM snapshots, and quantitative visual measurements across all seeded defect scenarios.
 
+### 6. Run Blind VLM Defect Diagnosis
+```bash
+npm run diagnose:evidence
+# Or with options:
+# npm run diagnose:evidence -- --provider=mock
+# npm run diagnose:evidence -- --run-id=<id> --provider=gemini
+```
+Executes blind multimodal VLM inspection against sanitized evidence without ground-truth leakage.
+
+### 7. Evaluate Diagnosis Accuracy
+```bash
+npm run evaluate:diagnoses
+# Or against specific diagnosis output:
+# npm run evaluate:diagnoses -- --diagnosis=artifacts/diagnoses/<diagnosis-file>.json
+```
+Evaluates structured VLM diagnosis reports against ground-truth evaluation standards.
+
 ---
 
 ## 7. Visual Evidence Capture Harness (Step 4.2)
@@ -200,26 +217,77 @@ To ensure rigorous evaluation without data leakage:
 
 ---
 
-## 8. Automated Test Suite & Coverage
+## 8. VLM Integration & Blind Defect Diagnosis (Step 4.3)
+
+### Overview & Architecture
+The **VLM Defect Diagnosis Pipeline** (`scripts/run-diagnosis.ts` & `scripts/vlm/`) provides automated visual and structural defect inspection powered by Vision-Language Models (supporting Gemini, OpenAI, Claude, and offline Mock providers):
+
+```text
+Evidence Capture Run (artifacts/visual-evidence/<run-id>/)
+                       │
+                       ▼
+       ┌───────────────────────────────┐
+       │   Evidence Sanitizer Guard    │  ◄── Enforces Zero Ground-Truth Leakage
+       │  (assertNoGroundTruthLeakage) │      Strips defect IDs, names, hints
+       └──────────────┬────────────────┘
+                      │ Sanitized blind evidence
+                      ▼
+       ┌───────────────────────────────┐
+       │    VLM Provider & Prompts     │  ◄── Multi-image inspection (baseline + defective)
+       │    (Gemini / Claude / Mock)   │      + DOM context + layout metrics
+       └──────────────┬────────────────┘
+                      │ Raw JSON response
+                      ▼
+       ┌───────────────────────────────┐
+       │   Zod Schema Validation &     │  ◄── Strict typing, confidence bounds [0, 1],
+       │     Structured Diagnosis      │      category taxonomy enforcement
+       └──────────────┬────────────────┘
+                      │
+                      ▼
+Structured Diagnosis Output (artifacts/diagnoses/diagnosis_<run-id>_<timestamp>.json)
+                      │
+                      ▼
+       ┌───────────────────────────────┐
+       │      Diagnosis Evaluator      │  ◄── Compares against ground_truth_eval.json
+       │ (scripts/evaluate-diagnoses)  │      Calculates category accuracy, localization,
+       └───────────────────────────────┘      and score metrics without model bias
+```
+
+### Zero-Leakage Guarantee
+The sanitizer strictly validates:
+- No mentions of ground-truth defect identifiers (`product-image-distortion`, `product-card-layout-break`, etc.) in prompts or model payloads.
+- DOM and CSS class sanitization removing `.defect-*` and `#omnisight-defect-metadata`.
+- Strict blind prompts instructing the model to observe only the visual renders and sanitized DOM.
+
+### Supported Providers
+- **`mock`**: Deterministic offline provider for test suites, CI/CD, and regression tests (100% free, no API keys).
+- **`gemini`**: Live inference via Google Gemini Multimodal APIs (`GEMINI_API_KEY`).
+- **`openai`**: Live inference via OpenAI GPT-4o / GPT-4-vision (`OPENAI_API_KEY`).
+- **`claude`**: Live inference via Anthropic Claude 3.5 Sonnet (`ANTHROPIC_API_KEY`).
+
+---
+
+## 9. Automated Test Suite & Coverage
 
 The automated test suite runs via `@playwright/test` against the local Vite server:
 
 | Test File | Test Cases | Status | Description |
 |---|---|---|---|
-| `tests/defect-injection.spec.ts` | 8 | Passed | Disabled-by-default behavior, production safety guard check (disabled state ignores query params), unknown ID fail-safety, activation and visual symptoms for Scenarios 1–4, reversibility, mobile overflow detection, and cart state preservation during defect activation |
+| `tests/vlm-diagnosis.spec.ts` | 12 | Passed | Zod schema validation, sanitization leak prevention, mock provider deterministic diagnosis, multi-provider factory fallbacks, evaluation metrics calculation, and CLI integration |
 | `tests/evidence-harness.spec.ts` | 5 | Passed | Scenario definition coverage for all registered defects, WCAG contrast calculation accuracy, effective color resolution, DOM sanitization for model-facing inputs, and complete harness execution with manifest validation |
+| `tests/defect-injection.spec.ts` | 8 | Passed | Disabled-by-default behavior, production safety guard check (disabled state ignores query params), unknown ID fail-safety, activation and visual symptoms for Scenarios 1–4, reversibility, mobile overflow detection, and cart state preservation during defect activation |
 | `tests/shopping-cart.spec.ts` | 10 | Passed | Catalog rendering, dynamic routes, 404 fallback, out-of-stock disabling, single and multiple adds, quantity increments/decrements, item removal, cart clearing, refresh persistence, corrupted JSON handling, and invalid ID filtering |
 | `tests/checkout.spec.ts` | 2 | Passed | Empty-cart checkout prevention, shipping form required field validation, and demo order placement clearing the cart |
 | `tests/responsive.spec.ts` | 9 | Passed | Desktop (1440x900), Tablet (768x1024), and Mobile (390x844) zero-overflow checks (`scrollWidth <= clientWidth`) on Home, Catalog, and Cart |
 | `tests/screenshots.spec.ts` | 1 (7 captures) | Passed | Baseline screenshots for Home, Catalog, Details, Cart, Checkout, Mobile Catalog, and Mobile Cart |
 
 **Test Results Summary**:
-- **Total Tests**: **36 passed in ~10.1s** (0 failed, 0 flaky)
+- **Total Tests**: **48 passed in ~12.3s** (0 failed, 0 flaky)
 
 ---
 
-## 9. Known Limitations & Next Steps
+## 10. Known Limitations & Next Steps
 - **Demo Scope**: Checkout does not connect to real payment processors (intentionally simulated for UI testing).
 - **Upcoming Milestones**:
-  - Integration of Playwright visual capture harness with OmniSight VLM inspection pipeline (Yuvraj).
-  - Automated defect localization and self-healing repair loop (Shilpa).
+  - Live VLM benchmark evaluation across Gemini, Claude, and GPT-4o on real defect runs.
+  - Automated defect localization and self-healing repair loop (Step 4.4).

@@ -9,7 +9,9 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test:e2e": "playwright test",
-    "capture:evidence": "tsx scripts/capture-visual-evidence.ts"
+    "capture:evidence": "tsx scripts/capture-visual-evidence.ts",
+    "diagnose:evidence": "tsx scripts/run-diagnosis.ts",
+    "evaluate:diagnoses": "tsx scripts/evaluate-diagnoses.ts"
   },
   "dependencies": {
     "react": "^19.2.8",
