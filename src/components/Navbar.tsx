@@ -37,6 +37,16 @@ export function Navbar() {
             <span className="cart-icon" aria-hidden="true">🛒</span>
             <span>Cart</span>
           </NavLink>
+          <NavLink
+            to="/qa"
+            className={({ isActive }) =>
+              `nav-link qa-nav-pill ${isActive ? "nav-link-active" : ""}`
+            }
+            aria-label="OmniSight QA Dashboard"
+          >
+            <span className="qa-pulse-dot" aria-hidden="true" />
+            <span>QA Dashboard</span>
+          </NavLink>
         </nav>
       </div>
     </header>
