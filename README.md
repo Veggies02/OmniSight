@@ -121,3 +121,10 @@ The application is styled with CSS media queries and flex/grid layouts tested ag
 - **Day 2**: Shopping Cart state management (React Context / custom hooks for add to cart, item quantities, total calculation).
 - **Day 3**: Checkout workflows and controlled defect injection for OmniSight VLM inspection testing.
 - **Future**: Playwright browser test suite, vision model inspection harness, and FastAPI backend integration.
+
+---
+
+## 8. Workstream Documentation
+
+- **P4 (GitHub Integration & QA Dashboard)**: See [`docs/p4-development-setup.md`](docs/p4-development-setup.md) for P4 development setup, architecture, team boundaries, backend API contracts, and the 20-day implementation plan.
+
