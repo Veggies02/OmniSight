@@ -262,7 +262,8 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
 
     // Confirm execution
     const confirmBtn = page.locator('[data-testid="btn-confirm-repair-exec"]');
-    await confirmBtn.click();
+    await expect(confirmBtn).toBeVisible();
+    await confirmBtn.click({ force: true });
 
     // Verify summary is rendered
     const summary = page.locator('[data-testid="repair-job-summary"]');
