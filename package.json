@@ -11,7 +11,9 @@
     "test:e2e": "playwright test",
     "capture:evidence": "tsx scripts/capture-visual-evidence.ts",
     "diagnose:evidence": "tsx scripts/run-diagnosis.ts",
-    "evaluate:diagnoses": "tsx scripts/evaluate-diagnoses.ts"
+    "evaluate:diagnoses": "tsx scripts/evaluate-diagnoses.ts",
+    "repair:proposals": "tsx scripts/generate-repair-proposals.ts",
+    "repair:execute": "tsx scripts/run-repair-job.ts"
   },
   "dependencies": {
     "react": "^19.2.8",
