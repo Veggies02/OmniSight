@@ -420,12 +420,12 @@ The automated test suite runs via `@playwright/test` against the local Vite serv
 | `tests/evidence-harness.spec.ts` | 5 | Passed | Scenario definition coverage for all registered defects, WCAG contrast calculation accuracy, effective color resolution, DOM sanitization for model-facing inputs, and complete harness execution with manifest validation |
 | `tests/defect-injection.spec.ts` | 8 | Passed | Disabled-by-default behavior, production safety guard check (disabled state ignores query params), unknown ID fail-safety, activation and visual symptoms for Scenarios 1–4, reversibility, mobile overflow detection, and cart state preservation during defect activation |
 | `tests/shopping-cart.spec.ts` | 10 | Passed | Catalog rendering, dynamic routes, 404 fallback, out-of-stock disabling, single and multiple adds, quantity increments/decrements, item removal, cart clearing, refresh persistence, corrupted JSON handling, and invalid ID filtering |
-| `tests/checkout.spec.ts` | 2 | Passed | Empty-cart checkout prevention, shipping form required field validation, and demo order placement clearing the cart |
+| `tests/checkout.spec.ts` | 3 | Passed | Empty-cart checkout prevention, shipping form required field validation, inline error messaging on blur, email/postal code validation, and demo order placement clearing the cart |
 | `tests/responsive.spec.ts` | 9 | Passed | Desktop (1440x900), Tablet (768x1024), and Mobile (390x844) zero-overflow checks (`scrollWidth <= clientWidth`) on Home, Catalog, and Cart |
 | `tests/screenshots.spec.ts` | 1 (7 captures) | Passed | Baseline screenshots for Home, Catalog, Details, Cart, Checkout, Mobile Catalog, and Mobile Cart |
 
 **Test Results Summary**:
-- **Total Tests**: **84 passed in ~10.0s** (0 failed, 0 flaky)
+- **Total Tests**: **85 passed in ~14.0s** (0 failed, 0 flaky)
 
 ---
 

@@ -12,15 +12,63 @@ export function Checkout() {
     city: "Springfield",
     postalCode: "97477",
   });
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [submitted, setSubmitted] = useState(false);
+
+  const validateField = (name: string, value: string): string => {
+    switch (name) {
+      case "fullName":
+        if (!value.trim()) return "Full name is required";
+        if (value.trim().length < 2) return "Full name must be at least 2 characters";
+        return "";
+      case "email":
+        if (!value.trim()) return "Email address is required";
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) {
+          return "Please enter a valid email address (e.g., name@example.com)";
+        }
+        return "";
+      case "address":
+        if (!value.trim()) return "Street address is required";
+        if (value.trim().length < 5) return "Please enter a complete street address";
+        return "";
+      case "city":
+        if (!value.trim()) return "City is required";
+        return "";
+      case "postalCode":
+        if (!value.trim()) return "Postal code is required";
+        if (!/^\d{4,10}$|^[a-zA-Z0-9\s-]{3,10}$/.test(value.trim())) {
+          return "Please enter a valid postal or ZIP code";
+        }
+        return "";
+      default:
+        return "";
+    }
+  };
+
+  const errors = {
+    fullName: validateField("fullName", formData.fullName),
+    email: validateField("email", formData.email),
+    address: validateField("address", formData.address),
+    city: validateField("city", formData.city),
+    postalCode: validateField("postalCode", formData.postalCode),
+  };
+
+  const hasErrors = Object.values(errors).some((err) => err.length > 0);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
+  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+    const { name } = e.target;
+    setTouched((prev) => ({ ...prev, [name]: true }));
+  };
+
   const handleConfirmDemoOrder = (e: React.FormEvent) => {
     e.preventDefault();
-    if (items.length === 0) return;
+    setSubmitted(true);
+    if (items.length === 0 || hasErrors) return;
     setIsOrdered(true);
     clearCart();
   };
@@ -28,7 +76,7 @@ export function Checkout() {
   if (isOrdered) {
     return (
       <div className="page checkout-page">
-        <div className="status-card checkout-success-card">
+        <div className="status-card checkout-success-card" data-testid="order-confirmed-card">
           <div className="status-icon" aria-hidden="true">🎉</div>
           <h2>Demo Order Confirmed!</h2>
           <p>
@@ -39,15 +87,15 @@ export function Checkout() {
           <div className="order-details-box">
             <div className="spec-row">
               <span className="spec-label">Confirmation Number</span>
-              <span className="spec-value">OS-DEMO-{Math.floor(100000 + Math.random() * 900000)}</span>
+              <span className="spec-value" data-testid="confirmation-number">OS-DEMO-{Math.floor(100000 + Math.random() * 900000)}</span>
             </div>
             <div className="spec-row">
               <span className="spec-label">Confirmation Email</span>
-              <span className="spec-value">{formData.email}</span>
+              <span className="spec-value" data-testid="confirmation-email">{formData.email}</span>
             </div>
             <div className="spec-row">
               <span className="spec-label">Delivery Address</span>
-              <span className="spec-value">{formData.address}, {formData.city}</span>
+              <span className="spec-value" data-testid="confirmation-address">{formData.address}, {formData.city} {formData.postalCode}</span>
             </div>
           </div>
 
@@ -104,7 +152,7 @@ export function Checkout() {
           <h2 id="shipping-heading" className="checkout-section-title">
             1. Shipping Information
           </h2>
-          <form id="demo-checkout-form" onSubmit={handleConfirmDemoOrder}>
+          <form id="demo-checkout-form" onSubmit={handleConfirmDemoOrder} noValidate>
             <div className="form-group">
               <label htmlFor="fullName">Full Name</label>
               <input
@@ -112,10 +160,18 @@ export function Checkout() {
                 name="fullName"
                 type="text"
                 required
-                className="form-input"
+                className={`form-input ${((touched.fullName || submitted) && errors.fullName) ? "input-error" : ""}`}
                 value={formData.fullName}
                 onChange={handleInputChange}
+                onBlur={handleBlur}
+                aria-invalid={!!((touched.fullName || submitted) && errors.fullName)}
+                aria-describedby={((touched.fullName || submitted) && errors.fullName) ? "fullName-error" : undefined}
               />
+              {((touched.fullName || submitted) && errors.fullName) && (
+                <span id="fullName-error" className="field-error-message" role="alert">
+                  {errors.fullName}
+                </span>
+              )}
             </div>
 
             <div className="form-group">
@@ -125,10 +181,18 @@ export function Checkout() {
                 name="email"
                 type="email"
                 required
-                className="form-input"
+                className={`form-input ${((touched.email || submitted) && errors.email) ? "input-error" : ""}`}
                 value={formData.email}
                 onChange={handleInputChange}
+                onBlur={handleBlur}
+                aria-invalid={!!((touched.email || submitted) && errors.email)}
+                aria-describedby={((touched.email || submitted) && errors.email) ? "email-error" : undefined}
               />
+              {((touched.email || submitted) && errors.email) && (
+                <span id="email-error" className="field-error-message" role="alert">
+                  {errors.email}
+                </span>
+              )}
             </div>
 
             <div className="form-group">
@@ -138,10 +202,18 @@ export function Checkout() {
                 name="address"
                 type="text"
                 required
-                className="form-input"
+                className={`form-input ${((touched.address || submitted) && errors.address) ? "input-error" : ""}`}
                 value={formData.address}
                 onChange={handleInputChange}
+                onBlur={handleBlur}
+                aria-invalid={!!((touched.address || submitted) && errors.address)}
+                aria-describedby={((touched.address || submitted) && errors.address) ? "address-error" : undefined}
               />
+              {((touched.address || submitted) && errors.address) && (
+                <span id="address-error" className="field-error-message" role="alert">
+                  {errors.address}
+                </span>
+              )}
             </div>
 
             <div className="form-row">
@@ -152,10 +224,18 @@ export function Checkout() {
                   name="city"
                   type="text"
                   required
-                  className="form-input"
+                  className={`form-input ${((touched.city || submitted) && errors.city) ? "input-error" : ""}`}
                   value={formData.city}
                   onChange={handleInputChange}
+                  onBlur={handleBlur}
+                  aria-invalid={!!((touched.city || submitted) && errors.city)}
+                  aria-describedby={((touched.city || submitted) && errors.city) ? "city-error" : undefined}
                 />
+                {((touched.city || submitted) && errors.city) && (
+                  <span id="city-error" className="field-error-message" role="alert">
+                    {errors.city}
+                  </span>
+                )}
               </div>
 
               <div className="form-group">
@@ -165,10 +245,18 @@ export function Checkout() {
                   name="postalCode"
                   type="text"
                   required
-                  className="form-input"
+                  className={`form-input ${((touched.postalCode || submitted) && errors.postalCode) ? "input-error" : ""}`}
                   value={formData.postalCode}
                   onChange={handleInputChange}
+                  onBlur={handleBlur}
+                  aria-invalid={!!((touched.postalCode || submitted) && errors.postalCode)}
+                  aria-describedby={((touched.postalCode || submitted) && errors.postalCode) ? "postalCode-error" : undefined}
                 />
+                {((touched.postalCode || submitted) && errors.postalCode) && (
+                  <span id="postalCode-error" className="field-error-message" role="alert">
+                    {errors.postalCode}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -177,7 +265,7 @@ export function Checkout() {
               UI testing. No payment gateway or credit card collection is connected.
             </div>
 
-            <button type="submit" className="btn btn-primary btn-lg btn-block">
+            <button type="submit" className="btn btn-primary btn-lg btn-block" data-testid="place-order-btn">
               Place Demo Order (${subtotal.toFixed(2)})
             </button>
           </form>
