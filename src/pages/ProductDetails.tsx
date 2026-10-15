@@ -1,9 +1,14 @@
+import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { products } from "../data/products";
+import { useCart } from "../hooks/useCart";
 
 export function ProductDetails() {
   const { id } = useParams<{ id: string }>();
   const product = products.find((p) => p.id === id);
+  const { addItem } = useCart();
+  const [quantity, setQuantity] = useState(1);
+  const [addedNotice, setAddedNotice] = useState(false);
 
   if (!product) {
     return (
@@ -24,6 +29,15 @@ export function ProductDetails() {
       </div>
     );
   }
+
+  const handleAddToCart = () => {
+    if (!product.inStock) return;
+    addItem(product, quantity);
+    setAddedNotice(true);
+    setTimeout(() => {
+      setAddedNotice(false);
+    }, 2000);
+  };
 
   return (
     <div className="page product-details-page">
@@ -87,12 +101,52 @@ export function ProductDetails() {
             </div>
           </div>
 
-          <div className="detail-actions">
-            <Link to="/cart" className="btn btn-primary btn-lg">
-              Add to Cart
+          {product.inStock ? (
+            <div className="detail-purchase-row">
+              <div className="quantity-selector" aria-label="Quantity Selector">
+                <button
+                  type="button"
+                  className="qty-btn"
+                  onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                  aria-label="Decrease quantity"
+                  disabled={quantity <= 1}
+                >
+                  −
+                </button>
+                <span className="qty-value" aria-label={`Current quantity ${quantity}`}>
+                  {quantity}
+                </span>
+                <button
+                  type="button"
+                  className="qty-btn"
+                  onClick={() => setQuantity((q) => q + 1)}
+                  aria-label="Increase quantity"
+                >
+                  +
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-primary btn-lg detail-add-btn"
+                onClick={handleAddToCart}
+                aria-label={`Add ${quantity} of ${product.name} to cart`}
+              >
+                {addedNotice ? "✓ Added to Cart!" : "Add to Cart"}
+              </button>
+            </div>
+          ) : (
+            <div className="out-of-stock-banner" role="alert">
+              This product is currently out of stock and cannot be added to the cart.
+            </div>
+          )}
+
+          <div className="detail-secondary-actions">
+            <Link to="/products" className="link-arrow">
+              ← Return to Catalogue
             </Link>
-            <Link to="/products" className="btn btn-outline btn-lg">
-              Continue Shopping
+            <Link to="/cart" className="link-arrow">
+              View Shopping Cart →
             </Link>
           </div>
         </div>
