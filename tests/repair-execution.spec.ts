@@ -1,10 +1,15 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
-import { RepairExecutionService } from '../scripts/repair/repair-execution-service';
+import { RepairExecutionService, resolveNpmCommand } from '../scripts/repair/repair-execution-service';
 import { RepairJobContract } from '../scripts/repair/repair-job-schema';
 import { WorktreeManager } from '../scripts/repair/worktree-manager';
-import { getRegisteredPatch, REGISTERED_PATCHES } from '../scripts/repair/patch-registry';
+import {
+  getRegisteredPatch,
+  REGISTERED_PATCHES,
+  applyDeterministicPatch,
+  normalizeLineEndings,
+} from '../scripts/repair/patch-registry';
 import { computeFileHash } from '../scripts/vlm/source-path-security';
 
 test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', () => {
@@ -270,5 +275,147 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     await expect(summary).toBeVisible();
     await expect(summary).toContainText('PASSED');
     await expect(summary).toContainText('omnisight-repair/');
+  });
+
+  test('Line-Ending Normalization: matches and applies patch on CRLF file content and restores CRLF', async () => {
+    const patch = getRegisteredPatch('patch-product-image-distortion-001')!;
+    expect(patch).toBeDefined();
+
+    // Create a CRLF version of targetMatchString wrapped in sample CSS
+    const lfFile = `/* Header */\n${patch.targetMatchString}\n/* Footer */\n`;
+    const crlfFile = lfFile.replace(/\n/g, '\r\n');
+    expect(crlfFile).toContain('\r\n');
+
+    // Apply patch deterministically
+    const result = applyDeterministicPatch(crlfFile, patch);
+    expect(result.success).toBe(true);
+    expect(result.updatedContent).toContain('object-fit: cover');
+    expect(result.updatedContent).toContain('\r\n'); // Preserves CRLF convention
+    expect(result.updatedContent).not.toContain('object-fit: fill');
+  });
+
+  test('Line-Ending Normalization: matches and applies patch on LF file content and preserves LF', async () => {
+    const patch = getRegisteredPatch('patch-low-contrast-text-003')!;
+    expect(patch).toBeDefined();
+
+    const lfFile = `/* Header */\n${patch.targetMatchString}\n/* Footer */\n`;
+    expect(lfFile).not.toContain('\r\n');
+
+    const result = applyDeterministicPatch(lfFile, patch);
+    expect(result.success).toBe(true);
+    expect(result.updatedContent).toContain('color: var(--color-text-body) !important');
+    expect(result.updatedContent).not.toContain('\r\n'); // Preserves LF convention
+  });
+
+  test('Line-Ending Normalization: fails gracefully when target snippet is missing', async () => {
+    const patch = getRegisteredPatch('patch-product-image-distortion-001')!;
+    const missingTargetContent = `/* Some completely different CSS */\n.some-class { color: red; }\n`;
+
+    const result = applyDeterministicPatch(missingTargetContent, patch);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Precondition check failed');
+    expect(result.updatedContent).toBe(missingTargetContent);
+  });
+
+  test('Cross-Platform Command Execution: resolves npm.cmd on win32 and npm on posix', async () => {
+    const originalPlatform = process.platform;
+    try {
+      // Test current platform resolution
+      const current = resolveNpmCommand(['run', 'build']);
+      expect(current.args).toEqual(['run', 'build']);
+      if (process.platform === 'win32') {
+        expect(current.executable).toBe('npm.cmd');
+      } else {
+        expect(current.executable).toBe('npm');
+      }
+    } finally {
+      // Safety reset
+    }
+  });
+
+  test('Cross-Platform Command Execution: runCommand captures exit codes, stdout, and stderr reliably', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    // Successful command
+    const okRes = await service.runCommand('node -e console.log("hello-cross-platform")', repoRoot);
+    expect(okRes.exitCode).toBe(0);
+    expect(okRes.stdout.trim()).toBe('hello-cross-platform');
+
+    // Failing command
+    const failRes = await service.runCommand('node -e process.exit(42)', repoRoot);
+    expect(failRes.exitCode).toBe(42);
+  });
+
+  test('Worktree Lifecycle: cleans up worktree on unexpected failure in isolated worktree', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const worktreeManager = new WorktreeManager(repoRoot);
+
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-cleanup-on-fail',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `fail-cleanup-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    // Spy on evaluateVisualRepair to simulate a validation failure mid-job
+    const originalEvaluate = (service as any).evaluateVisualRepair.bind(service);
+    (service as any).evaluateVisualRepair = async () => {
+      return {
+        passed: false,
+        defectCategory: 'product-image-distortion',
+        route: '/products',
+        viewport: { width: 1280, height: 800 },
+        assertionSummary: 'Simulated visual assertion failure for cleanup test',
+        unrelatedRegressionsDetected: false,
+      };
+    };
+
+    try {
+      const report = await service.executeRepairJob(contract);
+      expect(report.finalState).toBe('FAILED');
+      expect(report.failureReason).toContain('Simulated visual assertion failure');
+
+      // Crucial: worktree must be cleaned up even though repair failed!
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+
+      // Verify worktree folder is gone from disk
+      const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', jobId);
+      expect(fs.existsSync(worktreePath)).toBe(false);
+    } finally {
+      (service as any).evaluateVisualRepair = originalEvaluate;
+    }
+  });
+
+  test('Worktree Manager: cleanupWorktree is idempotent and safe for non-existent worktrees', async () => {
+    const worktreeManager = new WorktreeManager(repoRoot);
+    const nonExistentJobId = `non-existent-${Date.now()}`;
+
+    // Cleaning an already non-existent worktree should return clean without throwing
+    const result = await worktreeManager.cleanupWorktree(nonExistentJobId);
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.branchRemoved).toBe(false);
   });
 });

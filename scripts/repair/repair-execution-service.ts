@@ -9,7 +9,7 @@ import {
   VALID_REPAIR_TRANSITIONS,
   validateRepairJobContract,
 } from './repair-job-schema';
-import { getRegisteredPatch, RegisteredPatch } from './patch-registry';
+import { getRegisteredPatch, RegisteredPatch, applyDeterministicPatch, normalizeLineEndings } from './patch-registry';
 import { WorktreeManager } from './worktree-manager';
 import {
   validateAndResolveSourcePath,
@@ -18,6 +18,16 @@ import {
 } from '../vlm/source-path-security';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Resolves the appropriate npm executable command and arguments for the current platform.
+ * Avoids invoking shell interpreters directly to eliminate shell injection risks.
+ */
+export function resolveNpmCommand(args: string[] = ['run', 'build']): { executable: string; args: string[] } {
+  const isWindows = process.platform === 'win32';
+  const executable = isWindows ? 'npm.cmd' : 'npm';
+  return { executable, args };
+}
 
 export class RepairExecutionService {
   private repoRoot: string;
@@ -31,14 +41,27 @@ export class RepairExecutionService {
   }
 
   /**
-   * Helper to execute shell/node commands within an isolated directory
+   * Helper to execute commands safely within an isolated directory across platforms.
+   * Uses explicit executable and arguments array without shell execution.
    */
-  private async runCommand(
+  public async runCommand(
     commandStr: string,
     cwd: string
   ): Promise<{ exitCode: number; stdout: string; stderr: string; durationMs: number }> {
     const startTime = Date.now();
-    const [cmd, ...args] = commandStr.split(' ');
+    const parts = commandStr.trim().split(/\s+/);
+    let cmd = parts[0];
+    let args = parts.slice(1);
+
+    // Platform-specific resolution for npm / npx
+    if (cmd === 'npm') {
+      const resolved = resolveNpmCommand(args);
+      cmd = resolved.executable;
+      args = resolved.args;
+    } else if (cmd === 'npx' && process.platform === 'win32') {
+      cmd = 'npx.cmd';
+    }
+
     try {
       const { stdout, stderr } = await execFileAsync(cmd, args, { cwd });
       return {
@@ -49,7 +72,7 @@ export class RepairExecutionService {
       };
     } catch (err: any) {
       return {
-        exitCode: err?.code || 1,
+        exitCode: typeof err?.code === 'number' ? err.code : 1,
         stdout: err?.stdout || '',
         stderr: err?.stderr || err?.message || String(err),
         durationMs: Date.now() - startTime,
@@ -69,7 +92,7 @@ export class RepairExecutionService {
   }
 
   /**
-   * Executes a repair job end-to-end with total isolation.
+   * Executes a repair job end-to-end with total isolation and guaranteed cleanup.
    */
   public async executeRepairJob(contract: RepairJobContract): Promise<RepairExecutionReport> {
     const validation = validateRepairJobContract(contract);
@@ -194,24 +217,27 @@ export class RepairExecutionService {
     const isolatedWorktreePath = worktreeInfo.worktreePath;
     const isolatedBranch = worktreeInfo.branchName;
 
-    // 4. Apply Registered Patch strictly in Isolated Worktree
-    let patchApplicationResult;
+    let patchApplicationResult: any = undefined;
+    let buildExecution: any = undefined;
+    let visualValidation: any = undefined;
+    let executionFailureReason: string | undefined = undefined;
+
+    // Guaranteed cleanup via try / finally lifecycle
     try {
+      // 4. Apply Registered Patch deterministically with CRLF/LF normalization
       const targetFilePathInWorktree = path.join(isolatedWorktreePath, patch.targetFile);
       if (!fs.existsSync(targetFilePathInWorktree)) {
         throw new Error(`Target file ${patch.targetFile} not found in isolated worktree`);
       }
 
       const fileContent = fs.readFileSync(targetFilePathInWorktree, 'utf-8');
-      if (!fileContent.includes(patch.targetMatchString)) {
-        throw new Error(
-          `Precondition check failed: Expected target code snippet not found in worktree ${patch.targetFile}`
-        );
+      const patchOutcome = applyDeterministicPatch(fileContent, patch);
+
+      if (!patchOutcome.success) {
+        throw new Error(patchOutcome.error || `Failed to apply patch ${patch.patchId}`);
       }
 
-      // Apply replacement
-      const updatedContent = fileContent.replace(patch.targetMatchString, patch.replacementString);
-      fs.writeFileSync(targetFilePathInWorktree, updatedContent, 'utf-8');
+      fs.writeFileSync(targetFilePathInWorktree, patchOutcome.updatedContent, 'utf-8');
 
       // Check git diff in worktree to confirm only approved files changed
       const diffOut = await execFileAsync('git', ['diff', '--name-only'], { cwd: isolatedWorktreePath });
@@ -233,96 +259,82 @@ export class RepairExecutionService {
         appliedAt: new Date().toISOString(),
       };
       currentState = this.transitionState(currentState, 'PATCH_APPLIED');
+
+      // 5. Run Automated Tests inside Isolated Worktree
+      currentState = this.transitionState(currentState, 'RUNNING_TESTS');
+
+      // Link node_modules so build & tests can run in the worktree without a slow npm install
+      const worktreeNodeModules = path.join(isolatedWorktreePath, 'node_modules');
+      const mainNodeModules = path.join(this.repoRoot, 'node_modules');
+      if (!fs.existsSync(worktreeNodeModules) && fs.existsSync(mainNodeModules)) {
+        try {
+          fs.symlinkSync(mainNodeModules, worktreeNodeModules, 'junction');
+        } catch {
+          // Fallback or ignore if cannot link
+        }
+      }
+
+      // Run build check (cross-platform safe)
+      const buildRes = await this.runCommand('npm run build', isolatedWorktreePath);
+      buildExecution = {
+        command: 'npm run build',
+        exitCode: buildRes.exitCode,
+        passed: buildRes.exitCode === 0,
+        totalTests: 0,
+        passedTests: 0,
+        failedTests: 0,
+        durationMs: buildRes.durationMs,
+        stdoutSummary: buildRes.stdout.slice(-1000),
+        stderrSummary: buildRes.stderr.slice(-1000),
+      };
+
+      if (!buildExecution.passed) {
+        throw new Error(`Build verification failed in isolated worktree with code ${buildExecution.exitCode}`);
+      }
+
+      // 6. Visual & Defect-Specific Assertion
+      currentState = this.transitionState(currentState, 'VISUAL_VALIDATION');
+      visualValidation = await this.evaluateVisualRepair(patch, isolatedWorktreePath);
+
+      if (!visualValidation.passed) {
+        throw new Error(`Visual validation failed: ${visualValidation.assertionSummary}`);
+      }
+
+      // All validations passed!
+      currentState = this.transitionState(currentState, 'PASSED');
     } catch (err: any) {
-      currentState = this.transitionState(currentState, 'FAILED');
-      const cleanupStatus = await this.worktreeManager.cleanupWorktree(jobId);
-      const failureReport: RepairExecutionReport = {
-        jobId,
-        proposalId: proposal.proposalId,
-        defectCategory: proposal.defectCategory,
-        targetBaseCommit,
-        isolatedWorktreePath,
-        isolatedBranch,
-        patchId: approvedPatchId,
-        createdAt: contract.createdAt,
-        completedAt: new Date().toISOString(),
-        finalState: currentState,
-        approvalValidation,
-        patchApplication: {
+      if (currentState !== 'PASSED') {
+        currentState = 'FAILED';
+      }
+      executionFailureReason = err?.message || String(err);
+      if (!patchApplicationResult) {
+        patchApplicationResult = {
           patchId: patch.patchId,
           appliedSuccessfully: false,
           changedFiles: [],
           diffSummary: '',
           appliedAt: new Date().toISOString(),
-          rejectionReason: err?.message || String(err),
-        },
-        cleanupStatus: { cleaned: true, ...cleanupStatus },
-        failureReason: `Patch application failed: ${err?.message || String(err)}`,
-      };
-      this.saveReport(jobId, failureReport);
-      return failureReport;
-    }
-
-    // 5. Run Automated Tests inside Isolated Worktree
-    currentState = this.transitionState(currentState, 'RUNNING_TESTS');
-
-    // Link node_modules so build & tests can run in the worktree without a slow npm install
-    const worktreeNodeModules = path.join(isolatedWorktreePath, 'node_modules');
-    const mainNodeModules = path.join(this.repoRoot, 'node_modules');
-    if (!fs.existsSync(worktreeNodeModules) && fs.existsSync(mainNodeModules)) {
-      try {
-        fs.symlinkSync(mainNodeModules, worktreeNodeModules, 'junction');
-      } catch {
-        // Fallback or ignore if cannot link
+          rejectionReason: executionFailureReason,
+        };
       }
-    }
-
-    // Run build check
-    const buildRes = await this.runCommand('npm run build', isolatedWorktreePath);
-    const buildExecution = {
-      command: 'npm run build',
-      exitCode: buildRes.exitCode,
-      passed: buildRes.exitCode === 0,
-      totalTests: 0,
-      passedTests: 0,
-      failedTests: 0,
-      durationMs: buildRes.durationMs,
-      stdoutSummary: buildRes.stdout.slice(-1000),
-      stderrSummary: buildRes.stderr.slice(-1000),
-    };
-
-    if (!buildExecution.passed) {
-      currentState = this.transitionState(currentState, 'FAILED');
-      const cleanupStatus = await this.worktreeManager.cleanupWorktree(jobId);
-      const failureReport: RepairExecutionReport = {
-        jobId,
-        proposalId: proposal.proposalId,
-        defectCategory: proposal.defectCategory,
-        targetBaseCommit,
-        isolatedWorktreePath,
-        isolatedBranch,
-        patchId: approvedPatchId,
-        createdAt: contract.createdAt,
-        completedAt: new Date().toISOString(),
-        finalState: currentState,
-        approvalValidation,
-        patchApplication: patchApplicationResult,
-        buildExecution,
-        cleanupStatus: { cleaned: true, ...cleanupStatus },
-        failureReason: `Build verification failed in isolated worktree with code ${buildExecution.exitCode}`,
+    } finally {
+      // 7. Guaranteed Worktree Cleanup
+      let cleanupResult: { worktreeRemoved: boolean; branchRemoved: boolean; notes?: string } = {
+        worktreeRemoved: false,
+        branchRemoved: false,
       };
-      this.saveReport(jobId, failureReport);
-      return failureReport;
-    }
 
-    // 6. Visual & Defect-Specific Assertion
-    currentState = this.transitionState(currentState, 'VISUAL_VALIDATION');
-    const visualValidation = await this.evaluateVisualRepair(patch, isolatedWorktreePath);
+      try {
+        cleanupResult = await this.worktreeManager.cleanupWorktree(jobId);
+      } catch (cleanupErr: any) {
+        cleanupResult = {
+          worktreeRemoved: false,
+          branchRemoved: false,
+          notes: `Cleanup exception: ${cleanupErr?.message || String(cleanupErr)}`,
+        };
+      }
 
-    if (!visualValidation.passed) {
-      currentState = this.transitionState(currentState, 'FAILED');
-      const cleanupStatus = await this.worktreeManager.cleanupWorktree(jobId);
-      const failureReport: RepairExecutionReport = {
+      const report: RepairExecutionReport = {
         jobId,
         proposalId: proposal.proposalId,
         defectCategory: proposal.defectCategory,
@@ -337,39 +349,18 @@ export class RepairExecutionService {
         patchApplication: patchApplicationResult,
         buildExecution,
         visualValidation,
-        cleanupStatus: { cleaned: true, ...cleanupStatus },
-        failureReason: `Visual validation failed: ${visualValidation.assertionSummary}`,
+        cleanupStatus: {
+          cleaned: cleanupResult.worktreeRemoved,
+          worktreeRemoved: cleanupResult.worktreeRemoved,
+          branchRemoved: cleanupResult.branchRemoved,
+          notes: cleanupResult.notes,
+        },
+        failureReason: executionFailureReason,
       };
-      this.saveReport(jobId, failureReport);
-      return failureReport;
+
+      this.saveReport(jobId, report);
+      return report;
     }
-
-    // All validations passed!
-    currentState = this.transitionState(currentState, 'PASSED');
-
-    // 7. Safe Cleanup of Worktree
-    const cleanupStatus = await this.worktreeManager.cleanupWorktree(jobId);
-
-    const successReport: RepairExecutionReport = {
-      jobId,
-      proposalId: proposal.proposalId,
-      defectCategory: proposal.defectCategory,
-      targetBaseCommit,
-      isolatedWorktreePath,
-      isolatedBranch,
-      patchId: approvedPatchId,
-      createdAt: contract.createdAt,
-      completedAt: new Date().toISOString(),
-      finalState: currentState,
-      approvalValidation,
-      patchApplication: patchApplicationResult,
-      buildExecution,
-      visualValidation,
-      cleanupStatus: { cleaned: true, ...cleanupStatus },
-    };
-
-    this.saveReport(jobId, successReport);
-    return successReport;
   }
 
   /**
@@ -390,7 +381,8 @@ export class RepairExecutionService {
     unrelatedRegressionsDetected: boolean;
   }> {
     const patchedCssPath = path.join(worktreePath, 'src/index.css');
-    const patchedCss = fs.readFileSync(patchedCssPath, 'utf-8');
+    const rawCss = fs.readFileSync(patchedCssPath, 'utf-8');
+    const patchedCss = normalizeLineEndings(rawCss);
 
     switch (patch.defectCategory) {
       case 'product-image-distortion': {
