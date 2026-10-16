@@ -11,6 +11,7 @@ import {
 } from './repair-job-schema';
 import { getRegisteredPatch, RegisteredPatch, applyDeterministicPatch, normalizeLineEndings } from './patch-registry';
 import { WorktreeManager } from './worktree-manager';
+import { verifyRepairedWorktreeVisually } from './visual-verifier';
 import {
   validateAndResolveSourcePath,
   verifySourceHashFreshness,
@@ -292,12 +293,16 @@ export class RepairExecutionService {
         throw new Error(`Build verification failed in isolated worktree with code ${buildExecution.exitCode}`);
       }
 
-      // 6. Visual & Defect-Specific Assertion
+      // 6. Real Browser Visual & Defect-Specific Assertion
       currentState = this.transitionState(currentState, 'VISUAL_VALIDATION');
-      visualValidation = await this.evaluateVisualRepair(patch, isolatedWorktreePath);
+      visualValidation = await this.evaluateVisualRepair(patch, isolatedWorktreePath, jobId);
 
       if (!visualValidation.passed) {
         throw new Error(`Visual validation failed: ${visualValidation.assertionSummary}`);
+      }
+
+      if (visualValidation.unrelatedRegressionsDetected) {
+        throw new Error(`Visual validation failed: Unrelated UI regression detected during post-repair checks`);
       }
 
       // All validations passed!
@@ -364,115 +369,20 @@ export class RepairExecutionService {
   }
 
   /**
-   * Evaluates defect-specific visual assertions on the patched worktree code.
+   * Evaluates defect-specific visual assertions on the patched worktree code using real browser rendering.
    */
-  private async evaluateVisualRepair(
+  public async evaluateVisualRepair(
     patch: RegisteredPatch,
-    worktreePath: string
-  ): Promise<{
-    passed: boolean;
-    defectCategory: string;
-    route: string;
-    viewport: { width: number; height: number };
-    cleanBaselineMetric?: Record<string, any>;
-    defectiveMetric?: Record<string, any>;
-    repairedMetric?: Record<string, any>;
-    assertionSummary: string;
-    unrelatedRegressionsDetected: boolean;
-  }> {
-    const patchedCssPath = path.join(worktreePath, 'src/index.css');
-    const rawCss = fs.readFileSync(patchedCssPath, 'utf-8');
-    const patchedCss = normalizeLineEndings(rawCss);
-
-    switch (patch.defectCategory) {
-      case 'product-image-distortion': {
-        const hasCover = patchedCss.includes('object-fit: cover');
-        const hasNaturalAspect = patchedCss.includes('aspect-ratio: 4 / 3');
-        const noDistortTransform = !patchedCss.includes('transform: scaleY(1.45) scaleX(0.75)');
-        const passed = hasCover && hasNaturalAspect && noDistortTransform;
-        return {
-          passed,
-          defectCategory: patch.defectCategory,
-          route: '/products?defect=product-image-distortion',
-          viewport: { width: 1280, height: 800 },
-          cleanBaselineMetric: { objectFit: 'cover', aspectRatio: '4/3' },
-          defectiveMetric: { objectFit: 'fill', transform: 'scaleY(1.45) scaleX(0.75)' },
-          repairedMetric: { objectFit: 'cover', aspectRatio: '4/3', transform: 'none' },
-          assertionSummary: passed
-            ? 'Product image distortion repaired: object-fit cover restored, scale distortion removed'
-            : 'Product image distortion repair failed: styles do not match expected clean metrics',
-          unrelatedRegressionsDetected: false,
-        };
-      }
-
-      case 'product-card-layout-break': {
-        const noNegativeMargin = !patchedCss.includes('margin-top: -40px');
-        const noAbsoluteFooter = !patchedCss.includes('bottom: -45px');
-        const hasFlexFlow = patchedCss.includes('display: flex');
-        const passed = noNegativeMargin && noAbsoluteFooter && hasFlexFlow;
-        return {
-          passed,
-          defectCategory: patch.defectCategory,
-          route: '/products?defect=product-card-layout-break',
-          viewport: { width: 1280, height: 800 },
-          cleanBaselineMetric: { bodyMarginTop: '0px', footerPosition: 'static' },
-          defectiveMetric: { bodyMarginTop: '-40px', footerPosition: 'absolute', footerBottom: '-45px' },
-          repairedMetric: { bodyMarginTop: '0px', footerPosition: 'static' },
-          assertionSummary: passed
-            ? 'Card layout overlap repaired: negative margin removed, footer returned to flex flow'
-            : 'Card layout break repair failed: negative margin or absolute footer remains',
-          unrelatedRegressionsDetected: false,
-        };
-      }
-
-      case 'low-contrast-text': {
-        const noLowContrastHex = !patchedCss.includes('color: #cbd5e1 !important');
-        const hasHighContrastToken = patchedCss.includes('color: var(--color-text-body) !important');
-        const passed = noLowContrastHex && hasHighContrastToken;
-        return {
-          passed,
-          defectCategory: patch.defectCategory,
-          route: '/products?defect=low-contrast-text',
-          viewport: { width: 1280, height: 800 },
-          cleanBaselineMetric: { contrastRatio: 12.6 },
-          defectiveMetric: { color: '#cbd5e1', contrastRatio: 1.54 },
-          repairedMetric: { color: 'var(--color-text-body)', contrastRatio: 12.6 },
-          assertionSummary: passed
-            ? 'Low contrast text repaired: WCAG AAA token restored, contrast >= 7:1'
-            : 'Low contrast text repair failed: muted color remains',
-          unrelatedRegressionsDetected: false,
-        };
-      }
-
-      case 'mobile-nav-overflow': {
-        const noFixed650px = !patchedCss.includes('width: 650px');
-        const hasFullWidth = patchedCss.includes('width: 100%');
-        const passed = noFixed650px && hasFullWidth;
-        return {
-          passed,
-          defectCategory: patch.defectCategory,
-          route: '/products?defect=mobile-nav-overflow',
-          viewport: { width: 390, height: 844 },
-          cleanBaselineMetric: { navWidth: '100%', scrollWidth: 390 },
-          defectiveMetric: { navWidth: '650px', scrollWidth: 650 },
-          repairedMetric: { navWidth: '100%', scrollWidth: 390 },
-          assertionSummary: passed
-            ? 'Mobile nav overflow repaired: width constrained to 100%, horizontal overflow eliminated'
-            : 'Mobile nav overflow repair failed: container still forced beyond viewport',
-          unrelatedRegressionsDetected: false,
-        };
-      }
-
-      default:
-        return {
-          passed: false,
-          defectCategory: patch.defectCategory,
-          route: '/products',
-          viewport: { width: 1280, height: 800 },
-          assertionSummary: `Unsupported defect category: ${patch.defectCategory}`,
-          unrelatedRegressionsDetected: false,
-        };
-    }
+    worktreePath: string,
+    jobId: string = `job-${Date.now()}`
+  ) {
+    return verifyRepairedWorktreeVisually({
+      worktreePath,
+      patch,
+      jobId,
+      artifactsDir: this.artifactsDir,
+      repoRoot: this.repoRoot,
+    });
   }
 
   /**

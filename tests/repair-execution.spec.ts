@@ -418,4 +418,112 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     expect(result.worktreeRemoved).toBe(true);
     expect(result.branchRemoved).toBe(false);
   });
+
+  test('Real Browser Visual Verification: captures real post-repair screenshot, DOM evidence, and computed metrics', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-real-browser-test',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `e2e-vis-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+    expect(report.finalState).toBe('PASSED');
+    expect(report.visualValidation).toBeDefined();
+    expect(report.visualValidation?.passed).toBe(true);
+
+    // Assert that real visual evidence files exist on disk
+    expect(report.visualValidation?.afterScreenshotPath).toBeDefined();
+    expect(fs.existsSync(report.visualValidation!.afterScreenshotPath!)).toBe(true);
+
+    const domFile = path.join(repoRoot, 'artifacts', 'repair-executions', jobId, 'dom_post_repair.html');
+    expect(fs.existsSync(domFile)).toBe(true);
+
+    // Verify rendered metrics were captured
+    expect(report.visualValidation?.repairedMetric?.objectFit).toBe('cover');
+    expect(report.visualValidation?.repairedMetric?.renderedAspectRatio).toBeGreaterThan(1.2);
+    expect(report.visualValidation?.beforeScreenshotPath).toBeDefined();
+    expect(fs.existsSync(report.visualValidation!.beforeScreenshotPath!)).toBe(true);
+  });
+
+  test('Real Browser Visual Verification: accurately flags failure when rendered visual metrics fail assertion', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-real-fail-test',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `e2e-vis-fail-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    // Override evaluateVisualRepair to test failure reporting path with real report fields
+    const originalEvaluate = (service as any).evaluateVisualRepair.bind(service);
+    (service as any).evaluateVisualRepair = async () => {
+      return {
+        passed: false,
+        defectCategory: 'product-image-distortion',
+        route: '/products?defect=product-image-distortion',
+        viewport: { width: 1440, height: 900 },
+        assertionSummary: 'Product image distortion verification failed: object-fit is fill, media height is 380px.',
+        repairedMetric: { objectFit: 'fill', mediaHeight: '380px' },
+        unrelatedRegressionsDetected: false,
+      };
+    };
+
+    try {
+      const report = await service.executeRepairJob(contract);
+      expect(report.finalState).toBe('FAILED');
+      expect(report.failureReason).toContain('Product image distortion verification failed');
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+    } finally {
+      (service as any).evaluateVisualRepair = originalEvaluate;
+    }
+  });
 });
