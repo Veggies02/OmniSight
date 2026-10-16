@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
 import uuid
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DefectCategory(str, Enum):
@@ -77,3 +77,65 @@ class AnalysisResponse(BaseModel):
     findings: List[AIFinding] = Field(default_factory=list, description="List of structured findings")
     analysis_latency_ms: Optional[float] = Field(default=None, description="VLM inference & parsing time in milliseconds")
     raw_model_response: Optional[str] = Field(default=None, description="Raw unparsed model text for auditing")
+
+
+# --- Patch proposal schemas ---
+
+class CodeChange(BaseModel):
+    """A single-file change expressed as a unified diff."""
+
+    file_path: str = Field(..., min_length=1, description="Repo-relative path of the file to modify")
+    description: str = Field(..., min_length=1)
+    unified_diff: str = Field(..., min_length=1)
+
+    @field_validator("file_path")
+    @classmethod
+    def _relative_safe_path(cls, v: str) -> str:
+        path = v.replace("\\", "/")
+        if path.startswith("/") or (len(path) > 1 and path[1] == ":"):
+            raise ValueError("file_path must be relative to the repo root")
+        if ".." in path.split("/"):
+            raise ValueError("file_path must not contain '..' segments")
+        return path
+
+    @field_validator("unified_diff")
+    @classmethod
+    def _looks_like_diff(cls, v: str) -> str:
+        if "@@" not in v:
+            raise ValueError("unified_diff must contain at least one hunk header (@@)")
+        return v
+
+
+class ValidationChecklist(BaseModel):
+    """Instructions for re-running the page to confirm a patch fixed the defect."""
+
+    steps: List[str]
+    expected_outcome: str = Field(..., min_length=1)
+    viewports: List[ViewportConfig] = Field(default_factory=list)
+    selectors_to_check: List[str] = Field(default_factory=list)
+
+    @field_validator("steps")
+    @classmethod
+    def _steps_not_empty(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError("at least one verification step is required")
+        return v
+
+
+class PatchProposal(BaseModel):
+    """A proposed repair for one finding, ready for review and re-validation."""
+
+    finding_id: Optional[str] = None
+    category: DefectCategory
+    summary: str = Field(..., min_length=1)
+    changes: List[CodeChange]
+    validation: ValidationChecklist
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    requires_human_review: bool = True
+
+    @field_validator("changes")
+    @classmethod
+    def _changes_not_empty(cls, v: List[CodeChange]) -> List[CodeChange]:
+        if not v:
+            raise ValueError("a patch proposal needs at least one code change")
+        return v

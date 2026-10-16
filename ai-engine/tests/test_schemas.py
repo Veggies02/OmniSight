@@ -7,7 +7,10 @@ from schemas import (
     EvidenceContext,
     AIFinding,
     AnalysisResponse,
-    BoundingBox
+    BoundingBox,
+    CodeChange,
+    ValidationChecklist,
+    PatchProposal,
 )
 
 
@@ -92,7 +95,7 @@ def test_analysis_response_serialization():
         findings=[finding],
         analysis_latency_ms=1240.5
     )
-    
+
     data = response.model_dump()
     assert data["has_defect"] is True
     assert len(data["findings"]) == 1
@@ -100,3 +103,73 @@ def test_analysis_response_serialization():
 
     json_str = response.model_dump_json()
     assert "modal_overflow" in json_str
+
+
+# --- Patch proposal schemas ---
+
+DIFF = (
+    "--- a/src/index.css\n+++ b/src/index.css\n"
+    "@@ -1,1 +1,1 @@\n-.btn { width: 400px; }\n+.btn { max-width: 100%; }\n"
+)
+
+
+def _checklist():
+    return ValidationChecklist(steps=["Load /products at 375px"], expected_outcome="Button fully visible")
+
+
+def _change(**overrides):
+    data = {"file_path": "src/index.css", "description": "Cap button width", "unified_diff": DIFF}
+    data.update(overrides)
+    return CodeChange(**data)
+
+
+def test_code_change_valid():
+    assert _change().file_path == "src/index.css"
+
+
+def test_code_change_normalizes_backslashes():
+    assert _change(file_path="src\\index.css").file_path == "src/index.css"
+
+
+@pytest.mark.parametrize("bad", ["/etc/passwd", "C:/x/y.css", "../secrets.env", "src/../../x.css"])
+def test_code_change_rejects_unsafe_paths(bad):
+    with pytest.raises(ValidationError):
+        _change(file_path=bad)
+
+
+def test_code_change_rejects_diff_without_hunk():
+    with pytest.raises(ValidationError):
+        _change(unified_diff="just some text")
+
+
+def test_checklist_requires_steps():
+    with pytest.raises(ValidationError):
+        ValidationChecklist(steps=[], expected_outcome="ok")
+
+
+def test_patch_proposal_valid_and_defaults_to_human_review():
+    p = PatchProposal(
+        category=DefectCategory("mobile_button_clipping"),
+        summary="Prevent nav button clipping on mobile",
+        changes=[_change()],
+        validation=_checklist(),
+        confidence=0.8,
+    )
+    assert p.requires_human_review is True
+
+
+def test_patch_proposal_requires_changes():
+    with pytest.raises(ValidationError):
+        PatchProposal(
+            category=DefectCategory("overlapping_text"),
+            summary="x", changes=[], validation=_checklist(), confidence=0.5,
+        )
+
+
+@pytest.mark.parametrize("bad", [-0.1, 1.5])
+def test_patch_proposal_confidence_bounds(bad):
+    with pytest.raises(ValidationError):
+        PatchProposal(
+            category=DefectCategory("overlapping_text"),
+            summary="x", changes=[_change()], validation=_checklist(), confidence=bad,
+        )
