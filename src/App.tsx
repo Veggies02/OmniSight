@@ -9,6 +9,7 @@ import { Checkout } from "./pages/Checkout";
 import { NotFound } from "./pages/NotFound";
 import { DashboardLayout } from "./components/dashboard/DashboardLayout";
 import { DashboardOverview } from "./pages/dashboard/DashboardOverview";
+import { DashboardJobs } from "./pages/dashboard/DashboardJobs";
 import { DashboardPlaceholder } from "./pages/dashboard/DashboardPlaceholder";
 
 function StorefrontLayout() {
@@ -30,16 +31,7 @@ export function App() {
         {/* QA Dashboard Shell (P4) */}
         <Route path="/qa" element={<DashboardLayout />}>
           <Route index element={<DashboardOverview />} />
-          <Route
-            path="jobs"
-            element={
-              <DashboardPlaceholder
-                title="Inspection Jobs"
-                description="View past and running visual inspection jobs, Playwright execution traces, and runtime duration logs."
-                badge="Planned for Days 4–10"
-              />
-            }
-          />
+          <Route path="jobs" element={<DashboardJobs />} />
           <Route
             path="defects"
             element={
