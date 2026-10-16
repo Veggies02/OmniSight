@@ -19,7 +19,6 @@ export function DashboardJobs() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [validationFilter, setValidationFilter] = useState<string>("all");
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [selectedJob, setSelectedJob] = useState<InspectionJob | null>(null);
 
   // Clear all filters helper
   const handleClearFilters = () => {
@@ -341,15 +340,14 @@ export function DashboardJobs() {
 
                       {/* Action to view job details */}
                       <td>
-                        <button
-                          type="button"
+                        <Link
+                          to={`/qa/jobs/${job.id}`}
                           className="table-action-btn"
-                          onClick={() => setSelectedJob(job)}
                           aria-label={`View details for ${job.id}`}
                         >
                           <span>View Details</span>
                           <span aria-hidden="true">→</span>
-                        </button>
+                        </Link>
                       </td>
                     </tr>
                   ))}
@@ -359,76 +357,6 @@ export function DashboardJobs() {
           )}
         </div>
       </section>
-
-      {/* 5. Job Details Modal Preview */}
-      {selectedJob && (
-        <div
-          className="job-details-modal-backdrop"
-          onClick={() => setSelectedJob(null)}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="jobs-modal-title"
-        >
-          <div className="job-details-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 id="jobs-modal-title" className="modal-title">
-                Job Overview: #{selectedJob.id}
-              </h3>
-              <button
-                type="button"
-                className="modal-close-btn"
-                onClick={() => setSelectedJob(null)}
-                aria-label="Close dialog"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="modal-meta-row">
-              <span>App: {selectedJob.application}</span>
-              <span>•</span>
-              <span>Route: {selectedJob.targetRoute}</span>
-              <span>•</span>
-              <StatusBadge status={selectedJob.status} size="sm" />
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", fontSize: "0.825rem" }}>
-              <div style={{ backgroundColor: "var(--color-surface-subtle)", padding: "0.6rem", borderRadius: "var(--radius-sm)" }}>
-                <span style={{ color: "var(--color-text-muted)", display: "block" }}>Execution Time</span>
-                <strong>{selectedJob.startedAt} ({selectedJob.duration})</strong>
-              </div>
-              <div style={{ backgroundColor: "var(--color-surface-subtle)", padding: "0.6rem", borderRadius: "var(--radius-sm)" }}>
-                <span style={{ color: "var(--color-text-muted)", display: "block" }}>Target Viewport</span>
-                <strong>{selectedJob.viewport}</strong>
-              </div>
-            </div>
-
-            {selectedJob.defectSummary && (
-              <div style={{ backgroundColor: "var(--color-surface-subtle)", padding: "0.75rem", borderRadius: "var(--radius-sm)", fontSize: "0.85rem" }}>
-                <span style={{ color: "var(--color-text-muted)", display: "block", marginBottom: "0.25rem" }}>Finding Summary</span>
-                <span>{selectedJob.defectSummary}</span>
-              </div>
-            )}
-
-            <div className="modal-notice-box">
-              <strong>Roadmap Milestone Indicator:</strong>
-              <p style={{ marginTop: "0.35rem", marginBottom: 0 }}>
-                Granular inspection job details, Playwright execution traces, VLM bounding boxes, and screenshot evidence will be implemented in subsequent milestones (Days 6–10).
-              </p>
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "0.5rem" }}>
-              <button
-                type="button"
-                className="empty-state-btn secondary"
-                onClick={() => setSelectedJob(null)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

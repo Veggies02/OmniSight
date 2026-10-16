@@ -89,7 +89,6 @@ export function DashboardOverview() {
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>("all");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<string>("Just now");
-  const [selectedJobForModal, setSelectedJobForModal] = useState<DemoJob | null>(null);
   const [simulateEmpty, setSimulateEmpty] = useState(false);
 
   // Refresh handler (refreshes state and updates timestamp without calling real backend)
@@ -485,15 +484,14 @@ export function DashboardOverview() {
 
                     {/* Action */}
                     <td>
-                      <button
-                        type="button"
+                      <Link
+                        to={`/qa/jobs/${job.id}`}
                         className="table-action-btn"
-                        onClick={() => setSelectedJobForModal(job)}
                         aria-label={`View details for ${job.id}`}
                       >
                         <span>View Details</span>
                         <span aria-hidden="true">→</span>
-                      </button>
+                      </Link>
                     </td>
                   </tr>
                 ))}
@@ -590,16 +588,20 @@ export function DashboardOverview() {
               <span>Day 3: Reusable UI Components</span>
             </div>
             <div className="roadmap-step">
+              <span className="roadmap-indicator done">✓</span>
+              <span>Day 4: QA Dashboard Overview</span>
+            </div>
+            <div className="roadmap-step">
+              <span className="roadmap-indicator done">✓</span>
+              <span>Day 5: Searchable Job History</span>
+            </div>
+            <div className="roadmap-step">
               <span className="roadmap-indicator active">●</span>
-              <span><strong>Day 4: QA Dashboard Overview</strong></span>
+              <span><strong>Day 6: Inspection Job Details</strong></span>
             </div>
             <div className="roadmap-step">
-              <span className="roadmap-indicator pending">5</span>
-              <span>Days 5–7: Job History & Mock Adapters</span>
-            </div>
-            <div className="roadmap-step">
-              <span className="roadmap-indicator pending">8</span>
-              <span>Days 8–14: Defect Findings & Diff Visualizer</span>
+              <span className="roadmap-indicator pending">7</span>
+              <span>Day 7: Defect Findings & Evidence Visualizer</span>
             </div>
             <div className="roadmap-step">
               <span className="roadmap-indicator pending">15</span>
@@ -618,67 +620,6 @@ export function DashboardOverview() {
           </div>
         </div>
       </section>
-
-      {/* ==================================================================
-          View Details Modal Placeholder
-          ================================================================== */}
-      {selectedJobForModal && (
-        <div
-          className="job-details-modal-backdrop"
-          onClick={() => setSelectedJobForModal(null)}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-job-title"
-        >
-          <div className="job-details-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h4 id="modal-job-title" className="modal-title">
-                Job Details: #{selectedJobForModal.id}
-              </h4>
-              <button
-                type="button"
-                className="modal-close-btn"
-                onClick={() => setSelectedJobForModal(null)}
-                aria-label="Close dialog"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="modal-meta-row">
-              <span>App: {selectedJobForModal.application}</span>
-              <span>•</span>
-              <span>Route: {selectedJobForModal.targetRoute}</span>
-              <span>•</span>
-              <StatusBadge status={selectedJobForModal.status} size="sm" />
-            </div>
-
-            <div className="modal-notice-box">
-              <strong>Roadmap Milestone Indicator:</strong>
-              <p style={{ marginTop: "0.35rem", marginBottom: 0 }}>
-                Granular inspection job details, Playwright browser traces, VLM bounding boxes, and screenshot evidence will be implemented in subsequent milestones (Days 5–10).
-              </p>
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "0.5rem" }}>
-              <button
-                type="button"
-                className="empty-state-btn secondary"
-                onClick={() => setSelectedJobForModal(null)}
-              >
-                Close
-              </button>
-              <Link
-                to="/qa/jobs"
-                className="empty-state-btn primary"
-                onClick={() => setSelectedJobForModal(null)}
-              >
-                Go to Jobs Route
-              </Link>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

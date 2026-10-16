@@ -10,6 +10,7 @@ import { NotFound } from "./pages/NotFound";
 import { DashboardLayout } from "./components/dashboard/DashboardLayout";
 import { DashboardOverview } from "./pages/dashboard/DashboardOverview";
 import { DashboardJobs } from "./pages/dashboard/DashboardJobs";
+import { DashboardJobDetails } from "./pages/dashboard/DashboardJobDetails";
 import { DashboardPlaceholder } from "./pages/dashboard/DashboardPlaceholder";
 
 function StorefrontLayout() {
@@ -32,6 +33,7 @@ export function App() {
         <Route path="/qa" element={<DashboardLayout />}>
           <Route index element={<DashboardOverview />} />
           <Route path="jobs" element={<DashboardJobs />} />
+          <Route path="jobs/:id" element={<DashboardJobDetails />} />
           <Route
             path="defects"
             element={
