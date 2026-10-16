@@ -13,6 +13,50 @@ export interface RegisteredPatch {
 }
 
 /**
+ * Normalizes CRLF and CR line endings to LF (\n).
+ * Preserves all other whitespace and code semantics.
+ */
+export function normalizeLineEndings(content: string): string {
+  if (typeof content !== 'string') return '';
+  return content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+/**
+ * Applies a registered patch deterministically to a file content string,
+ * handling CRLF/LF line-ending differences transparently.
+ * Detects whether the file originally used CRLF, performs normalized matching/replacement,
+ * and preserves the original file line-ending convention upon output.
+ */
+export function applyDeterministicPatch(
+  rawContent: string,
+  patch: RegisteredPatch
+): { success: boolean; updatedContent: string; error?: string } {
+  const isCrlf = rawContent.includes('\r\n');
+  const normalizedFile = normalizeLineEndings(rawContent);
+  const normalizedTarget = normalizeLineEndings(patch.targetMatchString);
+  const normalizedReplacement = normalizeLineEndings(patch.replacementString);
+
+  if (!normalizedFile.includes(normalizedTarget)) {
+    return {
+      success: false,
+      updatedContent: rawContent,
+      error: `Precondition check failed: Expected target code snippet not found in worktree ${patch.targetFile}`,
+    };
+  }
+
+  // Replace only the first occurrence of the target match snippet
+  const updatedNormalized = normalizedFile.replace(normalizedTarget, normalizedReplacement);
+
+  // Restore original line-ending format if original was CRLF
+  const finalContent = isCrlf ? updatedNormalized.replace(/\n/g, '\r\n') : updatedNormalized;
+
+  return {
+    success: true,
+    updatedContent: finalContent,
+  };
+}
+
+/**
  * Registry of deterministic, pre-verified patches for seeded UI defects.
  * These are vetted, immutable patches designed specifically for the test-bed.
  */

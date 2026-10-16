@@ -97,40 +97,63 @@ export class WorktreeManager {
   /**
    * Safely cleans up the repair worktree and branch.
    * Only targets paths inside artifacts/repair-worktrees/ and branches starting with omnisight-repair/.
+   * Idempotent: safely handles already-removed worktrees or non-existent branches.
    */
-  public async cleanupWorktree(jobId: string): Promise<{ worktreeRemoved: boolean; branchRemoved: boolean }> {
+  public async cleanupWorktree(jobId: string): Promise<{ worktreeRemoved: boolean; branchRemoved: boolean; notes?: string }> {
     const cleanJobId = this.sanitizeJobId(jobId);
     const branchName = `omnisight-repair/${cleanJobId}`;
     const worktreePath = path.join(this.worktreeBaseDir, cleanJobId);
 
     let worktreeRemoved = false;
     let branchRemoved = false;
+    const notes: string[] = [];
 
     // Safety guard: ensure worktree path is strictly inside repair-worktrees directory
     if (!worktreePath.startsWith(this.worktreeBaseDir) || worktreePath === this.worktreeBaseDir) {
       throw new Error(`Illegal worktree deletion path: ${worktreePath}`);
     }
 
-    // 1. Remove the worktree via git worktree remove
-    try {
-      await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], {
-        cwd: this.repoRoot,
-      });
+    // If worktree directory does not exist on disk, it is already removed
+    if (!fs.existsSync(worktreePath)) {
       worktreeRemoved = true;
-    } catch {
-      // If git worktree command failed (e.g. dir manually deleted or not recognized), try manual cleanup
-      if (fs.existsSync(worktreePath)) {
-        try {
-          fs.rmSync(worktreePath, { recursive: true, force: true });
-          worktreeRemoved = true;
-        } catch {
-          worktreeRemoved = false;
-        }
-      } else {
+    } else {
+      // 1. Remove the worktree via git worktree remove
+      try {
+        await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], {
+          cwd: this.repoRoot,
+        });
         worktreeRemoved = true;
+      } catch (gitErr: any) {
+        notes.push(`git worktree remove warning: ${gitErr?.message || String(gitErr)}`);
+        // If git worktree command failed (e.g. dir manually modified, locked or unindexed), attempt filesystem removal
+        if (fs.existsSync(worktreePath)) {
+          try {
+            // First unlink node_modules junction/symlink if present to prevent recursive locking issues on Windows
+            const nodeModulesPath = path.join(worktreePath, 'node_modules');
+            if (fs.existsSync(nodeModulesPath)) {
+              try {
+                fs.rmSync(nodeModulesPath, { recursive: true, force: true });
+              } catch {
+                // Ignore if cannot remove junction individually
+              }
+            }
+            fs.rmSync(worktreePath, { recursive: true, force: true });
+            worktreeRemoved = !fs.existsSync(worktreePath);
+          } catch (rmErr: any) {
+            notes.push(`fs.rmSync failure: ${rmErr?.message || String(rmErr)}`);
+            worktreeRemoved = false;
+          }
+        } else {
+          worktreeRemoved = true;
+        }
       }
-      // Run git worktree prune
-      await execFileAsync('git', ['worktree', 'prune'], { cwd: this.repoRoot }).catch(() => {});
+    }
+
+    // Prune git worktree administrative records
+    try {
+      await execFileAsync('git', ['worktree', 'prune'], { cwd: this.repoRoot });
+    } catch {
+      // Ignore prune errors
     }
 
     // 2. Remove the repair branch
@@ -139,11 +162,15 @@ export class WorktreeManager {
         cwd: this.repoRoot,
       });
       branchRemoved = true;
-    } catch {
-      // Branch might not exist
+    } catch (branchErr: any) {
+      // Branch might already be deleted or not exist
       branchRemoved = false;
     }
 
-    return { worktreeRemoved, branchRemoved };
+    return {
+      worktreeRemoved,
+      branchRemoved,
+      notes: notes.length > 0 ? notes.join('; ') : undefined,
+    };
   }
 }
