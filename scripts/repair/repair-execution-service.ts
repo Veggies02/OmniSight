@@ -47,7 +47,8 @@ export class RepairExecutionService {
    */
   public async runCommand(
     commandStr: string,
-    cwd: string
+    cwd: string,
+    options: { timeoutMs?: number } = {}
   ): Promise<{ exitCode: number; stdout: string; stderr: string; durationMs: number }> {
     const startTime = Date.now();
     const parts = commandStr.trim().split(/\s+/);
@@ -64,7 +65,10 @@ export class RepairExecutionService {
     }
 
     try {
-      const { stdout, stderr } = await execFileAsync(cmd, args, { cwd });
+      const { stdout, stderr } = await execFileAsync(cmd, args, {
+        cwd,
+        timeout: options.timeoutMs,
+      });
       return {
         exitCode: 0,
         stdout,
@@ -72,13 +76,162 @@ export class RepairExecutionService {
         durationMs: Date.now() - startTime,
       };
     } catch (err: any) {
+      const isTimeout = err?.killed || err?.signal === 'SIGTERM' || err?.code === 'ETIMEDOUT';
       return {
-        exitCode: typeof err?.code === 'number' ? err.code : 1,
+        exitCode: typeof err?.code === 'number' ? err.code : isTimeout ? 124 : 1,
         stdout: err?.stdout || '',
-        stderr: err?.stderr || err?.message || String(err),
+        stderr: err?.stderr || (isTimeout ? `Command timed out after ${options.timeoutMs}ms` : err?.message || String(err)),
         durationMs: Date.now() - startTime,
       };
     }
+  }
+
+  /**
+   * Validates that a requested test command conforms strictly to safe, pre-approved patterns.
+   * Rejects any attempts at shell chaining, arbitrary command execution, or path traversal.
+   */
+  public validateAndResolveTestCommand(rawCommand: string): { valid: boolean; command: string; error?: string } {
+    if (!rawCommand || typeof rawCommand !== 'string' || !rawCommand.trim()) {
+      return { valid: false, command: '', error: 'Empty or invalid test command' };
+    }
+
+    const trimmed = rawCommand.trim();
+
+    // Reject dangerous shell metacharacters
+    if (/[;&|`$><\r\n]/.test(trimmed)) {
+      return { valid: false, command: trimmed, error: `Command contains forbidden shell metacharacters: ${trimmed}` };
+    }
+
+    // Check against explicit allowed command patterns
+    if (trimmed === 'npm run build' || trimmed === 'npm test') {
+      return { valid: true, command: trimmed };
+    }
+
+    // Pattern: npx playwright test [args...]
+    if (trimmed === 'npx playwright test' || trimmed.startsWith('npx playwright test ')) {
+      const subparts = trimmed.split(/\s+/).slice(3); // after 'npx playwright test'
+      for (const part of subparts) {
+        if (part.startsWith('-')) {
+          const allowedFlags = ['--reporter=list', '--reporter=line', '--forbid-only'];
+          if (!allowedFlags.includes(part) && !part.startsWith('--workers=')) {
+            return { valid: false, command: trimmed, error: `Flag not allowed in repair test command: ${part}` };
+          }
+        } else {
+          // File path - must stay within tests/ and not traverse directories
+          if (part.includes('..') || !part.startsWith('tests/')) {
+            return { valid: false, command: trimmed, error: `Test file must be within tests/ directory: ${part}` };
+          }
+        }
+      }
+      return { valid: true, command: trimmed };
+    }
+
+    // Pattern: direct test file path, e.g. "tests/defect-injection.spec.ts"
+    if (trimmed.startsWith('tests/') && trimmed.endsWith('.spec.ts')) {
+      if (trimmed.includes('..')) {
+        return { valid: false, command: trimmed, error: `Directory traversal not allowed: ${trimmed}` };
+      }
+      return { valid: true, command: `npx playwright test ${trimmed}` };
+    }
+
+    return {
+      valid: false,
+      command: trimmed,
+      error: `Test command '${trimmed}' is not an authorized test command or registered test spec`,
+    };
+  }
+
+  /**
+   * Executes the declared required validation tests inside the isolated worktree directory.
+   */
+  public async executeWorktreeTests(
+    requiredTests: string[],
+    isolatedWorktreePath: string,
+    options: { timeoutMs?: number } = { timeoutMs: 60000 }
+  ): Promise<{ passed: boolean; testExecution?: any; error?: string }> {
+    if (!Array.isArray(requiredTests) || requiredTests.length === 0) {
+      return { passed: true };
+    }
+
+    let combinedStdout = '';
+    let combinedStderr = '';
+    let totalTestsCount = 0;
+    let passedTestsCount = 0;
+    let failedTestsCount = 0;
+    let totalDurationMs = 0;
+    let lastExitCode = 0;
+    let lastCommand = '';
+
+    for (const rawTest of requiredTests) {
+      const resolution = this.validateAndResolveTestCommand(rawTest);
+      if (!resolution.valid) {
+        return {
+          passed: false,
+          error: `Test command validation error: ${resolution.error}`,
+          testExecution: {
+            command: rawTest,
+            exitCode: 1,
+            passed: false,
+            totalTests: 0,
+            passedTests: 0,
+            failedTests: 0,
+            durationMs: 0,
+            stdoutSummary: '',
+            stderrSummary: resolution.error || 'Invalid test command',
+          },
+        };
+      }
+
+      lastCommand = resolution.command;
+      const res = await this.runCommand(resolution.command, isolatedWorktreePath, { timeoutMs: options.timeoutMs });
+      totalDurationMs += res.durationMs;
+      lastExitCode = res.exitCode;
+      combinedStdout += `\n--- [${resolution.command}] ---\n${res.stdout}`;
+      combinedStderr += res.stderr ? `\n--- [${resolution.command}] ---\n${res.stderr}` : '';
+
+      // Parse Playwright test count summary if available
+      const passMatch = res.stdout.match(/(\d+)\s+passed/);
+      const failMatch = res.stdout.match(/(\d+)\s+failed/);
+      const passedInCmd = passMatch ? parseInt(passMatch[1], 10) : 0;
+      const failedInCmd = failMatch ? parseInt(failMatch[1], 10) : 0;
+      passedTestsCount += passedInCmd;
+      failedTestsCount += failedInCmd;
+      totalTestsCount += passedInCmd + failedInCmd;
+
+      if (res.exitCode !== 0) {
+        const timeoutNote = res.exitCode === 124 || res.stderr.includes('timed out') ? ' (timed out)' : '';
+        return {
+          passed: false,
+          error: `Required test '${resolution.command}' failed in isolated worktree with exit code ${res.exitCode}${timeoutNote}: ${res.stderr || res.stdout}`.trim(),
+          testExecution: {
+            command: resolution.command,
+            exitCode: res.exitCode,
+            passed: false,
+            totalTests: totalTestsCount || 1,
+            passedTests: passedTestsCount,
+            failedTests: failedTestsCount || 1,
+            durationMs: totalDurationMs,
+            stdoutSummary: combinedStdout.slice(-1000),
+            stderrSummary: combinedStderr.slice(-1000),
+          },
+        };
+      }
+    }
+
+    return {
+      passed: true,
+      testExecution: {
+        command: lastCommand,
+        exitCode: lastExitCode,
+        passed: true,
+        totalTests: totalTestsCount,
+        passedTests: passedTestsCount,
+        failedTests: 0,
+        durationMs: totalDurationMs,
+        stdoutSummary: combinedStdout.slice(-1000),
+        stderrSummary: combinedStderr.slice(-1000),
+      },
+    };
   }
 
   /**
@@ -220,6 +373,7 @@ export class RepairExecutionService {
 
     let patchApplicationResult: any = undefined;
     let buildExecution: any = undefined;
+    let testExecution: any = undefined;
     let visualValidation: any = undefined;
     let executionFailureReason: string | undefined = undefined;
 
@@ -293,6 +447,42 @@ export class RepairExecutionService {
         throw new Error(`Build verification failed in isolated worktree with code ${buildExecution.exitCode}`);
       }
 
+      // Execute declared required tests inside the isolated worktree
+      // Tests can come from patch.requiredTests or proposal.requiredValidationTests
+      const testsToRun: string[] = [];
+      if (Array.isArray(patch.requiredTests) && patch.requiredTests.length > 0) {
+        testsToRun.push(...patch.requiredTests);
+      }
+      if (Array.isArray(proposal.requiredValidationTests) && proposal.requiredValidationTests.length > 0) {
+        testsToRun.push(...proposal.requiredValidationTests);
+      }
+
+      // Filter out redundant 'npm run build' since it was already executed above
+      const uniqueRequiredTests = Array.from(new Set(testsToRun)).filter(
+        (t) => t.trim() !== 'npm run build'
+      );
+
+      if (uniqueRequiredTests.length > 0) {
+        const testOutcome = await this.executeWorktreeTests(uniqueRequiredTests, isolatedWorktreePath);
+        testExecution = testOutcome.testExecution;
+        if (!testOutcome.passed) {
+          throw new Error(testOutcome.error || `Required tests failed in isolated worktree`);
+        }
+      } else {
+        // Fallback default testExecution to indicate build was verified
+        testExecution = {
+          command: 'npm run build',
+          exitCode: buildExecution.exitCode,
+          passed: buildExecution.passed,
+          totalTests: 0,
+          passedTests: 0,
+          failedTests: 0,
+          durationMs: buildExecution.durationMs,
+          stdoutSummary: buildExecution.stdoutSummary,
+          stderrSummary: buildExecution.stderrSummary,
+        };
+      }
+
       // 6. Real Browser Visual & Defect-Specific Assertion
       currentState = this.transitionState(currentState, 'VISUAL_VALIDATION');
       visualValidation = await this.evaluateVisualRepair(patch, isolatedWorktreePath, jobId);
@@ -353,6 +543,7 @@ export class RepairExecutionService {
         approvalValidation,
         patchApplication: patchApplicationResult,
         buildExecution,
+        testExecution,
         visualValidation,
         cleanupStatus: {
           cleaned: cleanupResult.worktreeRemoved,
