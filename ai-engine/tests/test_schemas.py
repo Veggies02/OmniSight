@@ -173,3 +173,61 @@ def test_patch_proposal_confidence_bounds(bad):
             category=DefectCategory("overlapping_text"),
             summary="x", changes=[_change()], validation=_checklist(), confidence=bad,
         )
+
+
+# --- Edge-case coverage ---
+
+def test_viewport_defaults():
+    vp = ViewportConfig()
+    assert (vp.width, vp.height) == (1280, 720)
+    assert vp.is_mobile is False
+    assert vp.device_scale_factor == 1.0
+
+
+@pytest.mark.parametrize("kwargs", [{"width": 0}, {"height": 0}, {"device_scale_factor": 5.0}])
+def test_viewport_rejects_out_of_range_values(kwargs):
+    with pytest.raises(ValidationError):
+        ViewportConfig(**kwargs)
+
+
+def test_evidence_context_optional_fields_default_to_none():
+    ctx = EvidenceContext(job_id="j1", screenshot_path="a.png", url="http://localhost:5173/")
+    assert ctx.route is None
+    assert ctx.dom_snippet is None
+    assert ctx.step_name is None
+    assert ctx.timestamp.tzinfo is not None
+
+
+def test_bounding_box_rejects_negative_values():
+    with pytest.raises(ValidationError):
+        BoundingBox(x=-0.1, y=0.0, width=0.5, height=0.5)
+
+
+def test_finding_ids_are_unique():
+    def make():
+        return AIFinding(
+            job_id="j1",
+            defect_category=DefectCategory.HIDDEN_CONTROL,
+            description="Control hidden",
+            evidence_reference="a.png",
+            confidence=0.7,
+        )
+    assert make().finding_id != make().finding_id
+
+
+def test_clean_page_response_has_no_findings():
+    resp = AnalysisResponse(job_id="j2", has_defect=False)
+    assert resp.findings == []
+    assert DefectCategory.NONE.value == "none"
+
+
+def test_patch_proposal_json_round_trip():
+    original = PatchProposal(
+        category=DefectCategory.INCORRECT_SPACING,
+        summary="Fix card gap",
+        changes=[_change()],
+        validation=_checklist(),
+        confidence=0.6,
+    )
+    restored = PatchProposal.model_validate_json(original.model_dump_json())
+    assert restored == original
