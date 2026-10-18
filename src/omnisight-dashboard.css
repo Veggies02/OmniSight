@@ -69,6 +69,60 @@
   --container-max-width: 1320px;
 }
 
+/* ==========================================================================
+   Dark Mode Theme Overrides (Applied when .dark class is on <html> or :root)
+   ========================================================================== */
+:root.dark,
+html.dark,
+.dark {
+  /* Surface Tokens */
+  --theme-bg: #0b0c0e;
+  --theme-surface: #13151a;
+  --theme-container: #1b1d24;
+  --theme-container-high: #242731;
+  --theme-container-hover: #2b2f3b;
+
+  /* Typography Colors */
+  --theme-on-surface: #f3f4f6;
+  --theme-on-surface-variant: #9ca3af;
+  --theme-on-surface-subtle: #6b7280;
+  --theme-on-surface-inverse: #121317;
+
+  /* Borders & Dividers */
+  --theme-outline: #282b36;
+  --theme-outline-variant: #1f222b;
+  --theme-outline-focus: #f3f4f6;
+
+  /* Primary Accent & Hover */
+  --theme-primary: #f3f4f6;
+  --theme-primary-hover: #e5e7eb;
+  --theme-accent-blue: #3b82f6;
+  --theme-accent-blue-hover: #60a5fa;
+  --theme-accent-blue-subtle: rgba(59, 130, 246, 0.15);
+
+  /* Semantic State Colors */
+  --theme-success-text: #34d399;
+  --theme-success-bg: rgba(16, 185, 129, 0.12);
+  --theme-success-border: rgba(16, 185, 129, 0.28);
+
+  --theme-warning-text: #fbbf24;
+  --theme-warning-bg: rgba(245, 158, 11, 0.12);
+  --theme-warning-border: rgba(245, 158, 11, 0.28);
+
+  --theme-danger-text: #f87171;
+  --theme-danger-bg: rgba(239, 68, 68, 0.12);
+  --theme-danger-border: rgba(239, 68, 68, 0.28);
+
+  --theme-info-text: #60a5fa;
+  --theme-info-bg: rgba(37, 99, 235, 0.12);
+  --theme-info-border: rgba(37, 99, 235, 0.28);
+
+  /* Shadows for Dark Mode */
+  --shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-modal: 0 16px 36px rgba(0, 0, 0, 0.65);
+}
+
 /* Base Document Reset */
 .omni-shell {
   min-height: 100vh;
@@ -92,11 +146,11 @@
   position: sticky;
   top: 0;
   z-index: 60;
-  background-color: rgba(255, 255, 255, 0.94);
+  background-color: var(--theme-surface);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--theme-outline);
-  transition: border-color 150ms ease;
+  transition: border-color 150ms ease, background-color 150ms ease;
 }
 
 .omni-header-container {
@@ -461,7 +515,8 @@
 }
 
 .omni-btn-destructive:hover:not(:disabled) {
-  background-color: #fde8e8;
+  filter: brightness(1.1);
+  border-color: var(--theme-danger-text);
 }
 
 .omni-btn-sm {
@@ -551,7 +606,7 @@
 }
 
 .omni-table tr:hover td {
-  background-color: #fafbfd;
+  background-color: var(--theme-container-hover);
 }
 
 /* Code Panel */

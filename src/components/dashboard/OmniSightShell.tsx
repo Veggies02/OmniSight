@@ -8,7 +8,7 @@ export const OmniSightShell: React.FC = () => {
   const activeDefectsCount = defects.filter((d) => d.status !== "dismissed").length;
 
   return (
-    <div className="omni-shell">
+    <div className={`omni-shell ${theme}`} data-theme={theme}>
       {/* Top Editorial Info Bar */}
       <div className="omni-topbar">
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
