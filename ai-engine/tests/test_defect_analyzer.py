@@ -15,6 +15,7 @@ from defect_analyzer import (
 from prompts import (
     DEFECT_TYPES,
     AJAY_CATEGORY_MAP,
+    FEW_SHOT_EXAMPLES,
     build_analysis_prompt,
     sanitize_dom_snippet,
 )
@@ -343,3 +344,53 @@ class TestAnalyzeEvidence:
         after_stat = os.stat(dummy_png)
         assert original_stat.st_mtime == after_stat.st_mtime
         assert original_stat.st_size == after_stat.st_size
+# =====================================================================
+# Few-shot example tests
+# =====================================================================
+
+class TestFewShotExamples:
+    def test_examples_included_by_default(self):
+        prompt = build_analysis_prompt(url="http://localhost:5173/")
+        assert "Example 1:" in prompt
+
+    def test_examples_can_be_disabled(self):
+        prompt = build_analysis_prompt(url="http://localhost:5173/", include_examples=False)
+        assert "Example 1:" not in prompt
+        assert "OmniSight" in prompt
+
+    def test_examples_come_before_evidence_context(self):
+        prompt = build_analysis_prompt(url="http://localhost:5173/")
+        assert prompt.index("Example 1:") < prompt.index("--- EVIDENCE CONTEXT ---")
+
+    def test_example_outputs_follow_output_contract(self):
+        finding_keys = {
+            "defect_category", "description", "confidence", "target_selector",
+            "target_component", "requires_human_review", "suggested_next_step",
+        }
+        for example in FEW_SHOT_EXAMPLES:
+            out = example["output"]
+            assert isinstance(out["has_defect"], bool)
+            if not out["has_defect"]:
+                assert out["findings"] == []
+            for finding in out["findings"]:
+                assert set(finding) == finding_keys
+                assert finding["defect_category"] in DEFECT_TYPES
+                assert 0.0 <= finding["confidence"] <= 1.0
+                if finding["confidence"] < 0.5:
+                    assert finding["requires_human_review"] is True
+
+    def test_examples_cover_every_defect_type(self):
+        used = {
+            f["defect_category"]
+            for example in FEW_SHOT_EXAMPLES
+            for f in example["output"]["findings"]
+        }
+        assert set(DEFECT_TYPES) <= used
+
+    def test_examples_include_a_clean_page(self):
+        assert any(not example["output"]["has_defect"] for example in FEW_SHOT_EXAMPLES)
+
+    def test_example_outputs_pass_the_real_parser(self):
+        for example in FEW_SHOT_EXAMPLES:
+            parsed = parse_findings(example["output"], "job-x", "shot.png")
+            assert len(parsed) == len(example["output"]["findings"])
