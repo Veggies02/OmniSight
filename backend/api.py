@@ -16,7 +16,7 @@ from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from browser_runner import BrowserRunner, runner_from_env
+from browser_runner import BrowserRunner, RunnerError, runner_from_env
 from job_schemas import (
     ArtifactRef,
     BrowserResultNote,
@@ -42,16 +42,28 @@ def run_inspection(store: JobStore, runner: BrowserRunner, job_id: str, website_
         store.update_status(job_id, JobStatus.INSPECTING)
         result = runner.run(job_id, website_url)
         store.add_artifacts(job_id, result.artifacts)
-        summary = Inspection(mode=result.mode, executed=result.executed, message=result.message)
+        summary = Inspection(**result.model_dump(exclude={"artifacts"}))
         store.update_status(job_id, JobStatus.ANALYZING, inspection=summary.model_dump())
         logger.info("job %s inspected (mode=%s executed=%s)", job_id, result.mode, result.executed)
+    except RunnerError as exc:
+        # Expected failure (app down, non-zero exit, bad manifest...). Keep the details.
+        logger.error("job %s inspection failed: %s", job_id, exc)
+        try:
+            store.add_artifacts(job_id, exc.artifacts)
+            store.update_status(
+                job_id,
+                JobStatus.FAILED,
+                error=str(exc),
+                inspection=exc.inspection.model_dump() if exc.inspection else None,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("job %s could not be marked failed", job_id)
     except Exception as exc:  # noqa: BLE001 - we want to record every failure on the job
         logger.exception("job %s failed during inspection", job_id)
         try:
             store.update_status(job_id, JobStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
         except Exception:  # noqa: BLE001
             logger.exception("job %s could not be marked failed", job_id)
-
 
 def create_app(db_path: Optional[Path] = None, runner: Optional[BrowserRunner] = None) -> FastAPI:
     store = JobStore(db_path or os.getenv("OMNISIGHT_DB_PATH") or DEFAULT_DB_PATH)

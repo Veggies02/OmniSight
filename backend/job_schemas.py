@@ -95,9 +95,15 @@ class ArtifactRef(ArtifactDraft):
 # --------------------------------------------------------------------------- #
 class Inspection(BaseModel):
     mode: Literal["mock", "playwright"]
-    executed: bool = Field(description="True only if a real browser actually ran")
+    executed: bool = Field(description="True only if a real browser run produced a manifest")
     message: str
-
+    run_id: Optional[str] = Field(default=None, description="Evidence run folder name, unique per job")
+    exit_code: Optional[int] = Field(default=None, description="Exit code of the capture process")
+    duration_seconds: Optional[float] = None
+    scenarios_captured: Optional[int] = None
+    total_scenarios: Optional[int] = None
+    stdout_tail: Optional[str] = Field(default=None, description="Last part of the process output")
+    stderr_tail: Optional[str] = Field(default=None, description="Last part of the process errors")
 
 class JobResponse(BaseModel):
     job_id: str
