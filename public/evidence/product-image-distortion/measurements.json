@@ -1,0 +1,105 @@
+{
+  "scenarioId": "product-image-distortion",
+  "baseline": {
+    "defectId": "product-image-distortion",
+    "category": "visual-distortion",
+    "route": "/products",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "state": "baseline",
+    "elementBoundingBoxes": {
+      "card": {
+        "x": 144,
+        "y": 361.765625,
+        "width": 267,
+        "height": 493.390625
+      },
+      "media": {
+        "x": 145,
+        "y": 362.765625,
+        "width": 265,
+        "height": 265
+      },
+      "image": {
+        "x": 145,
+        "y": 362.765625,
+        "width": 265,
+        "height": 265
+      }
+    },
+    "computedStyles": {
+      "image.objectFit": "cover",
+      "image.height": "265px",
+      "image.transform": "none",
+      "media.height": "265px"
+    },
+    "specificMetrics": {
+      "imageRenderedWidth": 265,
+      "imageRenderedHeight": 265,
+      "imageNaturalWidth": 800,
+      "imageNaturalHeight": 533,
+      "mediaRenderedHeight": 265,
+      "isDistorted": false
+    },
+    "hasHorizontalOverflow": false,
+    "documentMetrics": {
+      "clientWidth": 1440,
+      "scrollWidth": 1440,
+      "clientHeight": 900,
+      "scrollHeight": 1697
+    }
+  },
+  "defective": {
+    "defectId": "product-image-distortion",
+    "category": "visual-distortion",
+    "route": "/products",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "state": "defective",
+    "elementBoundingBoxes": {
+      "card": {
+        "x": 144,
+        "y": 361.765625,
+        "width": 267,
+        "height": 608.390625
+      },
+      "media": {
+        "x": 145,
+        "y": 362.765625,
+        "width": 265,
+        "height": 380
+      },
+      "image": {
+        "x": 178.125,
+        "y": 277.265625,
+        "width": 198.75,
+        "height": 551
+      }
+    },
+    "computedStyles": {
+      "image.objectFit": "fill",
+      "image.height": "380px",
+      "image.transform": "matrix(0.75, 0, 0, 1.45, 0, 0)",
+      "media.height": "380px"
+    },
+    "specificMetrics": {
+      "imageRenderedWidth": 198.75,
+      "imageRenderedHeight": 551,
+      "imageNaturalWidth": 800,
+      "imageNaturalHeight": 533,
+      "mediaRenderedHeight": 380,
+      "isDistorted": true
+    },
+    "hasHorizontalOverflow": false,
+    "documentMetrics": {
+      "clientWidth": 1440,
+      "scrollWidth": 1440,
+      "clientHeight": 900,
+      "scrollHeight": 1927
+    }
+  }
+}

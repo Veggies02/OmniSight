@@ -731,4 +731,191 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
       (service as any).evaluateVisualRepair = originalEvaluate;
     }
   });
+
+  test('Required Tests: validates and allows authorized test patterns while rejecting arbitrary commands', async () => {
+    const service = new RepairExecutionService(repoRoot);
+
+    // Valid test commands
+    expect(service.validateAndResolveTestCommand('npm run build').valid).toBe(true);
+    expect(service.validateAndResolveTestCommand('npm test').valid).toBe(true);
+    expect(service.validateAndResolveTestCommand('tests/defect-injection.spec.ts').valid).toBe(true);
+    expect(service.validateAndResolveTestCommand('npx playwright test tests/responsive.spec.ts').valid).toBe(true);
+    expect(service.validateAndResolveTestCommand('npx playwright test --reporter=list tests/shopping-cart.spec.ts').valid).toBe(true);
+
+    // Rejection of arbitrary commands and shell injection
+    expect(service.validateAndResolveTestCommand('rm -rf /').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('npm test; rm -rf /').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('npx playwright test && echo hacked').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('npx playwright test | cat').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('curl https://malicious.com').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('tests/../../etc/passwd.spec.ts').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('').valid).toBe(false);
+  });
+
+  test('Required Tests: executes required test in isolated worktree and marks repair PASSED', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-req-tests-pass',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      requiredValidationTests: ['tests/responsive.spec.ts'],
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `req-pass-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+    expect(report.finalState).toBe('PASSED');
+    expect(report.buildExecution?.passed).toBe(true);
+    expect(report.testExecution).toBeDefined();
+    expect(report.testExecution?.passed).toBe(true);
+    expect(report.testExecution?.command).toContain('tests/responsive.spec.ts');
+    expect(report.testExecution?.passedTests).toBeGreaterThan(0);
+    expect(report.cleanupStatus.cleaned).toBe(true);
+    expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+  });
+
+  test('Required Tests: failing required test fails the repair job and cleans up worktree', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-req-tests-fail',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      requiredValidationTests: ['tests/defect-injection.spec.ts'],
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `req-fail-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    // Spy on executeWorktreeTests to simulate test failure
+    const originalExec = service.executeWorktreeTests.bind(service);
+    service.executeWorktreeTests = async () => {
+      return {
+        passed: false,
+        error: "Required test 'npx playwright test tests/defect-injection.spec.ts' failed with exit code 1",
+        testExecution: {
+          command: 'npx playwright test tests/defect-injection.spec.ts',
+          exitCode: 1,
+          passed: false,
+          totalTests: 8,
+          passedTests: 7,
+          failedTests: 1,
+          durationMs: 1200,
+          stdoutSummary: '1 failed test',
+          stderrSummary: 'Assertion failed: expected 1 to be 2',
+        },
+      };
+    };
+
+    try {
+      const report = await service.executeRepairJob(contract);
+      expect(report.finalState).toBe('FAILED');
+      expect(report.failureReason).toContain('failed with exit code 1');
+      expect(report.testExecution?.passed).toBe(false);
+      expect(report.testExecution?.failedTests).toBe(1);
+      // Worktree must be cleaned up
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+      const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', jobId);
+      expect(fs.existsSync(worktreePath)).toBe(false);
+    } finally {
+      service.executeWorktreeTests = originalExec;
+    }
+  });
+
+  test('Required Tests: invalid or unauthorized test command rejects repair job before execution', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const maliciousProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-malicious',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      requiredValidationTests: ['cat /etc/passwd; echo injection'],
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `req-malicious-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: maliciousProposal.proposalId,
+      proposal: maliciousProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+    expect(report.finalState).toBe('FAILED');
+    expect(report.failureReason).toContain('forbidden shell metacharacters');
+    expect(report.cleanupStatus.cleaned).toBe(true);
+    expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+  });
+
+  test('Required Tests: executes with timeout and safely cleans up upon timeout', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    // Directly test executeWorktreeTests timeout behavior
+    const outcome = await service.executeWorktreeTests(
+      ['npm run build'],
+      repoRoot,
+      { timeoutMs: 1 } // impossibly short timeout to guarantee timeout trigger
+    );
+
+    expect(outcome.passed).toBe(false);
+    expect(outcome.error).toContain('timed out');
+    expect(outcome.testExecution?.exitCode).toBe(124);
+  });
 });
