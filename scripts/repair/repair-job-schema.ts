@@ -121,18 +121,34 @@ export interface RepairExecutionReport {
   failureReason?: string;
 }
 
+/**
+ * jobId becomes a folder name and part of a git branch name, so it may only contain
+ * letters, digits, "-" and "_". This blocks "..", slashes and backslashes (path traversal).
+ */
+export const SAFE_JOB_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
+
+/**
+ * A base commit ref is printable ASCII without spaces and must not start with "-"
+ * (otherwise git could read it as a command-line option).
+ */
+export const SAFE_COMMIT_REF_PATTERN = /^(?!-)[\x21-\x7E]{1,200}$/;
+
 export function validateRepairJobContract(data: any): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
   if (!data || typeof data !== 'object') {
     return { valid: false, errors: ['Contract must be an object'] };
   }
   if (!data.jobId || typeof data.jobId !== 'string') errors.push('Missing or invalid jobId');
+  else if (!SAFE_JOB_ID_PATTERN.test(data.jobId))
+    errors.push('jobId may only contain letters, digits, "-" and "_" (max 100 characters)');
   if (!data.proposalId || typeof data.proposalId !== 'string') errors.push('Missing or invalid proposalId');
   if (!data.proposal || typeof data.proposal !== 'object') errors.push('Missing proposal object');
   if (!Array.isArray(data.approvedSourcePaths) || data.approvedSourcePaths.length === 0)
     errors.push('approvedSourcePaths must be a non-empty array of strings');
   if (!data.approvedPatchId || typeof data.approvedPatchId !== 'string') errors.push('Missing approvedPatchId');
   if (!data.targetBaseCommit || typeof data.targetBaseCommit !== 'string') errors.push('Missing targetBaseCommit');
+  else if (!SAFE_COMMIT_REF_PATTERN.test(data.targetBaseCommit))
+    errors.push('targetBaseCommit must not start with "-" or contain spaces or control characters');
 
   return { valid: errors.length === 0, errors };
 }

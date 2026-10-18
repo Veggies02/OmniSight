@@ -33,14 +33,37 @@ export class WorktreeManager {
   }
 
   /**
+   * A commit ref must not look like a command-line option (leading "-"),
+   * and must be printable ASCII without spaces or control characters.
+   */
+  public isSafeCommitRef(commitRef: string): boolean {
+    return typeof commitRef === 'string' && /^(?!-)[\x21-\x7E]{1,200}$/.test(commitRef);
+  }
+
+  /**
+   * Resolves a commit ref to its full commit SHA. Throws if the ref is unsafe or not a commit.
+   */
+  public async resolveCommit(commitRef: string): Promise<string> {
+    if (!this.isSafeCommitRef(commitRef)) {
+      throw new Error(`Unsafe commit ref rejected: "${commitRef}"`);
+    }
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', `${commitRef}^{commit}`], {
+      cwd: this.repoRoot,
+    });
+    const sha = stdout.trim();
+    if (!sha) {
+      throw new Error(`Commit ref "${commitRef}" did not resolve to a commit.`);
+    }
+    return sha;
+  }
+
+  /**
    * Verifies that a commit or ref exists in the repository.
    */
   public async verifyCommitExists(commitRef: string): Promise<boolean> {
     try {
-      const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', commitRef], {
-        cwd: this.repoRoot,
-      });
-      return stdout.trim().length > 0;
+      const sha = await this.resolveCommit(commitRef);
+      return sha.length > 0;
     } catch {
       return false;
     }
@@ -70,8 +93,10 @@ export class WorktreeManager {
     }
 
     const commitToUse = baseCommit || (await this.getHeadCommit());
-    const commitValid = await this.verifyCommitExists(commitToUse);
-    if (!commitValid) {
+    let resolvedCommit: string;
+    try {
+      resolvedCommit = await this.resolveCommit(commitToUse);
+    } catch {
       throw new Error(`Base commit ref "${commitToUse}" could not be verified in git repository.`);
     }
 
@@ -80,7 +105,7 @@ export class WorktreeManager {
 
     // Create the isolated worktree with git worktree add -b <branch> <path> <commit>
     try {
-      await execFileAsync('git', ['worktree', 'add', '-b', branchName, worktreePath, commitToUse], {
+      await execFileAsync('git', ['worktree', 'add', '-b', branchName, worktreePath, resolvedCommit], {
         cwd: this.repoRoot,
       });
     } catch (err: any) {
@@ -90,7 +115,7 @@ export class WorktreeManager {
     return {
       worktreePath,
       branchName,
-      baseCommit: commitToUse,
+      baseCommit: resolvedCommit,
     };
   }
 
@@ -109,7 +134,8 @@ export class WorktreeManager {
     const notes: string[] = [];
 
     // Safety guard: ensure worktree path is strictly inside repair-worktrees directory
-    if (!worktreePath.startsWith(this.worktreeBaseDir) || worktreePath === this.worktreeBaseDir) {
+    const relativeToBase = path.relative(this.worktreeBaseDir, worktreePath);
+    if (!relativeToBase || relativeToBase.startsWith('..') || path.isAbsolute(relativeToBase)) {
       throw new Error(`Illegal worktree deletion path: ${worktreePath}`);
     }
 
@@ -117,6 +143,32 @@ export class WorktreeManager {
     if (!fs.existsSync(worktreePath)) {
       worktreeRemoved = true;
     } else {
+      // 0. Detach the node_modules link FIRST. `git worktree remove --force`
+      //    follows Windows junctions and would delete the REAL node_modules.
+      const linkedNodeModules = path.join(worktreePath, 'node_modules');
+      let detachProblem: string | undefined;
+      try {
+        if (fs.lstatSync(linkedNodeModules).isSymbolicLink()) {
+          fs.unlinkSync(linkedNodeModules); // removes only the link, never its target
+        }
+      } catch (linkErr: any) {
+        if (linkErr?.code !== 'ENOENT') {
+          detachProblem = `could not detach node_modules link (${linkErr?.message || String(linkErr)})`;
+        }
+      }
+      if (!detachProblem && fs.existsSync(linkedNodeModules)) {
+        // Whatever remains must live inside the worktree itself
+        const wt = fs.realpathSync.native(worktreePath);
+        const real = fs.realpathSync.native(linkedNodeModules);
+        if (!real.toLowerCase().startsWith((wt + path.sep).toLowerCase())) {
+          detachProblem = `node_modules resolves outside the worktree (${real})`;
+        }
+      }
+      if (detachProblem) {
+        notes.push(`Refused cleanup: ${detachProblem}`);
+        return { worktreeRemoved: false, branchRemoved: false, notes: notes.join('; ') };
+      }
+
       // 1. Remove the worktree via git worktree remove
       try {
         await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], {
@@ -128,16 +180,9 @@ export class WorktreeManager {
         // If git worktree command failed (e.g. dir manually modified, locked or unindexed), attempt filesystem removal
         if (fs.existsSync(worktreePath)) {
           try {
-            // First unlink node_modules junction/symlink if present to prevent recursive locking issues on Windows
-            const nodeModulesPath = path.join(worktreePath, 'node_modules');
-            if (fs.existsSync(nodeModulesPath)) {
-              try {
-                fs.rmSync(nodeModulesPath, { recursive: true, force: true });
-              } catch {
-                // Ignore if cannot remove junction individually
-              }
-            }
-            fs.rmSync(worktreePath, { recursive: true, force: true });
+            // Any node_modules link was already detached above, so this recursive delete
+            // can only ever touch files inside the worktree itself.
+            fs.rmSync(worktreePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
             worktreeRemoved = !fs.existsSync(worktreePath);
           } catch (rmErr: any) {
             notes.push(`fs.rmSync failure: ${rmErr?.message || String(rmErr)}`);

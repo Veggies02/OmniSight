@@ -21,14 +21,102 @@ import {
 const execFileAsync = promisify(execFile);
 
 /**
- * Resolves the appropriate npm executable command and arguments for the current platform.
- * Avoids invoking shell interpreters directly to eliminate shell injection risks.
+ * runCommand only launches these executables. This limits what a bad command string
+ * can start; it is not a sandbox (for example `node -e` can still run any JavaScript),
+ * so command strings must always come from trusted constants, never from user or AI input.
  */
-export function resolveNpmCommand(args: string[] = ['run', 'build']): { executable: string; args: string[] } {
-  const isWindows = process.platform === 'win32';
-  const executable = isWindows ? 'npm.cmd' : 'npm';
-  return { executable, args };
+const ALLOWED_COMMAND_EXECUTABLES = new Set(['npm', 'npx', 'node']);
+
+const NPM_CLI_FILE_NAME = 'npm-cli.js';
+const NPX_CLI_FILE_NAME = 'npx-cli.js';
+
+/**
+ * True only if the candidate is an absolute path to an existing file with the expected name.
+ * Under `npx`, npm_execpath may point at npx-cli.js, which must never be used as npm.
+ */
+function isExistingCliFile(candidate: string | undefined, expectedName: string): candidate is string {
+  if (!candidate) return false;
+  if (!path.isAbsolute(candidate)) return false;
+  if (path.basename(candidate).toLowerCase() !== expectedName) return false;
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
 }
+
+/**
+ * Finds npm-cli.js on Windows. Lookup order:
+ *   1. OMNISIGHT_NPM_CLI (explicit override; must be valid or we throw)
+ *   2. npm_execpath, only if it is an existing npm-cli.js
+ *   3. The npm that ships next to node.exe
+ * Throws a descriptive error if none of them exist.
+ */
+function findWindowsNpmCli(env: NodeJS.ProcessEnv): string {
+  const override = env.OMNISIGHT_NPM_CLI?.trim();
+  if (override) {
+    if (!isExistingCliFile(override, NPM_CLI_FILE_NAME)) {
+      throw new Error(
+        `OMNISIGHT_NPM_CLI is set but is not an existing absolute path to ${NPM_CLI_FILE_NAME}: ${override}`
+      );
+    }
+    return override;
+  }
+
+  const fromNpmExecPath = env.npm_execpath;
+  if (isExistingCliFile(fromNpmExecPath, NPM_CLI_FILE_NAME)) {
+    return fromNpmExecPath;
+  }
+
+  const defaultPath = path.join(
+    path.dirname(process.execPath),
+    'node_modules',
+    'npm',
+    'bin',
+    NPM_CLI_FILE_NAME
+  );
+  if (isExistingCliFile(defaultPath, NPM_CLI_FILE_NAME)) {
+    return defaultPath;
+  }
+
+  throw new Error(
+    `Could not find ${NPM_CLI_FILE_NAME}. Tried npm_execpath (${fromNpmExecPath ?? 'not set'}) ` +
+      `and ${defaultPath}. Set OMNISIGHT_NPM_CLI to the full path of ${NPM_CLI_FILE_NAME}.`
+  );
+}
+
+/**
+ * Resolves npm without invoking a shell on Windows.
+ * Runs npm's JavaScript CLI directly with Node's own executable.
+ */
+export function resolveNpmCommand(
+  args: string[] = ['run', 'build'],
+  env: NodeJS.ProcessEnv = process.env
+): { executable: string; args: string[] } {
+  if (process.platform !== 'win32') {
+    return { executable: 'npm', args };
+  }
+  return { executable: process.execPath, args: [findWindowsNpmCli(env), ...args] };
+}
+
+/**
+ * Resolves npx without a shell on Windows. npx.cmd cannot be launched without a shell
+ * on current Node versions, so we run npx-cli.js (it sits next to npm-cli.js) with node.exe.
+ */
+export function resolveNpxCommand(
+  args: string[] = [],
+  env: NodeJS.ProcessEnv = process.env
+): { executable: string; args: string[] } {
+  if (process.platform !== 'win32') {
+    return { executable: 'npx', args };
+  }
+  const npxCli = path.join(path.dirname(findWindowsNpmCli(env)), NPX_CLI_FILE_NAME);
+  if (!isExistingCliFile(npxCli, NPX_CLI_FILE_NAME)) {
+    throw new Error(`Could not find ${NPX_CLI_FILE_NAME} at ${npxCli}.`);
+  }
+  return { executable: process.execPath, args: [npxCli, ...args] };
+}
+
 
 export class RepairExecutionService {
   private repoRoot: string;
@@ -44,27 +132,50 @@ export class RepairExecutionService {
   /**
    * Helper to execute commands safely within an isolated directory across platforms.
    * Uses explicit executable and arguments array without shell execution.
+   * Resolution errors (for example a missing npm CLI) are returned as a failed
+   * result instead of being thrown.
    */
   public async runCommand(
     commandStr: string,
-    cwd: string
+    cwd: string,
+    options: { timeoutMs?: number } = {}
   ): Promise<{ exitCode: number; stdout: string; stderr: string; durationMs: number }> {
     const startTime = Date.now();
-    const parts = commandStr.trim().split(/\s+/);
+    const parts = commandStr.trim().split(/\s+/).filter(Boolean);
+
+    if (parts.length === 0) {
+      return { exitCode: 1, stdout: '', stderr: 'Empty command', durationMs: 0 };
+    }
+
     let cmd = parts[0];
     let args = parts.slice(1);
 
-    // Platform-specific resolution for npm / npx
-    if (cmd === 'npm') {
-      const resolved = resolveNpmCommand(args);
-      cmd = resolved.executable;
-      args = resolved.args;
-    } else if (cmd === 'npx' && process.platform === 'win32') {
-      cmd = 'npx.cmd';
+    if (!ALLOWED_COMMAND_EXECUTABLES.has(cmd)) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `Command not allowed: "${cmd}". Allowed executables: ${Array.from(ALLOWED_COMMAND_EXECUTABLES).join(', ')}`,
+        durationMs: 0,
+      };
     }
 
     try {
-      const { stdout, stderr } = await execFileAsync(cmd, args, { cwd });
+      // Platform-specific resolution for npm / npx (never uses a shell)
+      if (cmd === 'npm') {
+        const resolved = resolveNpmCommand(args);
+        cmd = resolved.executable;
+        args = resolved.args;
+      } else if (cmd === 'npx') {
+        const resolved = resolveNpxCommand(args);
+        cmd = resolved.executable;
+        args = resolved.args;
+      }
+
+      const { stdout, stderr } = await execFileAsync(cmd, args, {
+        cwd,
+        timeout: options.timeoutMs ?? 10 * 60 * 1000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
       return {
         exitCode: 0,
         stdout,
@@ -72,13 +183,37 @@ export class RepairExecutionService {
         durationMs: Date.now() - startTime,
       };
     } catch (err: any) {
+      const timedOut = err?.killed === true;
       return {
         exitCode: typeof err?.code === 'number' ? err.code : 1,
         stdout: err?.stdout || '',
-        stderr: err?.stderr || err?.message || String(err),
+        stderr:
+          (timedOut ? 'Command timed out and was killed. ' : '') +
+          (err?.stderr || err?.message || String(err)),
         durationMs: Date.now() - startTime,
       };
     }
+  }
+
+  /**
+   * Installs dependencies inside an isolated worktree, giving it its own node_modules.
+   * --ignore-scripts: dependency install scripts never run (nothing in this project needs them).
+   * If the base commit does not track package-lock.json, the repo's lockfile is copied in
+   * so that `npm ci` stays reproducible.
+   */
+  private async installWorktreeDependencies(
+    worktreePath: string
+  ): Promise<{ exitCode: number; stdout: string; stderr: string; durationMs: number }> {
+    const lockInWorktree = path.join(worktreePath, 'package-lock.json');
+    const lockInRepo = path.join(this.repoRoot, 'package-lock.json');
+    if (!fs.existsSync(lockInWorktree) && fs.existsSync(lockInRepo)) {
+      fs.copyFileSync(lockInRepo, lockInWorktree);
+    }
+    return this.runCommand(
+      'npm ci --ignore-scripts --no-audit --no-fund --prefer-offline',
+      worktreePath,
+      { timeoutMs: 5 * 60 * 1000 }
+    );
   }
 
   /**
@@ -264,15 +399,13 @@ export class RepairExecutionService {
       // 5. Run Automated Tests inside Isolated Worktree
       currentState = this.transitionState(currentState, 'RUNNING_TESTS');
 
-      // Link node_modules so build & tests can run in the worktree without a slow npm install
-      const worktreeNodeModules = path.join(isolatedWorktreePath, 'node_modules');
-      const mainNodeModules = path.join(this.repoRoot, 'node_modules');
-      if (!fs.existsSync(worktreeNodeModules) && fs.existsSync(mainNodeModules)) {
-        try {
-          fs.symlinkSync(mainNodeModules, worktreeNodeModules, 'junction');
-        } catch {
-          // Fallback or ignore if cannot link
-        }
+      // Install dependencies INSIDE the worktree. The real node_modules is no longer linked
+      // into it, so nothing running in the worktree can touch the real packages.
+      const installRes = await this.installWorktreeDependencies(isolatedWorktreePath);
+      if (installRes.exitCode !== 0) {
+        throw new Error(
+          `Dependency install failed in isolated worktree with code ${installRes.exitCode}: ${installRes.stderr.slice(-500)}`
+        );
       }
 
       // Run build check (cross-platform safe)

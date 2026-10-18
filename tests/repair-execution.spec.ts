@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
-import { RepairExecutionService, resolveNpmCommand } from '../scripts/repair/repair-execution-service';
-import { RepairJobContract } from '../scripts/repair/repair-job-schema';
+import { RepairExecutionService, resolveNpmCommand, resolveNpxCommand } from '../scripts/repair/repair-execution-service';
+import { RepairJobContract, validateRepairJobContract } from '../scripts/repair/repair-job-schema';
 import { WorktreeManager } from '../scripts/repair/worktree-manager';
 import {
   getRegisteredPatch,
@@ -16,6 +16,9 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
   const repoRoot = process.cwd();
   const indexCssPath = path.resolve(repoRoot, 'src/index.css');
   const currentCssHash = computeFileHash(indexCssPath);
+
+  // Repair jobs now run `npm ci` inside each worktree, and several run in parallel.
+  test.describe.configure({ timeout: 120_000 });
 
   test('Registered Patches Registry defines all 4 seeded defect patches with strict allowlists', async () => {
     expect(Object.keys(REGISTERED_PATCHES).length).toBe(4);
@@ -317,20 +320,60 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     expect(result.updatedContent).toBe(missingTargetContent);
   });
 
-  test('Cross-Platform Command Execution: resolves npm.cmd on win32 and npm on posix', async () => {
-    const originalPlatform = process.platform;
-    try {
-      // Test current platform resolution
-      const current = resolveNpmCommand(['run', 'build']);
+  test('Cross-Platform Command Execution: resolves npm safely on win32 and posix', async () => {
+    const current = resolveNpmCommand(['run', 'build']);
+
+    if (process.platform === 'win32') {
+      expect(current.executable).toBe(process.execPath);
+      expect(current.args[0]).toMatch(/npm-cli\.js$/);
+      expect(fs.existsSync(current.args[0])).toBe(true);
+      expect(current.args.slice(1)).toEqual(['run', 'build']);
+    } else {
+      expect(current.executable).toBe('npm');
       expect(current.args).toEqual(['run', 'build']);
-      if (process.platform === 'win32') {
-        expect(current.executable).toBe('npm.cmd');
-      } else {
-        expect(current.executable).toBe('npm');
-      }
-    } finally {
-      // Safety reset
     }
+  });
+
+  test('Cross-Platform Command Execution: OMNISIGHT_NPM_CLI override is validated on win32', async () => {
+    test.skip(process.platform !== 'win32', 'Windows-only behavior');
+
+    const real = resolveNpmCommand(['--version']).args[0];
+    expect(fs.existsSync(real)).toBe(true);
+
+    const overridden = resolveNpmCommand(['--version'], { OMNISIGHT_NPM_CLI: real });
+    expect(overridden.args[0]).toBe(real);
+
+    expect(() =>
+      resolveNpmCommand(['--version'], { OMNISIGHT_NPM_CLI: 'C:\\does-not-exist\\npm-cli.js' })
+    ).toThrow(/OMNISIGHT_NPM_CLI/);
+  });
+
+  test('Cross-Platform Command Execution: ignores npm_execpath unless it is a real npm-cli.js', async () => {
+    test.skip(process.platform !== 'win32', 'Windows-only behavior');
+
+    const result = resolveNpmCommand(['run', 'build'], {
+      npm_execpath: 'C:\\somewhere\\npx-cli.js',
+    });
+    expect(result.args[0]).not.toContain('somewhere');
+    expect(result.args[0]).toMatch(/npm-cli\.js$/);
+    expect(fs.existsSync(result.args[0])).toBe(true);
+  });
+
+  test('Cross-Platform Command Execution: npx runs without a shell and without npx.cmd', async () => {
+    const resolved = resolveNpxCommand(['--version']);
+
+    if (process.platform === 'win32') {
+      expect(resolved.executable).toBe(process.execPath);
+      expect(resolved.args[0]).toMatch(/npx-cli\.js$/);
+      expect(fs.existsSync(resolved.args[0])).toBe(true);
+    } else {
+      expect(resolved.executable).toBe('npx');
+    }
+
+    const service = new RepairExecutionService(repoRoot);
+    const res = await service.runCommand('npx --version', repoRoot);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
   });
 
   test('Cross-Platform Command Execution: runCommand captures exit codes, stdout, and stderr reliably', async () => {
@@ -343,6 +386,129 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     // Failing command
     const failRes = await service.runCommand('node -e process.exit(42)', repoRoot);
     expect(failRes.exitCode).toBe(42);
+  });
+
+  test('Security: runCommand only runs allowlisted executables', async () => {
+    const service = new RepairExecutionService(repoRoot);
+
+    const denied = await service.runCommand('git status', repoRoot);
+    expect(denied.exitCode).toBe(1);
+    expect(denied.stderr).toContain('not allowed');
+
+    const empty = await service.runCommand('   ', repoRoot);
+    expect(empty.exitCode).toBe(1);
+  });
+
+  test('Security: contract validation rejects unsafe jobId and base commit values', async () => {
+    const base: any = {
+      jobId: 'safe-job_1',
+      proposalId: 'prop-x',
+      proposal: {},
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetBaseCommit: 'HEAD',
+    };
+    expect(validateRepairJobContract(base).valid).toBe(true);
+
+    for (const badId of ['../escape', 'a/b', 'a\\b', 'a b', 'a.b', '']) {
+      expect(validateRepairJobContract({ ...base, jobId: badId }).valid).toBe(false);
+    }
+    for (const badRef of ['--all', '-x', 'HEAD main', 'a\nb']) {
+      expect(validateRepairJobContract({ ...base, targetBaseCommit: badRef }).valid).toBe(false);
+    }
+  });
+
+  test('Security: executeRepairJob refuses a path-traversal jobId before touching the disk', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const marker = `escape-canary-${Date.now()}`;
+    const contract: any = {
+      jobId: `../../${marker}`,
+      proposalId: 'prop-x',
+      proposal: {},
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+    };
+
+    await expect(service.executeRepairJob(contract)).rejects.toThrow(/Invalid repair job contract/);
+    // Nothing may have been created outside artifacts/repair-executions
+    expect(fs.existsSync(path.join(repoRoot, marker))).toBe(false);
+  });
+
+  test('Security: WorktreeManager rejects option-like commit refs', async () => {
+    const manager = new WorktreeManager(repoRoot);
+
+    expect(await manager.verifyCommitExists('HEAD')).toBe(true);
+    expect(await manager.verifyCommitExists('--all')).toBe(false);
+    expect(await manager.verifyCommitExists('-x')).toBe(false);
+    await expect(manager.createWorktree(`opt-ref-${Date.now()}`, '--all')).rejects.toThrow(
+      /could not be verified/
+    );
+  });
+
+  test('Isolation: each worktree installs its own node_modules (no link to the real one)', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const proposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-isolation',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const contract: RepairJobContract = {
+      jobId: `isolation-job-${Date.now()}`,
+      proposalId: proposal.proposalId,
+      proposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    // Runs after the build, so we can inspect the worktree while it still exists.
+    let observed: { exists: boolean; isLink: boolean } | undefined;
+    const originalEvaluate = (service as any).evaluateVisualRepair.bind(service);
+    (service as any).evaluateVisualRepair = async (_patch: unknown, worktreePath: string) => {
+      const nm = path.join(worktreePath, 'node_modules');
+      observed = { exists: fs.existsSync(nm), isLink: fs.lstatSync(nm).isSymbolicLink() };
+      return {
+        passed: false,
+        defectCategory: 'product-image-distortion',
+        route: '/products',
+        viewport: { width: 1280, height: 800 },
+        assertionSummary: 'Stopped after isolation check',
+        unrelatedRegressionsDetected: false,
+      };
+    };
+
+    try {
+      const report = await service.executeRepairJob(contract);
+      expect(report.failureReason).toContain('Stopped after isolation check');
+      expect(report.buildExecution?.passed).toBe(true);
+      expect(observed).toEqual({ exists: true, isLink: false });
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+
+      // The real node_modules must be completely untouched
+      expect(
+        fs.existsSync(path.join(repoRoot, 'node_modules', '@playwright', 'test', 'package.json'))
+      ).toBe(true);
+    } finally {
+      (service as any).evaluateVisualRepair = originalEvaluate;
+    }
   });
 
   test('Worktree Lifecycle: cleans up worktree on unexpected failure in isolated worktree', async () => {
@@ -417,6 +583,45 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     const result = await worktreeManager.cleanupWorktree(nonExistentJobId);
     expect(result.worktreeRemoved).toBe(true);
     expect(result.branchRemoved).toBe(false);
+  });
+
+  test('Worktree Manager: cleanup never deletes the real node_modules behind a junction', async () => {
+    // Hermetic: uses a throwaway git repo in the OS temp folder, never the real project's node_modules.
+    const os = await import('node:os');
+    const { execFileSync } = await import('node:child_process');
+
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'omnisight-junction-'));
+    try {
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: sandbox, stdio: 'pipe' });
+      git('init');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      fs.writeFileSync(path.join(sandbox, 'README.md'), 'sandbox\n');
+      git('add', '.');
+      git('-c', 'commit.gpgsign=false', 'commit', '-m', 'init');
+
+      // A fake "real node_modules" containing a sentinel file that must never be lost
+      const fakeNodeModules = path.join(sandbox, 'node_modules');
+      fs.mkdirSync(path.join(fakeNodeModules, '@playwright', 'test'), { recursive: true });
+      const sentinel = path.join(fakeNodeModules, '@playwright', 'test', 'package.json');
+      fs.writeFileSync(sentinel, '{}');
+
+      const manager = new WorktreeManager(sandbox);
+      const jobId = `junction-guard-${Date.now()}`;
+      const info = await manager.createWorktree(jobId);
+
+      // Link it into the worktree the same way RepairExecutionService does
+      fs.symlinkSync(fakeNodeModules, path.join(info.worktreePath, 'node_modules'), 'junction');
+
+      const result = await manager.cleanupWorktree(jobId);
+
+      expect(result.worktreeRemoved).toBe(true);
+      expect(fs.existsSync(info.worktreePath)).toBe(false);
+      // The crucial assertion: the packages behind the junction survived
+      expect(fs.existsSync(sentinel)).toBe(true);
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 3 });
+    }
   });
 
   test('Real Browser Visual Verification: captures real post-repair screenshot, DOM evidence, and computed metrics', async () => {
