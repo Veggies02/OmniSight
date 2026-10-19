@@ -97,7 +97,7 @@ export class RepairProposalService {
         confidence: "low",
         confidenceScore: 0,
         potentialRisks: ["Attempting automated repairs on inconclusive diagnosis."],
-        requiredValidationTests: ["tests/defect-injection.spec.ts"],
+        requiredValidationTests: ["tests/responsive.spec.ts"],
         humanReviewStatus: "pending_review",
         status: "inconclusive",
         createdAt,
@@ -142,7 +142,7 @@ export class RepairProposalService {
         confidence: "low",
         confidenceScore: primaryDefect.confidence * 0.5,
         potentialRisks: ["Unable to verify underlying source file."],
-        requiredValidationTests: ["tests/defect-injection.spec.ts"],
+        requiredValidationTests: ["tests/responsive.spec.ts"],
         humanReviewStatus: "pending_review",
         status: localization.status === "unsupported" ? "unsupported_category" : "localization_failed",
         createdAt,
@@ -346,12 +346,9 @@ export class RepairProposalService {
   }
 
   private determineRequiredTests(category: DefectCategory): string[] {
-    const base = ["tests/defect-injection.spec.ts", "tests/responsive.spec.ts"];
+    const base = ["tests/responsive.spec.ts"];
     if (category === "image_distortion" || category === "layout_breakage" || category === "low_contrast") {
       base.push("tests/shopping-cart.spec.ts");
-    }
-    if (category === "responsive_overflow") {
-      base.push("tests/responsive.spec.ts");
     }
     return Array.from(new Set(base));
   }
