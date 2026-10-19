@@ -149,6 +149,12 @@ export function loadAndValidateProposal(
     // Support proposal run manifest wrapper
     const list = Object.values(rawContent.results);
     proposal = list.find((p: any) => p.humanReviewStatus === 'approved') || list[0];
+  } else if (rawContent && typeof rawContent === 'object' && !rawContent.schemaVersion) {
+    // Support scenario-keyed proposal map (e.g. { "product-image-distortion": { ... } })
+    const list = Object.values(rawContent);
+    if (list.length > 0 && typeof list[0] === 'object' && (list[0] as any)?.schemaVersion) {
+      proposal = list.find((p: any) => (p as any).humanReviewStatus === 'approved') || list[0];
+    }
   }
 
   if (!proposal || typeof proposal !== 'object') {

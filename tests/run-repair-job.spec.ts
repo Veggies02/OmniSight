@@ -151,10 +151,77 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
       }
     });
 
-    test('rejects invalid proposal schema', () => {
-      const tempPath = path.resolve(repoRoot, 'artifacts/temp_invalid_schema.json');
+    test('loads a single proposal object successfully', () => {
+      const prop = makeProposal({ humanReviewStatus: 'approved' });
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_single_prop.json');
       fs.mkdirSync(path.dirname(tempPath), { recursive: true });
-      fs.writeFileSync(tempPath, JSON.stringify({ schemaVersion: '0.9', invalid: true }));
+      fs.writeFileSync(tempPath, JSON.stringify(prop));
+      try {
+        const { proposal } = loadAndValidateProposal(tempPath, repoRoot);
+        expect(proposal.proposalId).toBe(prop.proposalId);
+        expect(proposal.humanReviewStatus).toBe('approved');
+      } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
+
+    test('loads a scenario-keyed proposal dictionary successfully', () => {
+      const prop = makeProposal({ humanReviewStatus: 'approved' });
+      const dictionary = {
+        'product-image-distortion': prop,
+      };
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_dict_prop.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify(dictionary));
+      try {
+        const { proposal } = loadAndValidateProposal(tempPath, repoRoot);
+        expect(proposal.proposalId).toBe(prop.proposalId);
+        expect(proposal.scenarioId).toBe('product-image-distortion');
+        expect(proposal.humanReviewStatus).toBe('approved');
+      } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
+
+    test('loads a proposal array and selects approved proposal', () => {
+      const pendingProp = makeProposal({ proposalId: 'prop_pending_01', humanReviewStatus: 'pending_review' });
+      const approvedProp = makeProposal({ proposalId: 'prop_approved_02', humanReviewStatus: 'approved' });
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_array_prop.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify([pendingProp, approvedProp]));
+      try {
+        const { proposal } = loadAndValidateProposal(tempPath, repoRoot);
+        expect(proposal.proposalId).toBe('prop_approved_02');
+        expect(proposal.humanReviewStatus).toBe('approved');
+      } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
+
+    test('loads from proposal run manifest wrapper object', () => {
+      const prop = makeProposal({ humanReviewStatus: 'approved' });
+      const manifestWrapper = {
+        runId: 'run-test-manifest',
+        results: {
+          'product-image-distortion': prop,
+        },
+      };
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_manifest_prop.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify(manifestWrapper));
+      try {
+        const { proposal } = loadAndValidateProposal(tempPath, repoRoot);
+        expect(proposal.proposalId).toBe(prop.proposalId);
+        expect(proposal.humanReviewStatus).toBe('approved');
+      } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
+
+    test('rejects empty object or dictionary with invalid proposal values', () => {
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_empty_dict.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify({}));
       try {
         expect(() => loadAndValidateProposal(tempPath, repoRoot)).toThrow(/Invalid proposal schema/);
       } finally {
