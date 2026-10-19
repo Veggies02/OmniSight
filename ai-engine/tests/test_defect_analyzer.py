@@ -394,3 +394,62 @@ class TestFewShotExamples:
         for example in FEW_SHOT_EXAMPLES:
             parsed = parse_findings(example["output"], "job-x", "shot.png")
             assert len(parsed) == len(example["output"]["findings"])
+
+# =====================================================================
+# Orchestrator hardening tests
+# =====================================================================
+
+class TestOrchestratorHardening:
+    def test_json_array_is_not_accepted_as_object(self):
+        with pytest.raises(ValueError, match="Could not extract"):
+            extract_json_from_response("[1, 2, 3]")
+
+    def test_non_object_response_returns_inconclusive(self, evidence):
+        model = MockVisionModel(canned_response="[1, 2, 3]")
+        result = analyze_evidence(evidence, model)
+        assert len(result.findings) == 1
+        assert result.findings[0].requires_human_review is True
+
+    def test_string_false_has_defect_is_false(self, evidence):
+        model = MockVisionModel(canned_response='{"has_defect": "false", "findings": []}')
+        result = analyze_evidence(evidence, model)
+        assert result.has_defect is False
+        assert result.findings == []
+
+    def test_defect_claimed_without_findings_is_flagged(self, evidence):
+        model = MockVisionModel(canned_response='{"has_defect": "true", "findings": []}')
+        result = analyze_evidence(evidence, model)
+        assert result.has_defect is True
+        assert len(result.findings) == 1
+        assert result.findings[0].requires_human_review is True
+        assert result.findings[0].confidence == 0.3
+
+    def test_none_category_finding_is_not_a_defect(self, evidence):
+        canned = json.dumps({
+            "has_defect": False,
+            "findings": [{
+                "defect_category": "none",
+                "description": "Looks fine",
+                "confidence": 1.0,
+            }],
+        })
+        model = MockVisionModel(canned_response=canned)
+        result = analyze_evidence(evidence, model)
+        assert result.has_defect is False
+        assert result.findings == []
+
+    def test_ajay_ids_normalize_via_shared_map(self):
+        for key, value in AJAY_CATEGORY_MAP.items():
+            assert normalize_category(key) == value
+
+    def test_string_false_does_not_force_review(self):
+        data = {
+            "findings": [{
+                "defect_category": "overlapping_text",
+                "description": "x",
+                "confidence": 0.9,
+                "requires_human_review": "false",
+            }]
+        }
+        findings = parse_findings(data, "job-1", "screenshot.png")
+        assert findings[0].requires_human_review is False

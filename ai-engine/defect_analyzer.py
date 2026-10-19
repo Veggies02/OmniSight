@@ -16,7 +16,7 @@ import re
 import time
 from typing import List, Optional
 
-from prompts import build_analysis_prompt, DEFECT_TYPES
+from prompts import build_analysis_prompt, AJAY_CATEGORY_MAP
 from schemas import (
     AIFinding,
     AnalysisResponse,
@@ -33,6 +33,13 @@ from vlm_client import VisionModel, VLMError
 ALLOWED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 VALID_CATEGORIES = set(e.value for e in DefectCategory)
+
+# Ajay's seeded defect IDs, keyed the way normalize_category() cleans input
+# (hyphens become underscores). Built from the shared map in prompts.py so
+# there is a single source of truth.
+_AJAY_ID_MAP = {
+    key.replace("-", "_"): value for key, value in AJAY_CATEGORY_MAP.items()
+}
 
 
 # =====================================================================
@@ -71,6 +78,31 @@ def validate_screenshot(path: str) -> None:
 # Response Parsing
 # =====================================================================
 
+def _as_object(text: str) -> Optional[dict]:
+    """Parse text as JSON and return it only if it is a JSON object."""
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _to_bool(value) -> bool:
+    """Interpret a model-supplied value as a boolean.
+
+    Models sometimes send "false" or "true" as strings. In Python a
+    non-empty string is always truthy, so plain truthiness would turn
+    "false" into True.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
 def extract_json_from_response(raw: str) -> dict:
     """Extract a JSON object from raw model output.
 
@@ -78,6 +110,9 @@ def extract_json_from_response(raw: str) -> dict:
     - Markdown fenced code blocks (```json ... ```)
     - Leading/trailing whitespace or explanation text
     - Minor formatting issues
+
+    Only JSON objects are accepted. A bare array, string or number is
+    treated as unparseable.
 
     Raises:
         ValueError: If no valid JSON object can be extracted.
@@ -93,18 +128,16 @@ def extract_json_from_response(raw: str) -> dict:
         text = fence_match.group(1).strip()
 
     # Try direct parse first
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    parsed = _as_object(text)
+    if parsed is not None:
+        return parsed
 
     # Try to find a JSON object anywhere in the text
     brace_match = re.search(r'\{.*\}', text, re.DOTALL)
     if brace_match:
-        try:
-            return json.loads(brace_match.group())
-        except json.JSONDecodeError:
-            pass
+        parsed = _as_object(brace_match.group())
+        if parsed is not None:
+            return parsed
 
     raise ValueError(f"Could not extract valid JSON from model response: {text[:200]}")
 
@@ -120,15 +153,8 @@ def normalize_category(raw_category: str) -> str:
     if cleaned in VALID_CATEGORIES:
         return cleaned
 
-    # Handle Ajay's seeded defect IDs (with underscores after cleaning)
-    ajay_map = {
-        "mobile_nav_overflow": "modal_overflow",
-        "product_card_layout_break": "incorrect_spacing",
-        "product_image_distortion": "other",
-        "low_contrast_text": "other",
-    }
-    if cleaned in ajay_map:
-        return ajay_map[cleaned]
+    if cleaned in _AJAY_ID_MAP:
+        return _AJAY_ID_MAP[cleaned]
 
     return "other"
 
@@ -154,7 +180,7 @@ def parse_findings(
             continue
 
         category_str = normalize_category(
-            item.get("defect_category", "other")
+            str(item.get("defect_category", "other"))
         )
 
         # Clamp confidence to valid range
@@ -164,7 +190,7 @@ def parse_findings(
         except (TypeError, ValueError):
             confidence = 0.5
 
-        requires_review = item.get("requires_human_review", False)
+        requires_review = _to_bool(item.get("requires_human_review", False))
         if confidence < 0.5:
             requires_review = True
 
@@ -245,9 +271,9 @@ def analyze_evidence(
     )
 
     # Step 3: Call VLM
-    start_time = time.time()
+    start_time = time.perf_counter()
     raw_response = model.analyze(evidence.screenshot_path, prompt)
-    latency_ms = (time.time() - start_time) * 1000
+    latency_ms = (time.perf_counter() - start_time) * 1000
 
     # Step 4: Parse response
     try:
@@ -273,17 +299,17 @@ def analyze_evidence(
         )
 
     # Step 5: Build findings
-    has_defect = parsed.get("has_defect", False)
-    findings = parse_findings(parsed, evidence.job_id, evidence.screenshot_path)
+    has_defect = _to_bool(parsed.get("has_defect", False))
+    all_findings = parse_findings(parsed, evidence.job_id, evidence.screenshot_path)
 
-    # Reconcile: if findings exist but has_defect is False, trust the findings
-    if findings and not has_defect:
-        non_none = [f for f in findings if f.defect_category != DefectCategory.NONE]
-        if non_none:
-            has_defect = True
+    # A finding with category "none" means "nothing wrong", so it is not a defect
+    findings = [f for f in all_findings if f.defect_category != DefectCategory.NONE]
 
-    # If has_defect is True but no findings were parsed, flag for review
-    if has_defect and not findings:
+    if findings:
+        # Trust real findings even if the model said has_defect is false
+        has_defect = True
+    elif has_defect:
+        # Model claimed a defect but gave nothing usable: flag for review
         findings.append(
             AIFinding(
                 job_id=evidence.job_id,
