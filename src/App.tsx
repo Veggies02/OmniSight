@@ -11,6 +11,7 @@ import { DashboardLayout } from "./components/dashboard/DashboardLayout";
 import { DashboardOverview } from "./pages/dashboard/DashboardOverview";
 import { DashboardJobs } from "./pages/dashboard/DashboardJobs";
 import { DashboardJobDetails } from "./pages/dashboard/DashboardJobDetails";
+import { DashboardDefects } from "./pages/dashboard/DashboardDefects";
 import { DashboardPlaceholder } from "./pages/dashboard/DashboardPlaceholder";
 
 function StorefrontLayout() {
@@ -34,16 +35,7 @@ export function App() {
           <Route index element={<DashboardOverview />} />
           <Route path="jobs" element={<DashboardJobs />} />
           <Route path="jobs/:id" element={<DashboardJobDetails />} />
-          <Route
-            path="defects"
-            element={
-              <DashboardPlaceholder
-                title="Defect Findings"
-                description="Inspect visual regressions, VLM-annotated bounding box overlays, and defect severity triage."
-                badge="Planned for Days 11–14"
-              />
-            }
-          />
+          <Route path="defects" element={<DashboardDefects />} />
           <Route
             path="pull-requests"
             element={

@@ -1893,15 +1893,18 @@
   border-left-color: #dc2626;
 }
 
-.defect-finding-card.severity-major {
+.defect-finding-card.severity-major,
+.defect-finding-card.severity-high {
   border-left-color: #ea580c;
 }
 
-.defect-finding-card.severity-minor {
+.defect-finding-card.severity-minor,
+.defect-finding-card.severity-medium {
   border-left-color: #eab308;
 }
 
-.defect-finding-card.severity-cosmetic {
+.defect-finding-card.severity-cosmetic,
+.defect-finding-card.severity-low {
   border-left-color: #64748b;
 }
 
@@ -1955,19 +1958,22 @@
   border: 1px solid #fecaca;
 }
 
-.severity-major {
+.severity-major,
+.severity-high {
   background-color: #fff7ed;
   color: #c2410c;
   border: 1px solid #fed7aa;
 }
 
-.severity-minor {
+.severity-minor,
+.severity-medium {
   background-color: #fefce8;
   color: #a16207;
   border: 1px solid #fef08a;
 }
 
-.severity-cosmetic {
+.severity-cosmetic,
+.severity-low {
   background-color: #f8fafc;
   color: #475569;
   border: 1px solid #e2e8f0;

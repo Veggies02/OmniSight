@@ -5,12 +5,12 @@ import {
   StatCard,
   StatusBadge,
   EmptyState,
+  DefectFindingsReview,
   type BadgeStatus,
 } from "../../components/dashboard";
 import {
   getInspectionJobById,
   type ValidationStatus,
-  type DefectSeverity,
 } from "../../data/mockJobs";
 import heroImg from "../../assets/hero.png";
 
@@ -82,20 +82,6 @@ export function DashboardJobDetails() {
         size="md"
       />
     );
-  };
-
-  const getSeverityBadgeClass = (severity: DefectSeverity) => {
-    switch (severity) {
-      case "critical":
-        return "severity-badge severity-critical";
-      case "major":
-        return "severity-badge severity-major";
-      case "minor":
-        return "severity-badge severity-minor";
-      case "cosmetic":
-      default:
-        return "severity-badge severity-cosmetic";
-    }
   };
 
   return (
@@ -235,107 +221,11 @@ export function DashboardJobDetails() {
 
       {/* 5. Defect Findings Section */}
       <section className="dash-panel" style={{ marginBottom: "2rem" }} aria-label="Defect Findings">
-        <div className="dash-panel-header">
-          <h2 className="dash-panel-title">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-            <span>Defect Findings ({job.defects?.length || 0})</span>
-          </h2>
-          <span className="dash-panel-badge">
-            {job.defects && job.defects.length > 0
-              ? `${job.defects.length} Discrepancies Recorded`
-              : "Clean Baseline"}
-          </span>
-        </div>
-
-        {!job.defects || job.defects.length === 0 ? (
-          <EmptyState
-            title="Zero Defect Findings Detected"
-            description="The Vision-Language Model and automated Playwright scanner detected zero visual regressions, layout overflow faults, or color contrast failures on this route."
-            icon={
-              <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                <polyline points="22 4 12 14.01 9 11.01" />
-              </svg>
-            }
-          />
-        ) : (
-          <div className="defect-finding-list">
-            {job.defects.map((defect) => (
-              <div
-                key={defect.id}
-                className={`defect-finding-card severity-${defect.severity}`}
-              >
-                {/* Defect Card Header */}
-                <div className="defect-finding-header">
-                  <div className="defect-title-group">
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                      <span className="job-id-cell">#{defect.id}</span>
-                      <h3 className="defect-finding-title">{defect.title}</h3>
-                    </div>
-                  </div>
-
-                  <div className="defect-tag-row">
-                    <span className={getSeverityBadgeClass(defect.severity)}>
-                      {defect.severity}
-                    </span>
-                    <span className="defect-category-pill">
-                      {defect.category}
-                    </span>
-                    <StatusBadge
-                      status={
-                        defect.status === "resolved"
-                          ? "passed"
-                          : defect.status === "fix-staged"
-                          ? "needs-review"
-                          : defect.status === "open"
-                          ? "failed"
-                          : "pending"
-                      }
-                      label={
-                        defect.status === "resolved"
-                          ? "Resolved"
-                          : defect.status === "fix-staged"
-                          ? "Fix Staged"
-                          : defect.status === "open"
-                          ? "Open"
-                          : "Pending Review"
-                      }
-                      size="sm"
-                    />
-                  </div>
-                </div>
-
-                {/* Description */}
-                <p className="defect-finding-desc">{defect.description}</p>
-
-                {/* Affected Component & Selector */}
-                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", fontSize: "0.8rem" }}>
-                  <span style={{ color: "var(--color-text-muted)" }}>Component:</span>
-                  <code className="defect-selector-code">{defect.affectedComponent}</code>
-
-                  {defect.selector && (
-                    <>
-                      <span style={{ color: "var(--color-text-muted)" }}>Selector:</span>
-                      <code className="defect-selector-code">{defect.selector}</code>
-                    </>
-                  )}
-                </div>
-
-                {/* VLM Explanation */}
-                {defect.vlmExplanation && (
-                  <div className="vlm-explanation-box">
-                    <strong>VLM AI Reasoning: </strong>
-                    <span>{defect.vlmExplanation}</span>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+        <DefectFindingsReview
+          findings={job.defects || []}
+          evidenceList={job.evidence || []}
+          title={`Defect Findings (${job.defects?.length || 0})`}
+        />
       </section>
 
       {/* 6. Evidence & Artifacts Section */}

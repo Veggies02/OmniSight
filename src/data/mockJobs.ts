@@ -7,8 +7,21 @@ export type ValidationStatus =
   | "pending"
   | "not-applicable";
 
-export type DefectSeverity = "critical" | "major" | "minor" | "cosmetic";
-export type DefectStatus = "open" | "fix-staged" | "resolved" | "pending-review";
+export type DefectSeverity =
+  | "critical"
+  | "high"
+  | "medium"
+  | "low"
+  | "major"
+  | "minor"
+  | "cosmetic";
+
+export type DefectStatus =
+  | "open"
+  | "under-review"
+  | "resolved"
+  | "fix-staged"
+  | "pending-review";
 
 export interface DefectFinding {
   id: string;
@@ -19,7 +32,9 @@ export interface DefectFinding {
   status: DefectStatus;
   description: string;
   selector?: string;
-  vlmExplanation?: string;
+  evidenceRef?: string;
+  jobId?: string;
+  targetRoute?: string;
 }
 
 export interface InspectionEvidence {
@@ -87,18 +102,22 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         status: "open",
         description: "The two-column grid in payment form does not wrap under 400px width, causing horizontal scrollbar.",
         selector: ".checkout-form .card-expiry-row",
-        vlmExplanation: "VLM identified 24px content overflow past the 390px right viewport margin.",
+        evidenceRef: "EVI-301",
+        jobId: "JOB-1084",
+        targetRoute: "/checkout",
       },
       {
         id: "DEF-202",
         title: "CVV tooltip clipped by screen boundary",
         category: "Clipping Fault",
-        severity: "minor",
+        severity: "low",
         affectedComponent: "Checkout.tsx (CVVHelper)",
         status: "fix-staged",
         description: "CVV helper badge popup renders with negative right offset on mobile viewports.",
         selector: ".cvv-info-tooltip",
-        vlmExplanation: "Tooltip container extends beyond right viewport boundary with z-index clipping.",
+        evidenceRef: "EVI-302",
+        jobId: "JOB-1084",
+        targetRoute: "/checkout",
       },
     ],
     evidence: [
@@ -138,12 +157,14 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         id: "DEF-188",
         title: "Proceed to Checkout button low contrast ratio",
         category: "Accessibility / Contrast",
-        severity: "major",
+        severity: "high",
         affectedComponent: "Cart.tsx (CartSummary)",
         status: "resolved",
         description: "Text color #94a3b8 on background #dbeafe provides only 2.4:1 contrast (WCAG AA requires 4.5:1).",
         selector: ".cart-summary .btn-checkout",
-        vlmExplanation: "VLM synthesized color token replacement to #1e40af with verified 5.8:1 contrast.",
+        evidenceRef: "EVI-288",
+        jobId: "JOB-1083",
+        targetRoute: "/cart",
       },
     ],
     evidence: [
@@ -205,29 +226,39 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         id: "DEF-145",
         title: "Postal code field label overlapped by input border",
         category: "Alignment Fault",
-        severity: "major",
+        severity: "high",
         affectedComponent: "Checkout.tsx (ShippingForm)",
-        status: "open",
+        status: "under-review",
         description: "Floating label animation clips top input border when prefilled on tablet width.",
         selector: ".shipping-form #zip-input",
+        evidenceRef: "EVI-145",
+        jobId: "JOB-1080",
+        targetRoute: "/checkout",
       },
       {
         id: "DEF-146",
         title: "Standard Shipping radio button text truncated",
         category: "Text Truncation",
-        severity: "minor",
+        severity: "medium",
         affectedComponent: "Checkout.tsx (DeliveryOptions)",
         status: "open",
         description: "Label string 'Delivered within 3 business days' truncated with ellipsis unnecessarily.",
+        selector: ".delivery-options .radio-label",
+        evidenceRef: "EVI-145",
+        jobId: "JOB-1080",
+        targetRoute: "/checkout",
       },
       {
         id: "DEF-147",
         title: "Back to Cart button misplaced below page fold",
         category: "Layout Misalignment",
-        severity: "cosmetic",
+        severity: "low",
         affectedComponent: "Checkout.tsx (NavigationControls)",
         status: "open",
         description: "Secondary navigation button margins push action 180px below the viewport bottom fold.",
+        selector: ".checkout-actions .btn-back",
+        jobId: "JOB-1080",
+        targetRoute: "/checkout",
       },
     ],
     evidence: [
@@ -279,4 +310,36 @@ export function getInspectionJobById(id: string): InspectionJob | undefined {
   return MOCK_INSPECTION_JOBS.find(
     (job) => job.id.toLowerCase() === cleanId || job.id.toLowerCase() === `job-${cleanId}`
   );
+}
+
+export function getAllDefectFindings(): DefectFinding[] {
+  const all: DefectFinding[] = [];
+  MOCK_INSPECTION_JOBS.forEach((job) => {
+    if (job.defects) {
+      job.defects.forEach((defect) => {
+        all.push({
+          ...defect,
+          jobId: job.id,
+          targetRoute: job.targetRoute,
+        });
+      });
+    }
+  });
+  return all;
+}
+
+export function getAllEvidence(): InspectionEvidence[] {
+  const all: InspectionEvidence[] = [];
+  const seen = new Set<string>();
+  MOCK_INSPECTION_JOBS.forEach((job) => {
+    if (job.evidence) {
+      job.evidence.forEach((evi) => {
+        if (!seen.has(evi.id)) {
+          seen.add(evi.id);
+          all.push(evi);
+        }
+      });
+    }
+  });
+  return all;
 }
