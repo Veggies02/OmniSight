@@ -103,6 +103,116 @@ def _to_bool(value) -> bool:
     return False
 
 
+def _outside_strings(text: str, fn) -> str:
+    """Apply fn to the parts of text that are outside double-quoted strings."""
+    out = []
+    buf = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            out.append(fn("".join(buf)))
+            buf = []
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    break
+                j += 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        else:
+            buf.append(ch)
+            i += 1
+    out.append(fn("".join(buf)))
+    return "".join(out)
+
+
+def _fix_python_literals(segment: str) -> str:
+    segment = re.sub(r'\bTrue\b', 'true', segment)
+    segment = re.sub(r'\bFalse\b', 'false', segment)
+    return re.sub(r'\bNone\b', 'null', segment)
+
+
+def _fix_trailing_commas(segment: str) -> str:
+    return re.sub(r',(\s*[}\]])', r'\1', segment)
+
+
+def _scan_structure(text: str):
+    """Walk the text tracking strings and brackets.
+
+    Returns (end_index, open_brackets, in_string). end_index is the position
+    where the first top-level object or array closes, or None if the text
+    ends before that happens (a truncated response).
+    """
+    stack = []
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            if not stack:
+                return i, stack, False
+    return None, stack, in_string
+
+
+def _close_truncated(text: str) -> str:
+    """Cut trailing text after a complete object, or close a truncated one."""
+    end, stack, in_string = _scan_structure(text)
+    if end is not None:
+        return text[:end + 1]
+    result = text
+    if in_string:
+        result += '"'
+    result = result.rstrip()
+    if result.endswith(","):
+        result = result[:-1]
+    elif result.endswith(":"):
+        result += " null"
+    return result + "".join(reversed(stack))
+
+
+def repair_json(text: str) -> Optional[str]:
+    """Attempt to repair common model mistakes in a JSON object.
+
+    Fixes: single-quoted JSON, Python literals (True/False/None), trailing
+    commas, text after the object, and truncated output with missing closing
+    quotes or brackets. Returns the repaired text, or None if the text has no
+    object to repair. The result may still be invalid JSON, so callers must
+    parse it.
+
+    Single quotes are only converted when the text contains no double quotes,
+    because apostrophes inside normal descriptions would otherwise break it.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    candidate = text[start:]
+
+    if '"' not in candidate and "'" in candidate:
+        candidate = candidate.replace("'", '"')
+
+    candidate = _outside_strings(candidate, _fix_python_literals)
+    candidate = _close_truncated(candidate)
+    candidate = _outside_strings(candidate, _fix_trailing_commas)
+    return candidate
+
 def extract_json_from_response(raw: str) -> dict:
     """Extract a JSON object from raw model output.
 
@@ -136,6 +246,13 @@ def extract_json_from_response(raw: str) -> dict:
     brace_match = re.search(r'\{.*\}', text, re.DOTALL)
     if brace_match:
         parsed = _as_object(brace_match.group())
+        if parsed is not None:
+            return parsed
+
+    # Last resort: repair common formatting mistakes and truncation
+    repaired = repair_json(text)
+    if repaired is not None:
+        parsed = _as_object(repaired)
         if parsed is not None:
             return parsed
 

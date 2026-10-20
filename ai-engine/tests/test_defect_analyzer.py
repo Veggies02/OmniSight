@@ -10,6 +10,7 @@ from defect_analyzer import (
     normalize_category,
     parse_findings,
     analyze_evidence,
+    repair_json,
     ALLOWED_EXTENSIONS,
 )
 from prompts import (
@@ -453,3 +454,78 @@ class TestOrchestratorHardening:
         }
         findings = parse_findings(data, "job-1", "screenshot.png")
         assert findings[0].requires_human_review is False
+
+        # =====================================================================
+# JSON repair tests
+# =====================================================================
+
+class TestJsonRepair:
+    def test_trailing_comma_in_object(self):
+        result = extract_json_from_response('{"has_defect": true, "findings": [],}')
+        assert result["has_defect"] is True
+
+    def test_trailing_comma_in_list(self):
+        result = extract_json_from_response('{"findings": [1, 2,], "has_defect": true}')
+        assert result["findings"] == [1, 2]
+
+    def test_single_quoted_json(self):
+        result = extract_json_from_response("{'has_defect': False, 'findings': []}")
+        assert result["has_defect"] is False
+
+    def test_python_literals(self):
+        raw = (
+            '{"has_defect": True, "findings": [{"defect_category": "overlapping_text", '
+            '"description": "x", "confidence": 0.9, "target_selector": None}]}'
+        )
+        result = extract_json_from_response(raw)
+        assert result["has_defect"] is True
+        assert result["findings"][0]["target_selector"] is None
+
+    def test_literals_inside_strings_are_untouched(self):
+        raw = '{"description": "None of the items are True", "has_defect": True}'
+        result = extract_json_from_response(raw)
+        assert result["description"] == "None of the items are True"
+        assert result["has_defect"] is True
+
+    def test_truncated_mid_string(self):
+        raw = (
+            '{"has_defect": true, "findings": [{"defect_category": "overlapping_text", '
+            '"description": "Price overl'
+        )
+        result = extract_json_from_response(raw)
+        assert result["findings"][0]["description"] == "Price overl"
+
+    def test_truncated_after_open_list(self):
+        result = extract_json_from_response('{"has_defect": true, "findings": [')
+        assert result["findings"] == []
+
+    def test_truncated_after_colon(self):
+        result = extract_json_from_response('{"has_defect":')
+        assert result == {"has_defect": None}
+
+    def test_text_after_object_with_trailing_comma(self):
+        raw = '{"has_defect": false, "findings": [],} Hope this helps!'
+        result = extract_json_from_response(raw)
+        assert result["has_defect"] is False
+
+    def test_unclosed_markdown_fence_with_truncation(self):
+        raw = '```json\n{"has_defect": true, "findings": ['
+        result = extract_json_from_response(raw)
+        assert result["has_defect"] is True
+
+    def test_repair_json_returns_none_without_object(self):
+        assert repair_json("no braces here") is None
+
+    def test_unrecoverable_json_still_raises(self):
+        with pytest.raises(ValueError, match="Could not extract"):
+            extract_json_from_response('{"has_defect" true}')
+
+    def test_pipeline_recovers_truncated_response(self, evidence):
+        canned = (
+            '{"has_defect": true, "findings": [{"defect_category": "overlapping_text", '
+            '"description": "Price overlaps title", "confidence": 0.9'
+        )
+        model = MockVisionModel(canned_response=canned)
+        result = analyze_evidence(evidence, model)
+        assert result.has_defect is True
+        assert result.findings[0].defect_category == DefectCategory.OVERLAPPING_TEXT
