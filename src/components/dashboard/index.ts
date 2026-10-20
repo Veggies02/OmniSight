@@ -9,3 +9,4 @@ export * from "./LoadingState";
 export * from "./ErrorState";
 export * from "./DefectFindingsReview";
 export * from "./VisualEvidenceViewer";
+export * from "./ValidationResults";

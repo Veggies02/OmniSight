@@ -6,7 +6,42 @@ export type ValidationStatus =
   | "failed"
   | "needs-review"
   | "pending"
+  | "running"
   | "not-applicable";
+
+export type CheckResultStatus =
+  | "passed"
+  | "failed"
+  | "running"
+  | "pending"
+  | "skipped";
+
+export interface ValidationCheck {
+  id: string;
+  name: string;
+  description?: string;
+  status: CheckResultStatus;
+  duration?: string;
+  target?: string;
+  assertionType?: string;
+  actualValue?: string;
+  expectedValue?: string;
+  errorMessage?: string;
+  evidenceRef?: string;
+}
+
+export interface JobValidationResult {
+  status: ValidationStatus;
+  startedAt?: string;
+  completedAt?: string;
+  duration?: string;
+  totalChecks: number;
+  passedChecks: number;
+  failedChecks: number;
+  skippedChecks?: number;
+  failureSummary?: string;
+  checks: ValidationCheck[];
+}
 
 export type DefectSeverity =
   | "critical"
@@ -73,6 +108,7 @@ export interface InspectionJob {
   defectSummary?: string;
   defects?: DefectFinding[];
   evidence?: InspectionEvidence[];
+  validation?: JobValidationResult;
 }
 
 export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
@@ -84,12 +120,48 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
     startedAt: "5 mins ago",
     status: "running",
     defectsCount: 0,
-    validationStatus: "pending",
+    validationStatus: "running",
     duration: "45s (active)",
     viewport: "Desktop (1440 × 900)",
     defectSummary: "Visual scan executing on catalog grid...",
     defects: [],
     evidence: [],
+    validation: {
+      status: "running",
+      startedAt: "2026-10-16 22:45:10 UTC",
+      duration: "45s (active)",
+      totalChecks: 3,
+      passedChecks: 1,
+      failedChecks: 0,
+      checks: [
+        {
+          id: "VAL-301",
+          name: "Catalog Grid Responsive Wrap Check",
+          status: "passed",
+          duration: "3.2s",
+          target: ".product-grid",
+          assertionType: "Flex / Grid Alignment",
+          actualValue: "4 items per row on 1440px",
+          expectedValue: "4 items per row on 1440px",
+        },
+        {
+          id: "VAL-302",
+          name: "Product Card Aspect Ratio Guard",
+          status: "running",
+          duration: "In progress...",
+          target: ".product-card img",
+          assertionType: "Aspect Ratio Preservation",
+        },
+        {
+          id: "VAL-303",
+          name: "Category Filter State Sync Verification",
+          status: "pending",
+          duration: "Queued",
+          target: ".filter-pill-btn",
+          assertionType: "DOM State Mutation",
+        },
+      ],
+    },
   },
   {
     id: "JOB-1084",
@@ -162,6 +234,51 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         browser: "Chromium Headless (Playwright v1.48.0)",
       },
     ],
+    validation: {
+      status: "needs-review",
+      startedAt: "2026-10-16 22:20:25 UTC",
+      completedAt: "2026-10-16 22:20:58 UTC",
+      duration: "33s",
+      totalChecks: 3,
+      passedChecks: 1,
+      failedChecks: 1,
+      failureSummary: "Payment form input row wraps improperly on mobile width (390px). Manual triage required.",
+      checks: [
+        {
+          id: "VAL-201",
+          name: "Credit Card Expiry Input Viewport Bounds",
+          status: "failed",
+          duration: "5.4s",
+          target: ".checkout-form .card-expiry-row",
+          assertionType: "Viewport Bounding Box Constraint",
+          actualValue: "Element width 420px exceeds viewport 390px by 30px",
+          expectedValue: "Element width ≤ 390px (no horizontal overflow)",
+          errorMessage: "Horizontal layout overflow detected: card expiry and CVC inputs forced off-screen on mobile viewport.",
+          evidenceRef: "EVI-301",
+        },
+        {
+          id: "VAL-202",
+          name: "CVV Info Tooltip Collision Check",
+          status: "passed",
+          duration: "3.1s",
+          target: ".cvv-info-tooltip",
+          assertionType: "Bounding Box Screen Boundary Margin",
+          actualValue: "Right offset: 12px (Inside boundary)",
+          expectedValue: "Right offset ≥ 8px",
+          evidenceRef: "EVI-302",
+        },
+        {
+          id: "VAL-203",
+          name: "Submit Payment Button Accessibility",
+          status: "passed",
+          duration: "2.4s",
+          target: ".checkout-form .btn-pay",
+          assertionType: "Accessible Name & Keyboard Target",
+          actualValue: "Accessible role 'button' present",
+          expectedValue: "Accessible role 'button' present",
+        },
+      ],
+    },
   },
   {
     id: "JOB-1083",
@@ -208,6 +325,48 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         defectiveLabel: "Uncaptured Defective State",
       },
     ],
+    validation: {
+      status: "passed",
+      startedAt: "2026-10-16 21:30:48 UTC",
+      completedAt: "2026-10-16 21:31:12 UTC",
+      duration: "24s",
+      totalChecks: 3,
+      passedChecks: 3,
+      failedChecks: 0,
+      checks: [
+        {
+          id: "VAL-101",
+          name: "WCAG 2.1 AA Contrast Ratio Verification",
+          status: "passed",
+          duration: "4.2s",
+          target: ".cart-summary .btn-checkout",
+          assertionType: "Color Contrast Ratio",
+          actualValue: "4.8:1 (Passed AA standard)",
+          expectedValue: "≥ 4.5:1",
+          evidenceRef: "EVI-288",
+        },
+        {
+          id: "VAL-102",
+          name: "Button Layout & Bounding Box Inspection",
+          status: "passed",
+          duration: "2.1s",
+          target: ".cart-summary .btn-checkout",
+          assertionType: "No Visual Overflow",
+          actualValue: "100% container fit",
+          expectedValue: "100% container fit",
+        },
+        {
+          id: "VAL-103",
+          name: "Cart State Re-hydration Assertion",
+          status: "passed",
+          duration: "1.8s",
+          target: "CartContext.tsx",
+          assertionType: "State Integrity Check",
+          actualValue: "Synchronized with localStorage",
+          expectedValue: "Synchronized with localStorage",
+        },
+      ],
+    },
   },
   {
     id: "JOB-1082",
@@ -300,7 +459,7 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         capturedAt: "2026-10-16 14:31:10 UTC",
         dimensions: "768 × 1024 px",
         description: "Tablet viewport Playwright snapshot highlighting layout overlap errors.",
-        defectiveImageUrl: "/assets/simulated-missing-artifact.png", // purposefully tests failed image loading handling
+        defectiveImageUrl: "/assets/simulated-missing-artifact.png",
         defectId: "DEF-145",
         jobId: "JOB-1080",
         browser: "WebKit (Playwright v1.48.0)",
@@ -308,6 +467,62 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         defectiveLabel: "Fault Ingestion Snapshot",
       },
     ],
+    validation: {
+      status: "failed",
+      startedAt: "2026-10-16 14:31:15 UTC",
+      completedAt: "2026-10-16 14:31:48 UTC",
+      duration: "33s",
+      totalChecks: 4,
+      passedChecks: 1,
+      failedChecks: 2,
+      skippedChecks: 1,
+      failureSummary: "2 regression assertions failed on 768px tablet layout: floating label collision and delivery option label truncation.",
+      checks: [
+        {
+          id: "VAL-401",
+          name: "Shipping Form Zip Code Label Boundary Check",
+          status: "failed",
+          duration: "6.4s",
+          target: ".shipping-form #zip-input",
+          assertionType: "Element Bounding Collision",
+          actualValue: "Label top margin -8px overlaps input border",
+          expectedValue: "Label top margin ≥ 4px",
+          errorMessage: "Floating label animation clips top input border when prefilled on tablet width.",
+          evidenceRef: "EVI-145",
+        },
+        {
+          id: "VAL-402",
+          name: "Standard Shipping Radio Text Truncation Check",
+          status: "failed",
+          duration: "4.1s",
+          target: ".delivery-options .radio-label",
+          assertionType: "Text Content Truncation",
+          actualValue: "text-overflow: ellipsis applied at 160px width",
+          expectedValue: "Full text string displayed without ellipsis",
+          errorMessage: "Label string 'Delivered within 3 business days' truncated with ellipsis unnecessarily.",
+          evidenceRef: "EVI-145",
+        },
+        {
+          id: "VAL-403",
+          name: "Checkout Form Submit Action Accessibility",
+          status: "passed",
+          duration: "3.0s",
+          target: ".checkout-form button[type='submit']",
+          assertionType: "Keyboard Focus & A11y Tree",
+          actualValue: "Focused outline rendered with 3:1 contrast",
+          expectedValue: "Focused outline rendered with 3:1 contrast",
+        },
+        {
+          id: "VAL-404",
+          name: "Secondary Back-to-Cart Viewport Visibility",
+          status: "skipped",
+          duration: "—",
+          target: ".checkout-actions .btn-back",
+          assertionType: "Viewport Fold Check",
+          errorMessage: "Skipped due to upstream layout failure in VAL-401.",
+        },
+      ],
+    },
   },
   {
     id: "JOB-1079",
@@ -338,6 +553,31 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
     defectSummary: "Queued for automated Playwright multi-viewport scan",
     defects: [],
     evidence: [],
+    validation: {
+      status: "pending",
+      duration: "Queued",
+      totalChecks: 2,
+      passedChecks: 0,
+      failedChecks: 0,
+      checks: [
+        {
+          id: "VAL-501",
+          name: "Cart Quantity Increment Re-validation",
+          status: "pending",
+          duration: "Queued",
+          target: ".cart-item .qty-btn",
+          assertionType: "Click Interactivity & State Dispatch",
+        },
+        {
+          id: "VAL-502",
+          name: "Order Total Price Calculation",
+          status: "pending",
+          duration: "Queued",
+          target: ".cart-summary .total-price",
+          assertionType: "Subtotal Arithmetic Precision",
+        },
+      ],
+    },
   },
 ];
 

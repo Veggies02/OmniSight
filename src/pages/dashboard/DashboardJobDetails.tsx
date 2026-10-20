@@ -7,6 +7,7 @@ import {
   EmptyState,
   DefectFindingsReview,
   VisualEvidenceViewer,
+  ValidationResults,
   type BadgeStatus,
 } from "../../components/dashboard";
 import {
@@ -221,7 +222,17 @@ export function DashboardJobDetails() {
         </div>
       </section>
 
-      {/* 5. Defect Findings Section */}
+      {/* 5. Validation Results Section */}
+      <section style={{ marginBottom: "2rem" }} aria-label="Validation Results">
+        <ValidationResults
+          validation={job.validation}
+          validationStatus={job.validationStatus}
+          jobId={job.id}
+          onSelectEvidence={setSelectedEvidenceId}
+        />
+      </section>
+
+      {/* 6. Defect Findings Section */}
       <section className="dash-panel" style={{ marginBottom: "2rem" }} aria-label="Defect Findings">
         <DefectFindingsReview
           findings={job.defects || []}
@@ -230,7 +241,7 @@ export function DashboardJobDetails() {
         />
       </section>
 
-      {/* 6. Visual Evidence & Comparison Section */}
+      {/* 7. Visual Evidence & Comparison Section */}
       <section className="dash-panel" aria-label="Inspection Evidence">
         <div className="dash-panel-header">
           <h2 className="dash-panel-title">
