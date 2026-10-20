@@ -1,115 +1,31 @@
-import type { BadgeStatus } from "../components/dashboard";
 import heroImg from "../assets/hero.png";
+import type {
+  BadgeStatus,
+  ValidationStatus,
+  CheckResultStatus,
+  ValidationCheck,
+  JobValidationResult,
+  DefectSeverity,
+  DefectStatus,
+  DefectFinding,
+  InspectionEvidence,
+  InspectionJob,
+  InspectionJobSummary,
+} from "../types";
 
-export type ValidationStatus =
-  | "passed"
-  | "failed"
-  | "needs-review"
-  | "pending"
-  | "running"
-  | "not-applicable";
-
-export type CheckResultStatus =
-  | "passed"
-  | "failed"
-  | "running"
-  | "pending"
-  | "skipped";
-
-export interface ValidationCheck {
-  id: string;
-  name: string;
-  description?: string;
-  status: CheckResultStatus;
-  duration?: string;
-  target?: string;
-  assertionType?: string;
-  actualValue?: string;
-  expectedValue?: string;
-  errorMessage?: string;
-  evidenceRef?: string;
-}
-
-export interface JobValidationResult {
-  status: ValidationStatus;
-  startedAt?: string;
-  completedAt?: string;
-  duration?: string;
-  totalChecks: number;
-  passedChecks: number;
-  failedChecks: number;
-  skippedChecks?: number;
-  failureSummary?: string;
-  checks: ValidationCheck[];
-}
-
-export type DefectSeverity =
-  | "critical"
-  | "high"
-  | "medium"
-  | "low"
-  | "major"
-  | "minor"
-  | "cosmetic";
-
-export type DefectStatus =
-  | "open"
-  | "under-review"
-  | "resolved"
-  | "fix-staged"
-  | "pending-review";
-
-export interface DefectFinding {
-  id: string;
-  title: string;
-  category: string;
-  severity: DefectSeverity;
-  affectedComponent: string;
-  status: DefectStatus;
-  description: string;
-  selector?: string;
-  evidenceRef?: string;
-  jobId?: string;
-  targetRoute?: string;
-}
-
-export interface InspectionEvidence {
-  id: string;
-  type: "screenshot" | "dom-snapshot" | "playwright-trace" | "visual-comparison";
-  title: string;
-  viewport: string;
-  capturedAt: string;
-  dimensions?: string;
-  description?: string;
-  imageUrl?: string;
-  baselineImageUrl?: string;
-  defectiveImageUrl?: string;
-  diffImageUrl?: string;
-  defectId?: string;
-  jobId?: string;
-  devicePixelRatio?: number;
-  browser?: string;
-  selector?: string;
-  baselineLabel?: string;
-  defectiveLabel?: string;
-}
-
-export interface InspectionJob {
-  id: string;
-  application: string;
-  targetRoute: string;
-  timestamp: string;
-  startedAt: string;
-  status: BadgeStatus;
-  defectsCount: number;
-  validationStatus: ValidationStatus;
-  duration: string;
-  viewport: string;
-  defectSummary?: string;
-  defects?: DefectFinding[];
-  evidence?: InspectionEvidence[];
-  validation?: JobValidationResult;
-}
+export type {
+  BadgeStatus,
+  ValidationStatus,
+  CheckResultStatus,
+  ValidationCheck,
+  JobValidationResult,
+  DefectSeverity,
+  DefectStatus,
+  DefectFinding,
+  InspectionEvidence,
+  InspectionJob,
+  InspectionJobSummary,
+};
 
 export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
   {
