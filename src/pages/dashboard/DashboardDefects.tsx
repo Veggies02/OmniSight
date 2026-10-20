@@ -4,6 +4,7 @@ import {
   StatCard,
   StatusBadge,
   DefectFindingsReview,
+  VisualEvidenceViewer,
 } from "../../components/dashboard";
 import {
   getAllDefectFindings,
@@ -165,12 +166,34 @@ export function DashboardDefects() {
       </section>
 
       {/* 3. Reusable Defect Findings Review Section */}
-      <section className="dash-panel" aria-label="Defect Findings Registry">
+      <section className="dash-panel" style={{ marginBottom: "2rem" }} aria-label="Defect Findings Registry">
         <DefectFindingsReview
           findings={allDefects}
           evidenceList={allEvidence}
           title="All Detected UI Defects"
           showJobLink={true}
+        />
+      </section>
+
+      {/* 4. Global Visual Evidence Comparison Section */}
+      <section className="dash-panel" aria-label="Visual Inspection Evidence Comparison">
+        <div className="dash-panel-header">
+          <h2 className="dash-panel-title">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+              <circle cx="9" cy="9" r="2" />
+              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+            </svg>
+            <span>Visual Evidence Comparison Gallery</span>
+          </h2>
+          <span className="dash-panel-badge">
+            {allEvidence.length} Captured Artifacts
+          </span>
+        </div>
+
+        <VisualEvidenceViewer
+          evidenceList={allEvidence}
+          title="Cross-Job Visual Inspection Evidence Comparison"
         />
       </section>
     </div>

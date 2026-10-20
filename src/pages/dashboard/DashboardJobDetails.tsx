@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   PageHeader,
@@ -6,6 +6,7 @@ import {
   StatusBadge,
   EmptyState,
   DefectFindingsReview,
+  VisualEvidenceViewer,
   type BadgeStatus,
 } from "../../components/dashboard";
 import {
@@ -16,6 +17,7 @@ import heroImg from "../../assets/hero.png";
 
 export function DashboardJobDetails() {
   const { id } = useParams<{ id: string }>();
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | undefined>(undefined);
 
   const job = useMemo(() => {
     if (!id) return undefined;
@@ -228,7 +230,7 @@ export function DashboardJobDetails() {
         />
       </section>
 
-      {/* 6. Evidence & Artifacts Section */}
+      {/* 6. Visual Evidence & Comparison Section */}
       <section className="dash-panel" aria-label="Inspection Evidence">
         <div className="dash-panel-header">
           <h2 className="dash-panel-title">
@@ -237,11 +239,11 @@ export function DashboardJobDetails() {
               <circle cx="9" cy="9" r="2" />
               <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
             </svg>
-            <span>Inspection Evidence & Artifacts</span>
+            <span>Visual Evidence & Inspection Artifacts</span>
           </h2>
           <span className="dash-panel-badge">
             {job.evidence && job.evidence.length > 0
-              ? `${job.evidence.length} Evidence Artifacts`
+              ? `${job.evidence.length} Artifacts Staged`
               : "No Artifacts"}
           </span>
         </div>
@@ -256,58 +258,102 @@ export function DashboardJobDetails() {
             }}
           />
         ) : (
-          <div className="evidence-grid">
-            {job.evidence.map((evi) => (
-              <div key={evi.id} className="evidence-card">
-                <div className="evidence-header">
-                  <h3 className="evidence-title">{evi.title}</h3>
-                  <span className="defect-category-pill" style={{ textTransform: "capitalize" }}>
-                    {evi.type.replace("-", " ")}
-                  </span>
-                </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+            {/* Interactive Visual Evidence Viewer */}
+            <VisualEvidenceViewer
+              evidenceList={job.evidence}
+              selectedEvidenceId={selectedEvidenceId ?? job.evidence[0]?.id}
+              onSelectEvidence={setSelectedEvidenceId}
+            />
 
-                {/* Evidence Preview */}
-                <div className="evidence-preview-box">
-                  <span className="evidence-preview-watermark">
-                    {evi.dimensions || evi.viewport}
-                  </span>
+            {/* Evidence Artifacts Gallery & Selector */}
+            {job.evidence.length > 1 && (
+              <div>
+                <h4 style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--color-text-secondary)", marginBottom: "0.75rem" }}>
+                  All Captured Artifacts ({job.evidence.length})
+                </h4>
+                <div className="evidence-grid">
+                  {job.evidence.map((evi) => {
+                    const isSelected = (selectedEvidenceId ?? job.evidence![0]?.id) === evi.id;
+                    return (
+                      <div
+                        key={evi.id}
+                        className="evidence-card"
+                        style={{
+                          cursor: "pointer",
+                          borderColor: isSelected ? "var(--color-accent)" : undefined,
+                          boxShadow: isSelected ? "0 0 0 2px var(--color-accent-subtle)" : undefined,
+                        }}
+                        onClick={() => {
+                          setSelectedEvidenceId(evi.id);
+                          document.getElementById("visual-evidence-viewer")?.scrollIntoView({ behavior: "smooth" });
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={isSelected}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setSelectedEvidenceId(evi.id);
+                            document.getElementById("visual-evidence-viewer")?.scrollIntoView({ behavior: "smooth" });
+                          }
+                        }}
+                      >
+                        <div className="evidence-header">
+                          <h5 className="evidence-title" style={{ fontSize: "0.9rem" }}>{evi.title}</h5>
+                          <span className="defect-category-pill" style={{ textTransform: "capitalize" }}>
+                            {evi.type.replace("-", " ")}
+                          </span>
+                        </div>
 
-                  {/* Render real local asset for demo preview if available */}
-                  {evi.id === "EVI-301" ? (
-                    <img
-                      src={heroImg}
-                      alt="Captured inspection viewport"
-                      className="evidence-preview-img"
-                    />
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.5rem" }}>
-                      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#60a5fa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <rect width="20" height="14" x="2" y="3" rx="2" />
-                        <line x1="8" y1="21" x2="16" y2="21" />
-                        <line x1="12" y1="17" x2="12" y2="21" />
-                      </svg>
-                      <span style={{ fontSize: "0.85rem", color: "#f8fafc", fontWeight: 600 }}>
-                        {evi.title}
-                      </span>
-                      <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
-                        Viewport: {evi.viewport}
-                      </span>
-                    </div>
-                  )}
-                </div>
+                        {/* Evidence Preview Box */}
+                        <div className="evidence-preview-box" style={{ minHeight: 120 }}>
+                          <span className="evidence-preview-watermark">
+                            {evi.dimensions || evi.viewport}
+                          </span>
 
-                {evi.description && (
-                  <p style={{ fontSize: "0.825rem", color: "var(--color-text-secondary)", margin: 0, lineHeight: 1.5 }}>
-                    {evi.description}
-                  </p>
-                )}
+                          {evi.baselineImageUrl || evi.defectiveImageUrl === heroImg ? (
+                            <img
+                              src={heroImg}
+                              alt="Captured inspection viewport preview"
+                              className="evidence-preview-img"
+                              style={{ maxHeight: 120 }}
+                            />
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.3rem" }}>
+                              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#60a5fa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <rect width="20" height="14" x="2" y="3" rx="2" />
+                                <line x1="8" y1="21" x2="16" y2="21" />
+                                <line x1="12" y1="17" x2="12" y2="21" />
+                              </svg>
+                              <span style={{ fontSize: "0.78rem", color: "#f8fafc", fontWeight: 600 }}>
+                                {evi.title}
+                              </span>
+                              <span style={{ fontSize: "0.7rem", color: "#94a3b8" }}>
+                                {evi.viewport}
+                              </span>
+                            </div>
+                          )}
+                        </div>
 
-                <div className="evidence-meta-row">
-                  <span>Captured: <strong>{evi.capturedAt}</strong></span>
-                  <span>Artifact ID: <code>#{evi.id}</code></span>
+                        {evi.description && (
+                          <p style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)", margin: 0, lineHeight: 1.5 }}>
+                            {evi.description}
+                          </p>
+                        )}
+
+                        <div className="evidence-meta-row" style={{ fontSize: "0.75rem" }}>
+                          <span>Captured: <strong>{evi.capturedAt}</strong></span>
+                          <span style={{ color: isSelected ? "var(--color-accent)" : "var(--color-text-muted)", fontWeight: isSelected ? 700 : 500 }}>
+                            {isSelected ? "Active in Viewer ▲" : "View in Comparison →"}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            ))}
+            )}
           </div>
         )}
       </section>

@@ -1,4 +1,5 @@
 import type { BadgeStatus } from "../components/dashboard";
+import heroImg from "../assets/hero.png";
 
 export type ValidationStatus =
   | "passed"
@@ -39,13 +40,23 @@ export interface DefectFinding {
 
 export interface InspectionEvidence {
   id: string;
-  type: "screenshot" | "dom-snapshot" | "playwright-trace";
+  type: "screenshot" | "dom-snapshot" | "playwright-trace" | "visual-comparison";
   title: string;
   viewport: string;
   capturedAt: string;
   dimensions?: string;
   description?: string;
   imageUrl?: string;
+  baselineImageUrl?: string;
+  defectiveImageUrl?: string;
+  diffImageUrl?: string;
+  defectId?: string;
+  jobId?: string;
+  devicePixelRatio?: number;
+  browser?: string;
+  selector?: string;
+  baselineLabel?: string;
+  defectiveLabel?: string;
 }
 
 export interface InspectionJob {
@@ -129,6 +140,15 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         capturedAt: "2026-10-16 22:20:14 UTC",
         dimensions: "390 × 844 px",
         description: "Playwright automated capture during checkout payment stage on iPhone 14 viewport.",
+        baselineImageUrl: heroImg,
+        defectiveImageUrl: heroImg,
+        defectId: "DEF-201",
+        jobId: "JOB-1084",
+        browser: "Chromium Headless (Playwright v1.48.0)",
+        selector: ".checkout-form .card-expiry-row",
+        devicePixelRatio: 2,
+        baselineLabel: "Clean Baseline (Pre-release)",
+        defectiveLabel: "Defective Capture (PR #42 Regression)",
       },
       {
         id: "EVI-302",
@@ -137,6 +157,9 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         viewport: "Mobile (390 × 844)",
         capturedAt: "2026-10-16 22:20:18 UTC",
         description: "Full network HAR, console logs, and action timeline from start to failure.",
+        jobId: "JOB-1084",
+        defectId: "DEF-202",
+        browser: "Chromium Headless (Playwright v1.48.0)",
       },
     ],
   },
@@ -176,6 +199,13 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         capturedAt: "2026-10-16 21:30:45 UTC",
         dimensions: "1440 × 900 px",
         description: "Pre-patch visual capture showing muted low-contrast button state.",
+        baselineImageUrl: heroImg,
+        defectId: "DEF-188",
+        jobId: "JOB-1083",
+        browser: "Chromium Headless (Playwright v1.48.0)",
+        selector: ".cart-summary .btn-checkout",
+        baselineLabel: "WCAG AA Baseline (Expected)",
+        defectiveLabel: "Uncaptured Defective State",
       },
     ],
   },
@@ -270,6 +300,12 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
         capturedAt: "2026-10-16 14:31:10 UTC",
         dimensions: "768 × 1024 px",
         description: "Tablet viewport Playwright snapshot highlighting layout overlap errors.",
+        defectiveImageUrl: "/assets/simulated-missing-artifact.png", // purposefully tests failed image loading handling
+        defectId: "DEF-145",
+        jobId: "JOB-1080",
+        browser: "WebKit (Playwright v1.48.0)",
+        selector: ".shipping-form #zip-input",
+        defectiveLabel: "Fault Ingestion Snapshot",
       },
     ],
   },

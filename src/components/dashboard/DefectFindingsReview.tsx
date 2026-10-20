@@ -544,6 +544,19 @@ export function DefectFindingsReview({
                               <span>Captured: <strong>{attachedEvidence.capturedAt}</strong></span>
                               <span>Artifact ID: <code>#{attachedEvidence.id}</code></span>
                             </div>
+
+                            <div style={{ marginTop: "0.5rem", display: "flex", justifyContent: "flex-end" }}>
+                              <a
+                                href="#visual-evidence-viewer"
+                                className="filter-pill-btn"
+                                style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+                                onClick={() => {
+                                  document.getElementById("visual-evidence-viewer")?.scrollIntoView({ behavior: "smooth" });
+                                }}
+                              >
+                                <span>Inspect in Comparison Viewer →</span>
+                              </a>
+                            </div>
                           </div>
                         ) : (
                           <div
