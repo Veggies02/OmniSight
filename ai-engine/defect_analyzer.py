@@ -24,6 +24,7 @@ from schemas import (
     EvidenceContext,
 )
 from vlm_client import VisionModel, VLMError
+from uncertainty import annotate_findings, get_review_threshold
 
 
 # =====================================================================
@@ -213,13 +214,17 @@ def repair_json(text: str) -> Optional[str]:
     candidate = _outside_strings(candidate, _fix_trailing_commas)
     return candidate
 
-def extract_json_from_response(raw: str) -> dict:
+def extract_json_with_status(raw: str) -> tuple:
     """Extract a JSON object from raw model output.
+
+    Returns (parsed_object, was_repaired). was_repaired is True when the
+    response only parsed after repair_json() fixed it, which means some
+    fields may be missing or incomplete.
 
     Handles common VLM quirks:
     - Markdown fenced code blocks (```json ... ```)
     - Leading/trailing whitespace or explanation text
-    - Minor formatting issues
+    - Trailing commas, single quotes, Python literals, truncated output
 
     Only JSON objects are accepted. A bare array, string or number is
     treated as unparseable.
@@ -240,23 +245,28 @@ def extract_json_from_response(raw: str) -> dict:
     # Try direct parse first
     parsed = _as_object(text)
     if parsed is not None:
-        return parsed
+        return parsed, False
 
     # Try to find a JSON object anywhere in the text
     brace_match = re.search(r'\{.*\}', text, re.DOTALL)
     if brace_match:
         parsed = _as_object(brace_match.group())
         if parsed is not None:
-            return parsed
+            return parsed, False
 
     # Last resort: repair common formatting mistakes and truncation
     repaired = repair_json(text)
     if repaired is not None:
         parsed = _as_object(repaired)
         if parsed is not None:
-            return parsed
+            return parsed, True
 
     raise ValueError(f"Could not extract valid JSON from model response: {text[:200]}")
+
+
+def extract_json_from_response(raw: str) -> dict:
+    """Extract a JSON object from raw model output (see extract_json_with_status)."""
+    return extract_json_with_status(raw)[0]
 
 
 def normalize_category(raw_category: str) -> str:
@@ -308,7 +318,7 @@ def parse_findings(
             confidence = 0.5
 
         requires_review = _to_bool(item.get("requires_human_review", False))
-        if confidence < 0.5:
+        if confidence < get_review_threshold():
             requires_review = True
 
         # Do not fabricate selectors — keep null if absent
@@ -394,7 +404,7 @@ def analyze_evidence(
 
     # Step 4: Parse response
     try:
-        parsed = extract_json_from_response(raw_response)
+            parsed, was_repaired = extract_json_with_status(raw_response)
     except ValueError:
         # Model returned unparseable output — report as inconclusive
         return AnalysisResponse(
@@ -437,6 +447,7 @@ def analyze_evidence(
                 requires_human_review=True,
             )
         )
+    findings = annotate_findings(findings, response_repaired=was_repaired)
 
     return AnalysisResponse(
         job_id=evidence.job_id,

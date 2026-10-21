@@ -529,3 +529,49 @@ class TestJsonRepair:
         result = analyze_evidence(evidence, model)
         assert result.has_defect is True
         assert result.findings[0].defect_category == DefectCategory.OVERLAPPING_TEXT
+# =====================================================================
+# Uncertainty reporting through the full pipeline
+# =====================================================================
+
+def _canned(confidence, review=False):
+    return json.dumps({
+        "has_defect": True,
+        "findings": [{
+            "defect_category": "overlapping_text",
+            "description": "Price overlaps title",
+            "confidence": confidence,
+            "requires_human_review": review,
+        }],
+    })
+
+
+class TestUncertaintyPipeline:
+    def test_clean_confident_response_is_not_flagged(self, evidence, monkeypatch):
+        monkeypatch.delenv("REVIEW_CONFIDENCE_THRESHOLD", raising=False)
+        result = analyze_evidence(evidence, MockVisionModel(canned_response=_canned(0.9)))
+        assert result.findings[0].requires_human_review is False
+        assert result.findings[0].uncertainty_notes is None
+
+    def test_low_confidence_gets_reason(self, evidence, monkeypatch):
+        monkeypatch.delenv("REVIEW_CONFIDENCE_THRESHOLD", raising=False)
+        result = analyze_evidence(evidence, MockVisionModel(canned_response=_canned(0.3)))
+        assert result.findings[0].requires_human_review is True
+        assert "Low confidence" in result.findings[0].uncertainty_notes
+
+    def test_model_requested_review_gets_reason(self, evidence, monkeypatch):
+        monkeypatch.delenv("REVIEW_CONFIDENCE_THRESHOLD", raising=False)
+        result = analyze_evidence(evidence, MockVisionModel(canned_response=_canned(0.9, review=True)))
+        assert result.findings[0].requires_human_review is True
+        assert "requested" in result.findings[0].uncertainty_notes
+
+    def test_repaired_response_is_flagged(self, evidence, monkeypatch):
+        monkeypatch.delenv("REVIEW_CONFIDENCE_THRESHOLD", raising=False)
+        truncated = _canned(0.9)[:-3]  # cut off the closing brackets
+        result = analyze_evidence(evidence, MockVisionModel(canned_response=truncated))
+        assert result.findings[0].requires_human_review is True
+        assert "repaired" in result.findings[0].uncertainty_notes
+
+    def test_lower_threshold_from_environment_is_respected(self, evidence, monkeypatch):
+        monkeypatch.setenv("REVIEW_CONFIDENCE_THRESHOLD", "0.2")
+        result = analyze_evidence(evidence, MockVisionModel(canned_response=_canned(0.3)))
+        assert result.findings[0].requires_human_review is False
