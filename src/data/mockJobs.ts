@@ -1,4 +1,4 @@
-import heroImg from "../assets/hero.png";
+const heroImg = "/src/assets/hero.png";
 import type {
   BadgeStatus,
   ValidationStatus,
@@ -11,7 +11,7 @@ import type {
   InspectionEvidence,
   InspectionJob,
   InspectionJobSummary,
-} from "../types";
+} from "../types/index.ts";
 
 export type {
   BadgeStatus,

@@ -11,7 +11,7 @@ import type {
   ArtifactKind,
   DefectCategoryTaxonomy,
   AIFinding,
-} from "./contracts";
+} from "./contracts.ts";
 
 // ---------------------------------------------------------------------------
 // 1. Dashboard Visual Statuses

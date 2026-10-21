@@ -1,51 +1,115 @@
 /**
- * Typed API Client for OmniSight Backend
+ * OmniSight Centralized API Client
  *
- * Implements typed HTTP communication matching backend/api.py:
- * - GET  /api/health
- * - GET  /api/jobs (with query params: status, limit, offset)
- * - POST /api/jobs
- * - GET  /api/jobs/{job_id}
- * - GET  /api/jobs/{job_id}/artifacts
+ * Provides a robust, typed HTTP foundation for communicating with the
+ * OmniSight FastAPI backend service (Person 3).
  *
- * No external dependencies required (uses native fetch & TypeScript type guards).
+ * Features:
+ * - Configurable base URL via VITE_API_BASE_URL or constructor.
+ * - Native AbortController-based timeout support and external cancellation signals.
+ * - Comprehensive, sanitized error handling (distinguishing HTTP errors, network failures, timeouts, and validation errors).
+ * - Safe query parameter stringification.
+ * - Zero external dependencies.
  */
 
-import type {
-  BackendJobResponse,
-  BackendJobListResponse,
-  BackendArtifactRef,
-  BackendJobStatus,
-  JobCreateRequest,
-} from "../types/contracts";
-import { isBackendJobResponse } from "../types/dashboard";
+export interface RequestOptions extends RequestInit {
+  timeoutMs?: number;
+  params?: Record<string, string | number | boolean | undefined | null>;
+  headers?: Record<string, string>;
+}
 
 export interface ApiClientConfig {
   baseUrl?: string;
+  timeoutMs?: number;
   defaultHeaders?: Record<string, string>;
 }
 
-export class ApiError extends Error {
-  public status: number;
-  public details?: unknown;
+export type ApiErrorKind =
+  | "HTTP_ERROR"
+  | "NETWORK_ERROR"
+  | "TIMEOUT_ERROR"
+  | "ABORT_ERROR"
+  | "VALIDATION_ERROR";
 
-  constructor(message: string, status: number, details?: unknown) {
-    super(message);
+export class ApiError extends Error {
+  public readonly kind: ApiErrorKind;
+  public readonly status: number;
+  public readonly endpoint: string;
+  public readonly details?: unknown;
+
+  constructor(params: {
+    message: string;
+    kind: ApiErrorKind;
+    status?: number;
+    endpoint: string;
+    details?: unknown;
+  }) {
+    super(params.message);
     this.name = "ApiError";
-    this.status = status;
-    this.details = details;
+    this.kind = params.kind;
+    this.status = params.status ?? 0;
+    this.endpoint = params.endpoint;
+    this.details = sanitizeDetails(params.details);
+  }
+
+  get isNetworkError(): boolean {
+    return this.kind === "NETWORK_ERROR";
+  }
+
+  get isTimeout(): boolean {
+    return this.kind === "TIMEOUT_ERROR";
+  }
+
+  get isAbort(): boolean {
+    return this.kind === "ABORT_ERROR";
+  }
+
+  get isValidationError(): boolean {
+    return this.kind === "VALIDATION_ERROR";
+  }
+
+  get isNotFound(): boolean {
+    return this.status === 404;
+  }
+}
+
+/**
+ * Removes sensitive authentication or system credential markers from error details
+ */
+function sanitizeDetails(details: unknown): unknown {
+  if (!details || typeof details !== "object") return details;
+
+  try {
+    const serialized = JSON.stringify(details);
+    const cleaned = serialized.replace(
+      /"([^"]*?(?:token|bearer|password|secret|authorization|key)[^"]*?)"\s*:\s*"[^"]*"/gi,
+      '"$1": "[REDACTED]"'
+    );
+    return JSON.parse(cleaned);
+  } catch {
+    return "[Unserializable Error Payload]";
   }
 }
 
 export class OmniSightApiClient {
-  private baseUrl: string;
-  private defaultHeaders: Record<string, string>;
+  private readonly baseUrl: string;
+  private readonly defaultTimeoutMs: number;
+  private readonly defaultHeaders: Record<string, string>;
 
   constructor(config: ApiClientConfig = {}) {
-    this.baseUrl =
-      config.baseUrl ||
-      (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) ||
-      "/api";
+    // Resolve base URL from configuration or Vite environment
+    const envBase =
+      typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL
+        ? import.meta.env.VITE_API_BASE_URL
+        : "/api";
+
+    const envTimeout =
+      typeof import.meta !== "undefined" && import.meta.env?.VITE_API_TIMEOUT_MS
+        ? Number(import.meta.env.VITE_API_TIMEOUT_MS)
+        : 10000;
+
+    this.baseUrl = config.baseUrl || envBase;
+    this.defaultTimeoutMs = config.timeoutMs || (Number.isFinite(envTimeout) ? envTimeout : 10000);
     this.defaultHeaders = {
       "Content-Type": "application/json",
       Accept: "application/json",
@@ -53,13 +117,68 @@ export class OmniSightApiClient {
     };
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
-    const headers = { ...this.defaultHeaders, ...(options.headers as Record<string, string>) };
+  public getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  public getDefaultTimeout(): number {
+    return this.defaultTimeoutMs;
+  }
+
+  /**
+   * Executes an HTTP request with timeout protection, signal handling, and standardized error mapping.
+   */
+  public async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+    const cleanEndpoint = endpoint.replace(/^\/+/, "");
+    const cleanBase = this.baseUrl.replace(/\/+$/, "");
+    const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
+
+    // Build URL with query params
+    let url = `${cleanBase}/${cleanEndpoint}`;
+    if (options.params) {
+      const searchParams = new URLSearchParams();
+      for (const [key, val] of Object.entries(options.params)) {
+        if (val !== undefined && val !== null) {
+          searchParams.append(key, String(val));
+        }
+      }
+      const qs = searchParams.toString();
+      if (qs) {
+        url += (url.includes("?") ? "&" : "?") + qs;
+      }
+    }
+
+    // Set up AbortController with timeout
+    const controller = new AbortController();
+    let isTimeoutTriggered = false;
+
+    const timeoutId = setTimeout(() => {
+      isTimeoutTriggered = true;
+      controller.abort();
+    }, timeoutMs);
+
+    // Chain external abort signal if supplied
+    if (options.signal) {
+      options.signal.addEventListener("abort", () => {
+        controller.abort();
+      });
+    }
+
+    const headers = {
+      ...this.defaultHeaders,
+      ...options.headers,
+    };
 
     try {
-      const response = await fetch(url, { ...options, headers });
+      const response = await fetch(url, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
 
+      clearTimeout(timeoutId);
+
+      // Handle non-2xx HTTP responses
       if (!response.ok) {
         let errorDetail: unknown;
         try {
@@ -67,80 +186,100 @@ export class OmniSightApiClient {
         } catch {
           errorDetail = await response.text();
         }
-        throw new ApiError(
-          `API request to ${endpoint} failed with HTTP ${response.status}`,
-          response.status,
-          errorDetail
-        );
+
+        const message =
+          typeof errorDetail === "object" && errorDetail !== null && "detail" in errorDetail
+            ? String((errorDetail as { detail: unknown }).detail)
+            : `API request to ${cleanEndpoint} failed with HTTP ${response.status}`;
+
+        throw new ApiError({
+          message,
+          kind: "HTTP_ERROR",
+          status: response.status,
+          endpoint: cleanEndpoint,
+          details: errorDetail,
+        });
       }
 
+      // Handle empty response bodies (e.g. 204 No Content)
+      if (response.status === 204) {
+        return null as unknown as T;
+      }
+
+      // Parse JSON response
       return (await response.json()) as T;
     } catch (err: unknown) {
-      if (err instanceof ApiError) throw err;
-      throw new ApiError(
-        err instanceof Error ? err.message : "Network request failed",
-        0,
-        err
-      );
+      clearTimeout(timeoutId);
+
+      // Re-throw existing ApiError instances
+      if (err instanceof ApiError) {
+        throw err;
+      }
+
+      // Handle timeout
+      if (isTimeoutTriggered) {
+        throw new ApiError({
+          message: `Request to ${cleanEndpoint} timed out after ${timeoutMs}ms`,
+          kind: "TIMEOUT_ERROR",
+          endpoint: cleanEndpoint,
+        });
+      }
+
+      // Handle external cancellation
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new ApiError({
+          message: `Request to ${cleanEndpoint} was cancelled`,
+          kind: "ABORT_ERROR",
+          endpoint: cleanEndpoint,
+        });
+      }
+
+      // Handle network errors
+      throw new ApiError({
+        message: err instanceof Error ? err.message : "Network request failed",
+        kind: "NETWORK_ERROR",
+        endpoint: cleanEndpoint,
+        details: err,
+      });
     }
   }
 
   /**
-   * GET /api/health
+   * Typed GET request
    */
-  public async getHealth(): Promise<{ status: string }> {
-    return this.request<{ status: string }>("health");
+  public async get<T>(endpoint: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>(endpoint, { ...options, method: "GET" });
   }
 
   /**
-   * GET /api/jobs
+   * Typed POST request
    */
-  public async listJobs(params?: {
-    status?: BackendJobStatus;
-    limit?: number;
-    offset?: number;
-  }): Promise<BackendJobListResponse> {
-    const searchParams = new URLSearchParams();
-    if (params?.status) searchParams.append("status", params.status);
-    if (params?.limit !== undefined) searchParams.append("limit", params.limit.toString());
-    if (params?.offset !== undefined) searchParams.append("offset", params.offset.toString());
-
-    const qs = searchParams.toString();
-    const endpoint = qs ? `jobs?${qs}` : "jobs";
-    return this.request<BackendJobListResponse>(endpoint);
-  }
-
-  /**
-   * GET /api/jobs/{job_id}
-   */
-  public async getJob(jobId: string): Promise<BackendJobResponse> {
-    const cleanId = encodeURIComponent(jobId.replace(/^#/, ""));
-    const data = await this.request<unknown>(`jobs/${cleanId}`);
-
-    if (!isBackendJobResponse(data)) {
-      throw new ApiError(`Invalid job response shape received for #${jobId}`, 500, data);
-    }
-    return data;
-  }
-
-  /**
-   * GET /api/jobs/{job_id}/artifacts
-   */
-  public async getJobArtifacts(jobId: string): Promise<BackendArtifactRef[]> {
-    const cleanId = encodeURIComponent(jobId.replace(/^#/, ""));
-    return this.request<BackendArtifactRef[]>(`jobs/${cleanId}/artifacts`);
-  }
-
-  /**
-   * POST /api/jobs
-   */
-  public async createJob(payload: JobCreateRequest): Promise<BackendJobResponse> {
-    return this.request<BackendJobResponse>("jobs", {
+  public async post<T>(endpoint: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>(endpoint, {
+      ...options,
       method: "POST",
-      body: JSON.stringify(payload),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
+  }
+
+  /**
+   * Typed PUT request
+   */
+  public async put<T>(endpoint: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>(endpoint, {
+      ...options,
+      method: "PUT",
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  }
+
+  /**
+   * Typed DELETE request
+   */
+  public async delete<T>(endpoint: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>(endpoint, { ...options, method: "DELETE" });
   }
 }
 
-// Singleton default client instance
+// Default singleton client instance
 export const apiClient = new OmniSightApiClient();
