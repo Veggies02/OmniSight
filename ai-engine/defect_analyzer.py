@@ -25,6 +25,7 @@ from schemas import (
 )
 from vlm_client import VisionModel, VLMError
 from uncertainty import annotate_findings, get_review_threshold
+from dom_utils import prepare_dom_context
 
 
 # =====================================================================
@@ -393,7 +394,7 @@ def analyze_evidence(
         viewport_width=evidence.viewport.width,
         viewport_height=evidence.viewport.height,
         is_mobile=evidence.viewport.is_mobile,
-        dom_snippet=evidence.dom_snippet,
+        dom_snippet=prepare_dom_context(evidence.dom_snippet),
         step_name=evidence.step_name,
     )
 

@@ -575,3 +575,34 @@ class TestUncertaintyPipeline:
         monkeypatch.setenv("REVIEW_CONFIDENCE_THRESHOLD", "0.2")
         result = analyze_evidence(evidence, MockVisionModel(canned_response=_canned(0.3)))
         assert result.findings[0].requires_human_review is False
+# =====================================================================
+# DOM filtering inside the pipeline
+# =====================================================================
+
+class TestDomFilteringInPipeline:
+    def _spy_on_prompt(self, monkeypatch):
+        import defect_analyzer
+        captured = {}
+        real = defect_analyzer.build_analysis_prompt
+
+        def spy(**kwargs):
+            captured.update(kwargs)
+            return real(**kwargs)
+
+        monkeypatch.setattr(defect_analyzer, "build_analysis_prompt", spy)
+        return captured
+
+    def test_dom_is_filtered_before_prompt(self, evidence, monkeypatch):
+        captured = self._spy_on_prompt(monkeypatch)
+        evidence.dom_snippet = (
+            '<div><p>Hello</p><button id="buy">Buy</button>'
+            '<button hidden>Secret</button></div>'
+        )
+        analyze_evidence(evidence, MockVisionModel())
+        assert captured["dom_snippet"] == '<button id="buy">Buy</button>'
+
+    def test_dom_without_interactive_nodes_is_passed_through(self, evidence, monkeypatch):
+        captured = self._spy_on_prompt(monkeypatch)
+        evidence.dom_snippet = "<p>Only text</p>"
+        analyze_evidence(evidence, MockVisionModel())
+        assert captured["dom_snippet"] == "<p>Only text</p>"
