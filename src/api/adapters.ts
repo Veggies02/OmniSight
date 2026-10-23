@@ -95,10 +95,16 @@ export function adaptBackendJobToInspectionJob(backend: BackendJobResponse): Ins
  * If backend is unreachable or returns an error, cleanly falls back to mock data.
  */
 export async function loadInspectionJobsWithFallback(options?: {
+  status?: BackendJobStatus;
+  limit?: number;
+  offset?: number;
   signal?: AbortSignal;
 }): Promise<{ jobs: InspectionJob[]; isLiveBackend: boolean; error?: string }> {
   try {
-    const response = await jobsService.listJobs({ limit: 50 }, options);
+    const response = await jobsService.listJobs(
+      { status: options?.status, limit: options?.limit ?? 50, offset: options?.offset },
+      { signal: options?.signal }
+    );
     if (response && Array.isArray(response.items) && response.items.length > 0) {
       const adaptedJobs = response.items.map(adaptBackendJobToInspectionJob);
       return { jobs: adaptedJobs, isLiveBackend: true };

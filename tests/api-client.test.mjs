@@ -18,7 +18,11 @@ import assert from "node:assert/strict";
 import { OmniSightApiClient, ApiError } from "../src/api/client.ts";
 import { JobsService } from "../src/api/services/jobsService.ts";
 import { EvidenceService } from "../src/api/services/evidenceService.ts";
-import { adaptBackendJobToInspectionJob, loadInspectionJobsWithFallback } from "../src/api/adapters.ts";
+import {
+  adaptBackendJobToInspectionJob,
+  loadInspectionJobsWithFallback,
+  loadJobDetailsWithFallback,
+} from "../src/api/adapters.ts";
 
 describe("OmniSightApiClient", () => {
   let originalFetch;
@@ -278,6 +282,103 @@ describe("JobsService & EvidenceService", () => {
       assert.equal(result.isLiveBackend, false);
       assert.ok(result.jobs.length > 0);
       assert.ok(result.error);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("loadInspectionJobsWithFallback returns live backend jobs on success", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          {
+            job_id: "JOB-LIVE-1",
+            website_url: "http://localhost:3000/cart",
+            status: "completed",
+            source: "manual",
+            created_at: "2026-10-23T10:00:00Z",
+            updated_at: "2026-10-23T10:01:00Z",
+            artifacts: [],
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      }),
+    });
+
+    try {
+      const result = await loadInspectionJobsWithFallback();
+      assert.equal(result.isLiveBackend, true);
+      assert.equal(result.jobs.length, 1);
+      assert.equal(result.jobs[0].id, "JOB-LIVE-1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("loadJobDetailsWithFallback returns live job on successful API call", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      assert.ok(url.toString().includes("jobs/JOB-LIVE-99"));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          job_id: "JOB-LIVE-99",
+          website_url: "http://localhost:3000/products",
+          status: "failed",
+          source: "ci",
+          created_at: "2026-10-23T12:00:00Z",
+          updated_at: "2026-10-23T12:02:00Z",
+          error: "1 visual regression defect found",
+          artifacts: [],
+        }),
+      };
+    };
+
+    try {
+      const result = await loadJobDetailsWithFallback("JOB-LIVE-99");
+      assert.equal(result.isLiveBackend, true);
+      assert.ok(result.job);
+      assert.equal(result.job.id, "JOB-LIVE-99");
+      assert.equal(result.job.status, "failed");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("loadJobDetailsWithFallback falls back to mock data if backend errors out", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      throw new Error("FastAPI server offline");
+    };
+
+    try {
+      // "JOB-1084" is in mockJobs.ts
+      const result = await loadJobDetailsWithFallback("JOB-1084");
+      assert.equal(result.isLiveBackend, false);
+      assert.ok(result.job);
+      assert.equal(result.job.id, "JOB-1084");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("loadJobDetailsWithFallback returns undefined job if not in backend and not in mock", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({ detail: "Not found" }),
+    });
+
+    try {
+      const result = await loadJobDetailsWithFallback("non-existent-xyz-999");
+      assert.equal(result.job, undefined);
     } finally {
       globalThis.fetch = originalFetch;
     }

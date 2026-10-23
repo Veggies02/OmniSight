@@ -1,31 +1,110 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   PageHeader,
   StatCard,
   StatusBadge,
   EmptyState,
+  LoadingState,
+  ErrorState,
   DefectFindingsReview,
   VisualEvidenceViewer,
   ValidationResults,
   type BadgeStatus,
 } from "../../components/dashboard";
-import {
-  getInspectionJobById,
-  type ValidationStatus,
-} from "../../data/mockJobs";
+import { useInspectionJobDetails } from "../../api";
+import type { ValidationStatus } from "../../data/mockJobs";
 import heroImg from "../../assets/hero.png";
 
 export function DashboardJobDetails() {
   const { id } = useParams<{ id: string }>();
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | undefined>(undefined);
 
-  const job = useMemo(() => {
-    if (!id) return undefined;
-    return getInspectionJobById(id);
-  }, [id]);
+  const { job, loading, error, isLiveBackend, refresh, retry } = useInspectionJobDetails(id);
 
-  // Handle missing or invalid job ID gracefully
+  // Helper for Validation Status Badge
+  const renderValidationBadge = (valStatus?: ValidationStatus) => {
+    if (!valStatus || valStatus === "not-applicable") {
+      return (
+        <span className="validation-na-pill" title="No defects detected; validation not applicable">
+          <span aria-hidden="true">—</span>
+          <span>N/A (Clean Run)</span>
+        </span>
+      );
+    }
+
+    const badgeStatusMap: Record<string, BadgeStatus> = {
+      passed: "passed",
+      failed: "failed",
+      "needs-review": "needs-review",
+      pending: "pending",
+      running: "running",
+    };
+
+    const labelMap: Record<string, string> = {
+      passed: "Validated (Passed)",
+      failed: "Validation Failed",
+      "needs-review": "Needs Review",
+      pending: "Pending Validation",
+      running: "Running Validation",
+    };
+
+    return (
+      <StatusBadge
+        status={badgeStatusMap[valStatus] || "pending"}
+        label={labelMap[valStatus]}
+        size="md"
+      />
+    );
+  };
+
+  // 1. Loading State
+  if (loading && !job) {
+    return (
+      <div className="dashboard-job-details-page">
+        <nav className="job-breadcrumb" aria-label="Breadcrumb navigation">
+          <Link to="/qa">QA Overview</Link>
+          <span className="job-breadcrumb-sep">/</span>
+          <Link to="/qa/jobs">Inspection Jobs</Link>
+          <span className="job-breadcrumb-sep">/</span>
+          <span className="job-breadcrumb-active">Loading #{id || ""}</span>
+        </nav>
+
+        <div style={{ marginTop: "2rem" }}>
+          <LoadingState
+            message={`Loading inspection record #${id || ""}...`}
+            description="Connecting to OmniSight orchestrator and retrieving artifacts"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Fatal Error State (when job is not in backend and not in fallback)
+  if (error && !job) {
+    return (
+      <div className="dashboard-job-details-page">
+        <nav className="job-breadcrumb" aria-label="Breadcrumb navigation">
+          <Link to="/qa">QA Overview</Link>
+          <span className="job-breadcrumb-sep">/</span>
+          <Link to="/qa/jobs">Inspection Jobs</Link>
+          <span className="job-breadcrumb-sep">/</span>
+          <span className="job-breadcrumb-active">Error</span>
+        </nav>
+
+        <div style={{ marginTop: "2rem" }}>
+          <ErrorState
+            title="Failed to Load Inspection Job"
+            message={error}
+            onRetry={retry}
+            retryLabel="Retry Connection"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // 3. Not Found State
   if (!job) {
     return (
       <div className="dashboard-job-details-page">
@@ -53,40 +132,6 @@ export function DashboardJobDetails() {
     );
   }
 
-  // Helper for Validation Status Badge
-  const renderValidationBadge = (valStatus: ValidationStatus) => {
-    if (valStatus === "not-applicable") {
-      return (
-        <span className="validation-na-pill" title="No defects detected; validation not applicable">
-          <span aria-hidden="true">—</span>
-          <span>N/A (Clean Run)</span>
-        </span>
-      );
-    }
-
-    const badgeStatusMap: Record<string, BadgeStatus> = {
-      passed: "passed",
-      failed: "failed",
-      "needs-review": "needs-review",
-      pending: "pending",
-    };
-
-    const labelMap: Record<string, string> = {
-      passed: "Validated (Passed)",
-      failed: "Validation Failed",
-      "needs-review": "Needs Review",
-      pending: "Pending Validation",
-    };
-
-    return (
-      <StatusBadge
-        status={badgeStatusMap[valStatus] || "pending"}
-        label={labelMap[valStatus]}
-        size="md"
-      />
-    );
-  };
-
   return (
     <div className="dashboard-job-details-page">
       {/* 1. Breadcrumb Navigation */}
@@ -105,6 +150,69 @@ export function DashboardJobDetails() {
         description={`Visual scan and self-healing analysis for ${job.application} target route "${job.targetRoute}".`}
         actions={
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+            {/* Live Backend vs Fallback Demo indicator */}
+            {isLiveBackend ? (
+              <span
+                className="dash-meta-badge"
+                style={{
+                  color: "#16a34a",
+                  borderColor: "rgba(34, 197, 94, 0.3)",
+                  background: "rgba(34, 197, 94, 0.1)",
+                }}
+                title="Sourced from live FastAPI backend orchestrator"
+              >
+                <span
+                  className="status-dot-pulse"
+                  style={{ width: 6, height: 6, background: "#22c55e" }}
+                  aria-hidden="true"
+                />
+                <span>Live Backend Job</span>
+              </span>
+            ) : (
+              <span
+                className="dash-meta-badge"
+                style={{
+                  color: "#d97706",
+                  borderColor: "rgba(217, 119, 6, 0.3)",
+                  background: "rgba(217, 119, 6, 0.08)",
+                }}
+                title="Backend offline or unpersisted ID. Sourced from typed demo database."
+              >
+                <span
+                  className="status-dot-pulse"
+                  style={{ width: 6, height: 6, background: "#d97706" }}
+                  aria-hidden="true"
+                />
+                <span>Demo Fallback Job</span>
+              </span>
+            )}
+
+            <button
+              type="button"
+              className={`dash-header-btn ${loading ? "is-refreshing" : ""}`}
+              onClick={refresh}
+              disabled={loading}
+              aria-label="Refresh job record"
+              title="Refetch latest job details and artifacts"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="btn-refresh-icon"
+                aria-hidden="true"
+              >
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                <path d="M16 21h5v-5" />
+              </svg>
+              <span>{loading ? "Refreshing..." : "Refresh"}</span>
+            </button>
+
             <Link to="/qa/jobs" className="dash-header-btn">
               ← Back to Jobs
             </Link>
@@ -124,7 +232,16 @@ export function DashboardJobDetails() {
           badge={<StatusBadge status={job.status} size="sm" />}
           variant={job.status === "passed" ? "success" : job.status === "failed" ? "danger" : "accent"}
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="telemetry-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="telemetry-icon"
+              aria-hidden="true"
+            >
               <path d="M12 2v4" />
               <path d="m16.2 7.8 2.9-2.9" />
               <path d="M18 12h4" />
@@ -140,7 +257,7 @@ export function DashboardJobDetails() {
         <StatCard
           label="Validation Status"
           value={
-            job.validationStatus === "not-applicable"
+            !job.validationStatus || job.validationStatus === "not-applicable"
               ? "Clean / N/A"
               : job.validationStatus === "needs-review"
               ? "Review Staged"
@@ -148,9 +265,24 @@ export function DashboardJobDetails() {
           }
           subtext="Self-healing verification"
           badge={renderValidationBadge(job.validationStatus)}
-          variant={job.validationStatus === "passed" ? "success" : job.validationStatus === "failed" ? "danger" : "default"}
+          variant={
+            job.validationStatus === "passed"
+              ? "success"
+              : job.validationStatus === "failed"
+              ? "danger"
+              : "default"
+          }
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="telemetry-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="telemetry-icon"
+              aria-hidden="true"
+            >
               <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
             </svg>
           }
@@ -169,7 +301,16 @@ export function DashboardJobDetails() {
             </span>
           }
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="telemetry-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="telemetry-icon"
+              aria-hidden="true"
+            >
               <circle cx="12" cy="12" r="10" />
               <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
@@ -184,7 +325,16 @@ export function DashboardJobDetails() {
           variant="default"
           badge={<span className="stat-card-badge" style={{ color: "var(--color-text-muted)" }}>Browser</span>}
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="telemetry-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="telemetry-icon"
+              aria-hidden="true"
+            >
               <rect width="20" height="14" x="2" y="3" rx="2" />
               <line x1="8" y1="21" x2="16" y2="21" />
               <line x1="12" y1="17" x2="12" y2="21" />
@@ -198,13 +348,17 @@ export function DashboardJobDetails() {
         <div className="job-meta-card">
           <span className="job-meta-label">Application Name</span>
           <span className="job-meta-value">{job.application}</span>
-          <span className="job-meta-sub">Target Route: <code>{job.targetRoute}</code></span>
+          <span className="job-meta-sub">
+            Target Route: <code>{job.targetRoute}</code>
+          </span>
         </div>
 
         <div className="job-meta-card">
           <span className="job-meta-label">Started Timestamp</span>
           <span className="job-meta-value">{job.startedAt}</span>
-          <span className="job-meta-sub" title={job.timestamp}>ISO: {job.timestamp}</span>
+          <span className="job-meta-sub" title={job.timestamp}>
+            ISO: {job.timestamp}
+          </span>
         </div>
 
         <div className="job-meta-card">
@@ -245,7 +399,17 @@ export function DashboardJobDetails() {
       <section className="dash-panel" aria-label="Inspection Evidence">
         <div className="dash-panel-header">
           <h2 className="dash-panel-title">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
               <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
               <circle cx="9" cy="9" r="2" />
               <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
@@ -280,7 +444,14 @@ export function DashboardJobDetails() {
             {/* Evidence Artifacts Gallery & Selector */}
             {job.evidence.length > 1 && (
               <div>
-                <h4 style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--color-text-secondary)", marginBottom: "0.75rem" }}>
+                <h4
+                  style={{
+                    fontSize: "0.875rem",
+                    fontWeight: 700,
+                    color: "var(--color-text-secondary)",
+                    marginBottom: "0.75rem",
+                  }}
+                >
                   All Captured Artifacts ({job.evidence.length})
                 </h4>
                 <div className="evidence-grid">
@@ -297,7 +468,9 @@ export function DashboardJobDetails() {
                         }}
                         onClick={() => {
                           setSelectedEvidenceId(evi.id);
-                          document.getElementById("visual-evidence-viewer")?.scrollIntoView({ behavior: "smooth" });
+                          document
+                            .getElementById("visual-evidence-viewer")
+                            ?.scrollIntoView({ behavior: "smooth" });
                         }}
                         role="button"
                         tabIndex={0}
@@ -306,13 +479,20 @@ export function DashboardJobDetails() {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
                             setSelectedEvidenceId(evi.id);
-                            document.getElementById("visual-evidence-viewer")?.scrollIntoView({ behavior: "smooth" });
+                            document
+                              .getElementById("visual-evidence-viewer")
+                              ?.scrollIntoView({ behavior: "smooth" });
                           }
                         }}
                       >
                         <div className="evidence-header">
-                          <h5 className="evidence-title" style={{ fontSize: "0.9rem" }}>{evi.title}</h5>
-                          <span className="defect-category-pill" style={{ textTransform: "capitalize" }}>
+                          <h5 className="evidence-title" style={{ fontSize: "0.9rem" }}>
+                            {evi.title}
+                          </h5>
+                          <span
+                            className="defect-category-pill"
+                            style={{ textTransform: "capitalize" }}
+                          >
                             {evi.type.replace("-", " ")}
                           </span>
                         </div>
@@ -331,8 +511,25 @@ export function DashboardJobDetails() {
                               style={{ maxHeight: 120 }}
                             />
                           ) : (
-                            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.3rem" }}>
-                              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#60a5fa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: "0.3rem",
+                              }}
+                            >
+                              <svg
+                                viewBox="0 0 24 24"
+                                width="28"
+                                height="28"
+                                fill="none"
+                                stroke="#60a5fa"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                              >
                                 <rect width="20" height="14" x="2" y="3" rx="2" />
                                 <line x1="8" y1="21" x2="16" y2="21" />
                                 <line x1="12" y1="17" x2="12" y2="21" />
@@ -348,14 +545,28 @@ export function DashboardJobDetails() {
                         </div>
 
                         {evi.description && (
-                          <p style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)", margin: 0, lineHeight: 1.5 }}>
+                          <p
+                            style={{
+                              fontSize: "0.8rem",
+                              color: "var(--color-text-secondary)",
+                              margin: 0,
+                              lineHeight: 1.5,
+                            }}
+                          >
                             {evi.description}
                           </p>
                         )}
 
                         <div className="evidence-meta-row" style={{ fontSize: "0.75rem" }}>
-                          <span>Captured: <strong>{evi.capturedAt}</strong></span>
-                          <span style={{ color: isSelected ? "var(--color-accent)" : "var(--color-text-muted)", fontWeight: isSelected ? 700 : 500 }}>
+                          <span>
+                            Captured: <strong>{evi.capturedAt}</strong>
+                          </span>
+                          <span
+                            style={{
+                              color: isSelected ? "var(--color-accent)" : "var(--color-text-muted)",
+                              fontWeight: isSelected ? 700 : 500,
+                            }}
+                          >
                             {isSelected ? "Active in Viewer ▲" : "View in Comparison →"}
                           </span>
                         </div>

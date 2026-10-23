@@ -6,112 +6,29 @@ import {
   StatusBadge,
   EmptyState,
   LoadingState,
-  type BadgeStatus,
+  ErrorState,
 } from "../../components/dashboard";
-
-interface DemoJob {
-  id: string;
-  application: string;
-  targetRoute: string;
-  startedAt: string;
-  status: BadgeStatus;
-  defectsCount: number;
-  defectsSummary: string;
-  duration: string;
-}
-
-const INITIAL_DEMO_JOBS: DemoJob[] = [
-  {
-    id: "JOB-1084",
-    application: "OmniShop Storefront",
-    targetRoute: "/products",
-    startedAt: "8 mins ago",
-    status: "running",
-    defectsCount: 0,
-    defectsSummary: "Analysis in progress",
-    duration: "42s",
-  },
-  {
-    id: "JOB-1083",
-    application: "OmniShop Storefront",
-    targetRoute: "/checkout",
-    startedAt: "24 mins ago",
-    status: "failed",
-    defectsCount: 2,
-    defectsSummary: "2 layout overflow faults",
-    duration: "1m 18s",
-  },
-  {
-    id: "JOB-1082",
-    application: "OmniShop Storefront",
-    targetRoute: "/cart",
-    startedAt: "1 hour ago",
-    status: "needs-review",
-    defectsCount: 1,
-    defectsSummary: "1 contrast regression (fix ready)",
-    duration: "54s",
-  },
-  {
-    id: "JOB-1081",
-    application: "OmniShop Storefront",
-    targetRoute: "/",
-    startedAt: "3 hours ago",
-    status: "passed",
-    defectsCount: 0,
-    defectsSummary: "Clean visual scan",
-    duration: "1m 02s",
-  },
-  {
-    id: "JOB-1080",
-    application: "OmniShop Storefront",
-    targetRoute: "/products/1",
-    startedAt: "5 hours ago",
-    status: "passed",
-    defectsCount: 0,
-    defectsSummary: "Clean visual scan",
-    duration: "48s",
-  },
-  {
-    id: "JOB-1079",
-    application: "OmniShop Storefront",
-    targetRoute: "/checkout",
-    startedAt: "Yesterday",
-    status: "passed",
-    defectsCount: 0,
-    defectsSummary: "Clean visual scan",
-    duration: "1m 12s",
-  },
-];
+import { useInspectionJobs } from "../../api";
+import type { InspectionJob } from "../../types/dashboard";
 
 export function DashboardOverview() {
-  const [jobs] = useState<DemoJob[]>(INITIAL_DEMO_JOBS);
+  const { jobs, loading, error, isLiveBackend, refresh, retry } = useInspectionJobs({ limit: 10 });
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>("all");
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState<string>("Just now");
   const [simulateEmpty, setSimulateEmpty] = useState(false);
-
-  // Refresh handler (refreshes state and updates timestamp without calling real backend)
-  const handleRefresh = () => {
-    setIsRefreshing(true);
-    setTimeout(() => {
-      setIsRefreshing(false);
-      const now = new Date();
-      setLastRefreshed(
-        now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-      );
-    }, 450);
-  };
 
   // Filter jobs based on search query, status, and empty simulation
   const filteredJobs = useMemo(() => {
     if (simulateEmpty) return [];
 
-    return jobs.filter((job) => {
+    return jobs.filter((job: InspectionJob) => {
+      const q = searchQuery.toLowerCase().trim();
       const matchesSearch =
-        job.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        job.application.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        job.targetRoute.toLowerCase().includes(searchQuery.toLowerCase());
+        !q ||
+        job.id.toLowerCase().includes(q) ||
+        job.application.toLowerCase().includes(q) ||
+        job.targetRoute.toLowerCase().includes(q) ||
+        (job.defectSummary && job.defectSummary.toLowerCase().includes(q));
 
       const normalizedStatus = job.status.toLowerCase().replace(/[\s_]+/g, "-");
       const matchesStatus =
@@ -132,7 +49,7 @@ export function DashboardOverview() {
     };
 
     const targetList = simulateEmpty ? [] : jobs;
-    targetList.forEach((j) => {
+    targetList.forEach((j: InspectionJob) => {
       const norm = j.status.toLowerCase().replace(/[\s_]+/g, "-");
       if (norm === "passed") counts.passed += 1;
       else if (norm === "failed") counts.failed += 1;
@@ -155,6 +72,17 @@ export function DashboardOverview() {
     };
   }, [jobs, simulateEmpty]);
 
+  // Metric aggregates
+  const totalDefectsCount = useMemo(() => {
+    if (simulateEmpty) return 0;
+    return jobs.reduce((sum, j) => sum + (j.defectsCount || (j.defects?.length ?? 0)), 0);
+  }, [jobs, simulateEmpty]);
+
+  const passedPercentage = useMemo(() => {
+    if (simulateEmpty || jobs.length === 0) return 0;
+    return Math.round((statusCounts.counts.passed / jobs.length) * 100);
+  }, [jobs, statusCounts, simulateEmpty]);
+
   return (
     <div className="dashboard-overview-page">
       {/* ==================================================================
@@ -163,28 +91,70 @@ export function DashboardOverview() {
       <PageHeader
         badge={<span className="hero-pill">P4 Workstream • QA Platform</span>}
         title="QA Overview"
-        description="Monitor UI inspections, detected defects, and repair progress."
+        description="Monitor UI inspections, detected defects, and self-healing validation outcomes."
         actions={
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
-            <span className="dash-meta-badge" title="Demo dataset update tracker">
-              <span className="status-dot-pulse" style={{ width: 5, height: 5 }} aria-hidden="true" />
-              <span>Updated: {lastRefreshed}</span>
-            </span>
+            {/* Live Backend vs Fallback Demo indicator */}
+            {isLiveBackend ? (
+              <span
+                className="dash-meta-badge"
+                style={{
+                  color: "#16a34a",
+                  borderColor: "rgba(34, 197, 94, 0.3)",
+                  background: "rgba(34, 197, 94, 0.1)",
+                }}
+                title="Connected to OmniSight FastAPI backend"
+              >
+                <span
+                  className="status-dot-pulse"
+                  style={{ width: 6, height: 6, background: "#22c55e" }}
+                  aria-hidden="true"
+                />
+                <span>Live Backend API</span>
+              </span>
+            ) : (
+              <span
+                className="dash-meta-badge"
+                style={{
+                  color: "#d97706",
+                  borderColor: "rgba(217, 119, 6, 0.3)",
+                  background: "rgba(217, 119, 6, 0.08)",
+                }}
+                title="Backend offline or unreachable. Displaying typed demonstration data."
+              >
+                <span
+                  className="status-dot-pulse"
+                  style={{ width: 6, height: 6, background: "#d97706" }}
+                  aria-hidden="true"
+                />
+                <span>Demo Data Fallback</span>
+              </span>
+            )}
 
             <button
               type="button"
-              className={`dash-header-btn ${isRefreshing ? "is-refreshing" : ""}`}
-              onClick={handleRefresh}
-              aria-label="Refresh overview demo data"
-              title="Refresh simulated metrics"
+              className={`dash-header-btn ${loading ? "is-refreshing" : ""}`}
+              onClick={refresh}
+              disabled={loading}
+              aria-label="Refresh overview data"
+              title="Fetch latest job telemetry from backend"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="btn-refresh-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="btn-refresh-icon"
+                aria-hidden="true"
+              >
                 <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                 <path d="M3 3v5h5" />
                 <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
                 <path d="M16 21h5v-5" />
               </svg>
-              <span>{isRefreshing ? "Refreshing..." : "Refresh"}</span>
+              <span>{loading ? "Refreshing..." : "Refresh"}</span>
             </button>
 
             <button
@@ -193,16 +163,31 @@ export function DashboardOverview() {
               onClick={() => setSimulateEmpty(!simulateEmpty)}
               title="Toggle empty state demonstration"
             >
-              {simulateEmpty ? "Show Demo Data" : "Simulate Empty"}
+              {simulateEmpty ? "Show Data" : "Simulate Empty"}
             </button>
           </div>
         }
       />
 
-      {/* Refreshing Indicator */}
-      {isRefreshing && (
-        <div style={{ marginBottom: "1.25rem" }}>
-          <LoadingState inline message="Refreshing inspection telemetry..." />
+      {/* Loading Indicator when initial request or refresh */}
+      {loading && jobs.length === 0 && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <LoadingState
+            message="Connecting to OmniSight inspection backend..."
+            description="Loading active job records and telemetry metrics"
+          />
+        </div>
+      )}
+
+      {/* Error state when request failed and no cached jobs */}
+      {error && jobs.length === 0 && !simulateEmpty && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ErrorState
+            title="Failed to Load Inspection Telemetry"
+            message={error}
+            onRetry={retry}
+            retryLabel="Retry Connection"
+          />
         </div>
       )}
 
@@ -212,13 +197,29 @@ export function DashboardOverview() {
       <section className="dash-telemetry-grid" aria-label="QA Summary Metrics">
         <StatCard
           label="Total Inspections"
-          value={simulateEmpty ? "0" : "24"}
-          subtext="Simulated suite executions"
+          value={simulateEmpty ? "0" : String(jobs.length)}
+          subtext={isLiveBackend ? "Live backend records" : "Simulated suite executions"}
           variant="default"
-          trend={simulateEmpty ? undefined : { direction: "up", text: "+12% this week" }}
-          badge={<span className="stat-card-badge" style={{ color: "var(--color-text-muted)" }}>Demo</span>}
+          trend={simulateEmpty ? undefined : { direction: "up", text: `${jobs.length} recorded runs` }}
+          badge={
+            <span
+              className="stat-card-badge"
+              style={{ color: isLiveBackend ? "#22c55e" : "var(--color-text-muted)" }}
+            >
+              {isLiveBackend ? "Live" : "Demo"}
+            </span>
+          }
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="telemetry-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="telemetry-icon"
+              aria-hidden="true"
+            >
               <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
               <path d="M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1Z" />
               <path d="M12 11h4" />
@@ -231,13 +232,22 @@ export function DashboardOverview() {
 
         <StatCard
           label="Passed Inspections"
-          value={simulateEmpty ? "0" : "18"}
-          subtext="75% visual stability"
+          value={simulateEmpty ? "0" : String(statusCounts.counts.passed)}
+          subtext={`${passedPercentage}% visual stability`}
           variant="success"
-          trend={simulateEmpty ? undefined : { direction: "up", text: "3 consecutive clean" }}
+          trend={simulateEmpty ? undefined : { direction: "up", text: `${statusCounts.counts.passed} verified clean` }}
           badge={<StatusBadge status="passed" size="sm" />}
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="telemetry-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="telemetry-icon"
+              aria-hidden="true"
+            >
               <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
               <polyline points="22 4 12 14.01 9 11.01" />
             </svg>
@@ -246,29 +256,47 @@ export function DashboardOverview() {
 
         <StatCard
           label="Defects Detected"
-          value={simulateEmpty ? "0" : "4"}
-          subtext="2 layout, 2 contrast"
+          value={simulateEmpty ? "0" : String(totalDefectsCount)}
+          subtext={`${statusCounts.counts.failed} failed runs`}
           variant="warning"
-          trend={simulateEmpty ? undefined : { direction: "down", text: "-2 resolved" }}
-          badge={<StatusBadge status="failed" size="sm" />}
+          trend={simulateEmpty ? undefined : { direction: totalDefectsCount > 0 ? "neutral" : "up", text: totalDefectsCount > 0 ? "Action required" : "Zero defects" }}
+          badge={<StatusBadge status={totalDefectsCount > 0 ? "failed" : "passed"} size="sm" />}
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="telemetry-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="telemetry-icon"
+              aria-hidden="true"
+            >
               <circle cx="12" cy="12" r="10" />
-              <line x1="12" x2="12" y1="8" y2="12" />
-              <line x1="12" x2="12.01" y1="16" y2="16" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
           }
         />
 
         <StatCard
           label="Pending Reviews"
-          value={simulateEmpty ? "0" : "2"}
+          value={simulateEmpty ? "0" : String(statusCounts.counts.needsReview)}
           subtext="Self-healing fixes staged"
           variant="accent"
           trend={simulateEmpty ? undefined : { direction: "neutral", text: "Awaiting triage" }}
           badge={<StatusBadge status="needs-review" size="sm" />}
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="telemetry-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="telemetry-icon"
+              aria-hidden="true"
+            >
               <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
               <circle cx="12" cy="12" r="3" />
             </svg>
@@ -277,12 +305,22 @@ export function DashboardOverview() {
       </section>
 
       {/* ==================================================================
-          Section D: Status Visualization (Bespoke Segmented Distribution Bar)
+          Section C: Status Visualization (Segmented Distribution Bar)
           ================================================================== */}
       <section className="dash-panel" style={{ marginBottom: "2rem" }} aria-label="Status Distribution">
         <div className="dash-panel-header">
           <h3 className="dash-panel-title">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
               <line x1="18" y1="20" x2="18" y2="10" />
               <line x1="12" y1="20" x2="12" y2="4" />
               <line x1="6" y1="20" x2="6" y2="14" />
@@ -290,12 +328,12 @@ export function DashboardOverview() {
             <span>Inspection Status Distribution</span>
           </h3>
           <span className="dash-panel-badge">
-            {simulateEmpty ? "0 Total Runs" : `${statusCounts.total} Sample Runs`}
+            {simulateEmpty ? "0 Total Runs" : `${statusCounts.total} Runs Monitored`}
           </span>
         </div>
 
         <div className="status-dist-container">
-          {simulateEmpty ? (
+          {simulateEmpty || jobs.length === 0 ? (
             <p style={{ fontSize: "0.85rem", color: "var(--color-text-muted)", margin: 0 }}>
               No inspection runs recorded to visualize.
             </p>
@@ -330,22 +368,30 @@ export function DashboardOverview() {
                 <div className="status-dist-legend-item">
                   <span className="legend-color-dot passed" aria-hidden="true" />
                   <span>Passed:</span>
-                  <span className="legend-count">{statusCounts.counts.passed} ({statusCounts.percentages.passed}%)</span>
+                  <span className="legend-count">
+                    {statusCounts.counts.passed} ({statusCounts.percentages.passed}%)
+                  </span>
                 </div>
                 <div className="status-dist-legend-item">
                   <span className="legend-color-dot running" aria-hidden="true" />
                   <span>Running:</span>
-                  <span className="legend-count">{statusCounts.counts.running} ({statusCounts.percentages.running}%)</span>
+                  <span className="legend-count">
+                    {statusCounts.counts.running} ({statusCounts.percentages.running}%)
+                  </span>
                 </div>
                 <div className="status-dist-legend-item">
                   <span className="legend-color-dot needs-review" aria-hidden="true" />
                   <span>Needs Review:</span>
-                  <span className="legend-count">{statusCounts.counts.needsReview} ({statusCounts.percentages.needsReview}%)</span>
+                  <span className="legend-count">
+                    {statusCounts.counts.needsReview} ({statusCounts.percentages.needsReview}%)
+                  </span>
                 </div>
                 <div className="status-dist-legend-item">
                   <span className="legend-color-dot failed" aria-hidden="true" />
                   <span>Failed:</span>
-                  <span className="legend-count">{statusCounts.counts.failed} ({statusCounts.percentages.failed}%)</span>
+                  <span className="legend-count">
+                    {statusCounts.counts.failed} ({statusCounts.percentages.failed}%)
+                  </span>
                 </div>
               </div>
             </>
@@ -354,18 +400,30 @@ export function DashboardOverview() {
       </section>
 
       {/* ==================================================================
-          Section C: Recent Inspection Jobs Table
+          Section D: Recent Inspection Jobs Table
           ================================================================== */}
       <section className="dash-panel" style={{ marginBottom: "2rem" }} aria-label="Recent Inspection Jobs">
         <div className="dash-panel-header">
           <h3 className="dash-panel-title">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
               <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
               <path d="M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1Z" />
             </svg>
             <span>Recent Inspection Jobs</span>
           </h3>
-          <span className="dash-panel-badge">Mock / Demo Dataset</span>
+          <span className="dash-panel-badge">
+            {isLiveBackend ? "FastAPI Live Stream" : "Demo Fallback Dataset"}
+          </span>
         </div>
 
         {/* Toolbar: Search & Status Filters */}
@@ -373,7 +431,7 @@ export function DashboardOverview() {
           <input
             type="search"
             className="dash-search-input"
-            placeholder="Search by Job ID, route..."
+            placeholder="Search by Job ID, route, summary..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             aria-label="Search inspection jobs"
@@ -399,19 +457,17 @@ export function DashboardOverview() {
           </div>
         </div>
 
-        {/* ================================================================
-            Section E: Empty State when no jobs match
-            ================================================================ */}
+        {/* Empty State when no jobs match */}
         {filteredJobs.length === 0 ? (
           <EmptyState
             title="No Inspection Jobs Found"
             description={
               simulateEmpty
-                ? "The demo empty state is currently active. Click 'Show Demo Data' to display sample inspection jobs."
-                : "No jobs match your current search or status filter criteria. Try resetting the filter to view all runs."
+                ? "The demo empty state is currently active. Click 'Show Data' to display inspection jobs."
+                : "No jobs match your current search or status filter criteria. Try resetting filters or creating a new inspection run."
             }
             action={{
-              label: simulateEmpty ? "Restore Demo Data" : "Clear Filters",
+              label: simulateEmpty ? "Restore Inspection Data" : "Clear Filters",
               onClick: () => {
                 setSimulateEmpty(false);
                 setSearchQuery("");
@@ -434,67 +490,68 @@ export function DashboardOverview() {
                 </tr>
               </thead>
               <tbody>
-                {filteredJobs.map((job) => (
-                  <tr key={job.id}>
-                    {/* Job ID */}
-                    <td className="job-id-cell">
-                      <span>#{job.id}</span>
-                    </td>
+                {filteredJobs.map((job) => {
+                  const defectCount = job.defectsCount || (job.defects?.length ?? 0);
+                  return (
+                    <tr key={job.id}>
+                      {/* Job ID */}
+                      <td className="job-id-cell">
+                        <span>#{job.id}</span>
+                      </td>
 
-                    {/* Application */}
-                    <td>
-                      <div className="job-app-tag">
-                        <span>{job.application}</span>
-                        <code style={{ fontSize: "0.75rem", color: "var(--color-text-muted)" }}>
-                          ({job.targetRoute})
-                        </code>
-                      </div>
-                    </td>
+                      {/* Application */}
+                      <td>
+                        <div className="job-app-tag">
+                          <span>{job.application}</span>
+                          <code style={{ fontSize: "0.75rem", color: "var(--color-text-muted)" }}>
+                            ({job.targetRoute})
+                          </code>
+                        </div>
+                      </td>
 
-                    {/* Started At */}
-                    <td className="job-time-cell">
-                      <span>{job.startedAt}</span>
-                    </td>
+                      {/* Started At */}
+                      <td className="job-time-cell">
+                        <span>{job.startedAt}</span>
+                      </td>
 
-                    {/* Status Badge */}
-                    <td>
-                      <StatusBadge status={job.status} size="sm" />
-                    </td>
+                      {/* Status Badge */}
+                      <td>
+                        <StatusBadge status={job.status} size="sm" />
+                      </td>
 
-                    {/* Defects Found */}
-                    <td>
-                      <div
-                        className={`defects-count-tag ${
-                          job.defectsCount > 0 ? "has-defects" : "clean"
-                        }`}
-                      >
-                        {job.defectsCount > 0 ? (
-                          <>
-                            <span aria-hidden="true">⚠️</span>
-                            <span>{job.defectsSummary}</span>
-                          </>
-                        ) : (
-                          <>
-                            <span aria-hidden="true">✓</span>
-                            <span>0 defects (clean)</span>
-                          </>
-                        )}
-                      </div>
-                    </td>
+                      {/* Defects Found */}
+                      <td>
+                        <div
+                          className={`defects-count-tag ${defectCount > 0 ? "has-defects" : "clean"}`}
+                        >
+                          {defectCount > 0 ? (
+                            <>
+                              <span aria-hidden="true">⚠️</span>
+                              <span>{job.defectSummary || `${defectCount} defect(s)`}</span>
+                            </>
+                          ) : (
+                            <>
+                              <span aria-hidden="true">✓</span>
+                              <span>0 defects (clean)</span>
+                            </>
+                          )}
+                        </div>
+                      </td>
 
-                    {/* Action */}
-                    <td>
-                      <Link
-                        to={`/qa/jobs/${job.id}`}
-                        className="table-action-btn"
-                        aria-label={`View details for ${job.id}`}
-                      >
-                        <span>View Details</span>
-                        <span aria-hidden="true">→</span>
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                      {/* Action */}
+                      <td>
+                        <Link
+                          to={`/qa/jobs/${job.id}`}
+                          className="table-action-btn"
+                          aria-label={`View details for #${job.id}`}
+                        >
+                          <span>View Details</span>
+                          <span aria-hidden="true">→</span>
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -502,13 +559,23 @@ export function DashboardOverview() {
       </section>
 
       {/* ==================================================================
-          Section F: Architecture & Roadmap Status
+          Section E: Architecture & Roadmap Status
           ================================================================== */}
       <section className="dash-status-section" aria-label="Architecture Status">
         <div className="dash-panel">
           <div className="dash-panel-header">
             <h3 className="dash-panel-title">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                width="18"
+                height="18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
                 <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
                 <line x1="8" y1="21" x2="16" y2="21" />
                 <line x1="12" y1="17" x2="12" y2="21" />
@@ -565,7 +632,17 @@ export function DashboardOverview() {
         <div className="dash-panel">
           <div className="dash-panel-header">
             <h3 className="dash-panel-title">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                width="18"
+                height="18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
                 <circle cx="12" cy="12" r="10" />
                 <polyline points="12 6 12 12 16 14" />
               </svg>
@@ -577,35 +654,27 @@ export function DashboardOverview() {
           <div className="roadmap-list">
             <div className="roadmap-step">
               <span className="roadmap-indicator done">✓</span>
-              <span>Day 1: Setup & Architecture Docs</span>
+              <span>Day 1–3: Architecture, Nav & Design System</span>
             </div>
             <div className="roadmap-step">
               <span className="roadmap-indicator done">✓</span>
-              <span>Day 2: Application Shell & Nav</span>
+              <span>Day 4–6: Overview, Job History & Job Details</span>
             </div>
             <div className="roadmap-step">
               <span className="roadmap-indicator done">✓</span>
-              <span>Day 3: Reusable UI Components</span>
+              <span>Day 7–9: Defect Review, Evidence Viewer & Validation</span>
             </div>
             <div className="roadmap-step">
               <span className="roadmap-indicator done">✓</span>
-              <span>Day 4: QA Dashboard Overview</span>
-            </div>
-            <div className="roadmap-step">
-              <span className="roadmap-indicator done">✓</span>
-              <span>Day 5: Searchable Job History</span>
+              <span>Day 10–11: API Contracts & Centralized Client</span>
             </div>
             <div className="roadmap-step">
               <span className="roadmap-indicator active">●</span>
-              <span><strong>Day 6: Inspection Job Details</strong></span>
+              <span><strong>Day 12: Dashboard Backend Integration</strong></span>
             </div>
             <div className="roadmap-step">
-              <span className="roadmap-indicator pending">7</span>
-              <span>Day 7: Defect Findings & Evidence Visualizer</span>
-            </div>
-            <div className="roadmap-step">
-              <span className="roadmap-indicator pending">15</span>
-              <span>Days 15–20: Validation Review & PR Workflows</span>
+              <span className="roadmap-indicator pending">13</span>
+              <span>Days 13–15: Live Polling, Triggers & Self-Healing PRs</span>
             </div>
           </div>
 
@@ -615,7 +684,7 @@ export function DashboardOverview() {
               className="sidebar-link active"
               style={{ justifyContent: "center", borderRadius: "var(--radius-sm)", borderLeft: "none" }}
             >
-              <span>Explore Inspection Jobs →</span>
+              <span>Explore All Inspection Jobs →</span>
             </Link>
           </div>
         </div>

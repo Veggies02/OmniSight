@@ -5,20 +5,18 @@ import {
   StatusBadge,
   EmptyState,
   LoadingState,
+  ErrorState,
   type BadgeStatus,
 } from "../../components/dashboard";
-import {
-  MOCK_INSPECTION_JOBS,
-  type InspectionJob,
-  type ValidationStatus,
-} from "../../data/mockJobs";
+import { useInspectionJobs } from "../../api";
+import type { ValidationStatus } from "../../data/mockJobs";
+import type { InspectionJob } from "../../types/dashboard";
 
 export function DashboardJobs() {
-  const [jobs] = useState<InspectionJob[]>(MOCK_INSPECTION_JOBS);
+  const { jobs, loading, error, isLiveBackend, refresh, retry } = useInspectionJobs();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [validationFilter, setValidationFilter] = useState<string>("all");
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Clear all filters helper
   const handleClearFilters = () => {
@@ -32,8 +30,8 @@ export function DashboardJobs() {
 
   // Filter jobs immediately upon input changes
   const filteredJobs = useMemo(() => {
-    return jobs.filter((job) => {
-      // 1. Search Query filter (matches Job ID, Application, or Target Route)
+    return jobs.filter((job: InspectionJob) => {
+      // 1. Search Query filter (matches Job ID, Application, Target Route, or Defect Summary)
       const q = searchQuery.toLowerCase().trim();
       const matchesSearch =
         !q ||
@@ -54,17 +52,9 @@ export function DashboardJobs() {
     });
   }, [jobs, searchQuery, statusFilter, validationFilter]);
 
-  // Handle simulated dataset refresh
-  const handleRefresh = () => {
-    setIsRefreshing(true);
-    setTimeout(() => {
-      setIsRefreshing(false);
-    }, 400);
-  };
-
   // Helper to render Validation Status badge
-  const renderValidationStatus = (valStatus: ValidationStatus) => {
-    if (valStatus === "not-applicable") {
+  const renderValidationStatus = (valStatus?: ValidationStatus) => {
+    if (!valStatus || valStatus === "not-applicable") {
       return (
         <span className="validation-na-pill" title="No defects detected; validation not applicable">
           <span aria-hidden="true">—</span>
@@ -78,6 +68,7 @@ export function DashboardJobs() {
       failed: "failed",
       "needs-review": "needs-review",
       pending: "pending",
+      running: "running",
     };
 
     const labelMap: Record<string, string> = {
@@ -85,6 +76,7 @@ export function DashboardJobs() {
       failed: "Failed",
       "needs-review": "Needs Review",
       pending: "Pending",
+      running: "Running",
     };
 
     return (
@@ -105,6 +97,43 @@ export function DashboardJobs() {
         description="Audit and filter past automated UI inspection runs, visual defect detections, and self-healing validation outcomes."
         actions={
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+            {/* Live Backend vs Fallback Demo indicator */}
+            {isLiveBackend ? (
+              <span
+                className="dash-meta-badge"
+                style={{
+                  color: "#16a34a",
+                  borderColor: "rgba(34, 197, 94, 0.3)",
+                  background: "rgba(34, 197, 94, 0.1)",
+                }}
+                title="Connected to OmniSight FastAPI backend"
+              >
+                <span
+                  className="status-dot-pulse"
+                  style={{ width: 6, height: 6, background: "#22c55e" }}
+                  aria-hidden="true"
+                />
+                <span>Live Backend</span>
+              </span>
+            ) : (
+              <span
+                className="dash-meta-badge"
+                style={{
+                  color: "#d97706",
+                  borderColor: "rgba(217, 119, 6, 0.3)",
+                  background: "rgba(217, 119, 6, 0.08)",
+                }}
+                title="Backend offline or unreachable. Displaying typed demonstration data."
+              >
+                <span
+                  className="status-dot-pulse"
+                  style={{ width: 6, height: 6, background: "#d97706" }}
+                  aria-hidden="true"
+                />
+                <span>Demo Fallback</span>
+              </span>
+            )}
+
             {hasActiveFilters && (
               <button
                 type="button"
@@ -118,18 +147,28 @@ export function DashboardJobs() {
 
             <button
               type="button"
-              className={`dash-header-btn ${isRefreshing ? "is-refreshing" : ""}`}
-              onClick={handleRefresh}
+              className={`dash-header-btn ${loading ? "is-refreshing" : ""}`}
+              onClick={refresh}
+              disabled={loading}
               aria-label="Refresh job history"
-              title="Refresh simulated jobs"
+              title="Fetch latest job records from backend"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="btn-refresh-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="btn-refresh-icon"
+                aria-hidden="true"
+              >
                 <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                 <path d="M3 3v5h5" />
                 <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
                 <path d="M16 21h5v-5" />
               </svg>
-              <span>{isRefreshing ? "Refreshing..." : "Refresh"}</span>
+              <span>{loading ? "Refreshing..." : "Refresh"}</span>
             </button>
 
             <Link to="/qa" className="dash-header-btn">
@@ -139,10 +178,68 @@ export function DashboardJobs() {
         }
       />
 
-      {/* Refresh indicator */}
-      {isRefreshing && (
-        <div style={{ marginBottom: "1.25rem" }}>
-          <LoadingState inline message="Refreshing inspection job dataset..." />
+      {/* Offline notification banner if backend failed and fallback is active */}
+      {error && jobs.length > 0 && !isLiveBackend && (
+        <div
+          style={{
+            marginBottom: "1.25rem",
+            padding: "0.75rem 1rem",
+            borderRadius: "var(--radius-sm)",
+            backgroundColor: "rgba(217, 119, 6, 0.1)",
+            border: "1px solid rgba(217, 119, 6, 0.3)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: "0.85rem",
+            color: "#d97706",
+            gap: "1rem",
+          }}
+          role="status"
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <span aria-hidden="true">⚠️</span>
+            <span>
+              <strong>Backend Offline:</strong> {error}. Showing demonstration records.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={retry}
+            style={{
+              background: "transparent",
+              border: "1px solid #d97706",
+              borderRadius: "4px",
+              padding: "0.2rem 0.6rem",
+              color: "#d97706",
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: "0.8rem",
+            }}
+          >
+            Retry Connection
+          </button>
+        </div>
+      )}
+
+      {/* Full loading state when no records exist yet */}
+      {loading && jobs.length === 0 && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <LoadingState
+            message="Connecting to OmniSight inspection backend..."
+            description="Querying inspection jobs list and artifact manifests"
+          />
+        </div>
+      )}
+
+      {/* Full error state when request failed and no fallback jobs */}
+      {error && jobs.length === 0 && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ErrorState
+            title="Failed to Retrieve Inspection Jobs"
+            message={error}
+            onRetry={retry}
+            retryLabel="Retry Connection"
+          />
         </div>
       )}
 
@@ -151,7 +248,17 @@ export function DashboardJobs() {
         {/* Panel Header */}
         <div className="dash-panel-header">
           <h2 className="dash-panel-title">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
               <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
               <path d="M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1Z" />
               <path d="M12 11h4" />
@@ -161,7 +268,9 @@ export function DashboardJobs() {
             </svg>
             <span>All Inspection Runs</span>
           </h2>
-          <span className="dash-panel-badge">Mock / Demo Dataset</span>
+          <span className="dash-panel-badge">
+            {isLiveBackend ? "FastAPI Live Dataset" : "Demo Fallback Dataset"}
+          </span>
         </div>
 
         {/* 3. Search and Filters Toolbar */}
@@ -195,6 +304,7 @@ export function DashboardJobs() {
                 <option value="running">Running</option>
                 <option value="passed">Passed</option>
                 <option value="failed">Failed</option>
+                <option value="needs-review">Needs Review</option>
                 <option value="pending">Pending</option>
               </select>
             </label>
@@ -214,6 +324,7 @@ export function DashboardJobs() {
                 <option value="needs-review">Needs Review</option>
                 <option value="failed">Validation Failed</option>
                 <option value="pending">Pending</option>
+                <option value="running">Running</option>
                 <option value="not-applicable">N/A (Clean Run)</option>
               </select>
             </label>
@@ -224,29 +335,19 @@ export function DashboardJobs() {
         <div className="filter-summary-row">
           <div>
             Showing <strong>{filteredJobs.length}</strong> of <strong>{jobs.length}</strong> inspection jobs
-            {hasActiveFilters && (
-              <span style={{ marginLeft: "0.5rem" }}>
-                (filtered)
-              </span>
-            )}
+            {hasActiveFilters && <span style={{ marginLeft: "0.5rem" }}>(filtered)</span>}
           </div>
 
           {hasActiveFilters && (
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               {searchQuery && (
-                <span className="active-filter-chip">
-                  Query: "{searchQuery}"
-                </span>
+                <span className="active-filter-chip">Query: "{searchQuery}"</span>
               )}
               {statusFilter !== "all" && (
-                <span className="active-filter-chip">
-                  Status: {statusFilter}
-                </span>
+                <span className="active-filter-chip">Status: {statusFilter}</span>
               )}
               {validationFilter !== "all" && (
-                <span className="active-filter-chip">
-                  Validation: {validationFilter}
-                </span>
+                <span className="active-filter-chip">Validation: {validationFilter}</span>
               )}
               <button
                 type="button"
@@ -264,7 +365,7 @@ export function DashboardJobs() {
           {filteredJobs.length === 0 ? (
             <EmptyState
               title="No Inspection Jobs Match Your Filters"
-              description="No inspection records match the current search query or status criteria. Try clearing your filters or searching with a different keyword."
+              description="No inspection records match the current search query or status criteria. Try clearing your filters or creating a new inspection run."
               action={{
                 label: "Clear All Filters",
                 onClick: handleClearFilters,
@@ -285,72 +386,73 @@ export function DashboardJobs() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredJobs.map((job) => (
-                    <tr key={job.id}>
-                      {/* Job ID */}
-                      <td className="job-id-cell">
-                        <span>#{job.id}</span>
-                      </td>
+                  {filteredJobs.map((job) => {
+                    const defectsCount = job.defectsCount ?? (job.defects?.length || 0);
+                    return (
+                      <tr key={job.id}>
+                        {/* Job ID */}
+                        <td className="job-id-cell">
+                          <span>#{job.id}</span>
+                        </td>
 
-                      {/* Application & Target Route */}
-                      <td>
-                        <div className="job-app-tag">
-                          <span>{job.application}</span>
-                          <code style={{ fontSize: "0.75rem", color: "var(--color-text-muted)" }}>
-                            ({job.targetRoute})
-                          </code>
-                        </div>
-                      </td>
+                        {/* Application & Target Route */}
+                        <td>
+                          <div className="job-app-tag">
+                            <span>{job.application}</span>
+                            <code style={{ fontSize: "0.75rem", color: "var(--color-text-muted)" }}>
+                              ({job.targetRoute})
+                            </code>
+                          </div>
+                        </td>
 
-                      {/* Date / Time */}
-                      <td className="job-time-cell">
-                        <span title={job.timestamp}>{job.startedAt}</span>
-                      </td>
+                        {/* Date / Time */}
+                        <td className="job-time-cell">
+                          <span title={job.timestamp}>{job.startedAt}</span>
+                        </td>
 
-                      {/* Inspection Status */}
-                      <td>
-                        <StatusBadge status={job.status} size="sm" />
-                      </td>
+                        {/* Inspection Status */}
+                        <td>
+                          <StatusBadge status={job.status} size="sm" />
+                        </td>
 
-                      {/* Number of defects detected */}
-                      <td>
-                        <div
-                          className={`defects-count-tag ${
-                            job.defectsCount > 0 ? "has-defects" : "clean"
-                          }`}
-                        >
-                          {job.defectsCount > 0 ? (
-                            <>
-                              <span aria-hidden="true">⚠️</span>
-                              <span>{job.defectsCount} {job.defectsCount === 1 ? "defect" : "defects"}</span>
-                            </>
-                          ) : (
-                            <>
-                              <span aria-hidden="true">✓</span>
-                              <span>0 defects</span>
-                            </>
-                          )}
-                        </div>
-                      </td>
+                        {/* Number of defects detected */}
+                        <td>
+                          <div
+                            className={`defects-count-tag ${defectsCount > 0 ? "has-defects" : "clean"}`}
+                          >
+                            {defectsCount > 0 ? (
+                              <>
+                                <span aria-hidden="true">⚠️</span>
+                                <span>
+                                  {defectsCount} {defectsCount === 1 ? "defect" : "defects"}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <span aria-hidden="true">✓</span>
+                                <span>0 defects</span>
+                              </>
+                            )}
+                          </div>
+                        </td>
 
-                      {/* Validation Status */}
-                      <td>
-                        {renderValidationStatus(job.validationStatus)}
-                      </td>
+                        {/* Validation Status */}
+                        <td>{renderValidationStatus(job.validationStatus)}</td>
 
-                      {/* Action to view job details */}
-                      <td>
-                        <Link
-                          to={`/qa/jobs/${job.id}`}
-                          className="table-action-btn"
-                          aria-label={`View details for ${job.id}`}
-                        >
-                          <span>View Details</span>
-                          <span aria-hidden="true">→</span>
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
+                        {/* Action to view job details */}
+                        <td>
+                          <Link
+                            to={`/qa/jobs/${job.id}`}
+                            className="table-action-btn"
+                            aria-label={`View details for #${job.id}`}
+                          >
+                            <span>View Details</span>
+                            <span aria-hidden="true">→</span>
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
