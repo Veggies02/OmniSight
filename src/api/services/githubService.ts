@@ -12,6 +12,7 @@
 import { apiClient, OmniSightApiClient, type RequestOptions } from "../client.ts";
 import type { GitHubPullRequest } from "../../types/contracts.ts";
 import type { InspectionJob } from "../../types/dashboard.ts";
+import type { RepositoryPermissionReport } from "../../services/github/types.ts";
 
 export class ClientGitHubService {
   private client: OmniSightApiClient;
@@ -51,6 +52,25 @@ export class ClientGitHubService {
     const noUnresolvedDefects = job.defectsCount === 0 || job.validationStatus === "passed";
 
     return isPassedStatus && isValidationPassed && noUnresolvedDefects;
+  }
+
+  /**
+   * Queries repository permissions via backend proxy without handling credentials in the browser.
+   * GET /api/github/permissions?owner={owner}&repo={repo}
+   */
+  public async checkRepoPermissions(
+    owner: string,
+    repo: string,
+    options?: RequestOptions
+  ): Promise<RepositoryPermissionReport | null> {
+    try {
+      return await this.client.get<RepositoryPermissionReport>("github/permissions", {
+        ...options,
+        params: { owner, repo },
+      });
+    } catch {
+      return null;
+    }
   }
 }
 

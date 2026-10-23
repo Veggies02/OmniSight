@@ -2,7 +2,7 @@
  * OmniSight GitHub Integration Service Types & Safety Contracts
  *
  * Defines contracts for server-side GitHub operations, validation gates,
- * pull request metadata, and repository state queries.
+ * pull request metadata, identity verification, and repository permissions.
  */
 
 export interface GitHubRepoMetadata {
@@ -43,6 +43,51 @@ export interface GitHubPullRequestMetadata {
   updatedAt: string;
   author: string;
   reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED";
+}
+
+export interface AuthenticatedIdentity {
+  login: string;
+  id: number;
+  type: "User" | "Bot" | "Organization" | "Unknown";
+  authMethod: "token" | "app_installation" | "none";
+  scopes?: string[];
+}
+
+export interface RepositoryPermissions {
+  canRead: boolean;
+  canWrite: boolean;
+  canAdmin: boolean;
+  hasRequiredPermissions: boolean; // canRead && canWrite && !isArchived
+}
+
+export type PermissionErrorCode =
+  | "MISSING_CREDENTIALS"
+  | "INVALID_CREDENTIALS"
+  | "REPO_NOT_FOUND"
+  | "INSUFFICIENT_PERMISSIONS"
+  | "REPO_ARCHIVED"
+  | "REPO_NOT_ALLOWED"
+  | "RATE_LIMITED"
+  | "API_ERROR";
+
+export interface RepositoryPermissionReport {
+  authenticated: boolean;
+  identity: AuthenticatedIdentity | null;
+  repository: {
+    owner: string;
+    name: string;
+    fullName: string;
+    isPrivate: boolean;
+    isArchived: boolean;
+    defaultBranch: string;
+  } | null;
+  permissions: RepositoryPermissions;
+  isTargetRepoAllowed: boolean;
+  error?: {
+    code: PermissionErrorCode;
+    message: string;
+    help: string;
+  };
 }
 
 export interface ValidationGateStatus {
@@ -128,5 +173,7 @@ export interface GitHubServiceConfig {
   token?: string; // Server-side GITHUB_TOKEN or OMNISIGHT_GITHUB_TOKEN
   baseUrl?: string; // Default: https://api.github.com
   defaultBaseBranch?: string; // Default: main
+  allowedRepositories?: string[]; // Target repository allowlist (e.g. ["Veggies02/OmniSight"])
+  defaultRepo?: string; // Default target repository in owner/repo format
   timeoutMs?: number;
 }

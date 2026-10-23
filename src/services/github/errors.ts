@@ -8,6 +8,9 @@ export type GitHubErrorKind =
   | "NOT_FOUND"
   | "AUTHENTICATION_ERROR"
   | "PERMISSION_DENIED"
+  | "INSUFFICIENT_PERMISSIONS"
+  | "REPO_NOT_ALLOWED"
+  | "REPO_ARCHIVED"
   | "RATE_LIMIT_EXCEEDED"
   | "NETWORK_ERROR"
   | "API_ERROR";
@@ -58,6 +61,53 @@ export class ProtectedBranchError extends GitHubIntegrationError {
     });
     this.name = "ProtectedBranchError";
     this.branch = branch;
+  }
+}
+
+export class InsufficientPermissionsError extends GitHubIntegrationError {
+  public readonly requiredPermission: "read" | "write" | "admin";
+  public readonly repository: string;
+
+  constructor(repository: string, requiredPermission: "read" | "write" | "admin" = "write") {
+    super({
+      message: `Insufficient permissions on repository "${repository}". The authenticated GitHub identity lacks ${requiredPermission.toUpperCase()} permission required for this operation.`,
+      kind: "INSUFFICIENT_PERMISSIONS",
+      status: 403,
+      details: { repository, requiredPermission },
+    });
+    this.name = "InsufficientPermissionsError";
+    this.repository = repository;
+    this.requiredPermission = requiredPermission;
+  }
+}
+
+export class RepositoryNotAllowedError extends GitHubIntegrationError {
+  public readonly repository: string;
+
+  constructor(repository: string, allowedRepos?: readonly string[]) {
+    super({
+      message: `Repository "${repository}" is not in the approved target allowlist${allowedRepos && allowedRepos.length > 0 ? ` (allowed: ${allowedRepos.join(", ")})` : ""}. Automated repairs are restricted to configured repositories.`,
+      kind: "REPO_NOT_ALLOWED",
+      status: 403,
+      details: { repository, allowedRepos },
+    });
+    this.name = "RepositoryNotAllowedError";
+    this.repository = repository;
+  }
+}
+
+export class ArchivedRepositoryError extends GitHubIntegrationError {
+  public readonly repository: string;
+
+  constructor(repository: string) {
+    super({
+      message: `Repository "${repository}" is archived. GitHub prevents creating branches or commits in archived repositories.`,
+      kind: "REPO_ARCHIVED",
+      status: 403,
+      details: { repository },
+    });
+    this.name = "ArchivedRepositoryError";
+    this.repository = repository;
   }
 }
 
@@ -115,6 +165,9 @@ export function sanitizeDetails(details: unknown): unknown {
     ).replace(
       /gh[pousr]_[A-Za-z0-9_]{16,255}/g,
       "[REDACTED_GITHUB_TOKEN]"
+    ).replace(
+      /github_pat_[A-Za-z0-9_]{22,255}/g,
+      "[REDACTED_GITHUB_PAT]"
     );
     return JSON.parse(cleaned);
   } catch {

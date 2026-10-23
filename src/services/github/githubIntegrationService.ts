@@ -4,6 +4,8 @@
  * Implements server-side GitHub operations with strict safety guardrails:
  * - Direct REST API communication using standard Fetch API (zero external bloat)
  * - Safe credential isolation (reads process.env.GITHUB_TOKEN server-side; never exposed to browser)
+ * - Identity and permission verification (confirms read vs. write permissions before mutation)
+ * - Repository allowlist enforcement: blocks operations outside authorized target repositories
  * - Validation Gate enforcement: blocks branch creation/commits unless validation explicitly passed
  * - Protected branch enforcement: blocks any direct write to main, master, production, etc.
  * - Idempotent branch and commit preparation
@@ -14,6 +16,8 @@ import type {
   GitHubRepoMetadata,
   GitHubBranchInfo,
   GitHubPullRequestMetadata,
+  AuthenticatedIdentity,
+  RepositoryPermissionReport,
   PrepareRepairBranchParams,
   PrepareRepairBranchResult,
   PrepareRepairCommitParams,
@@ -27,11 +31,15 @@ import {
   GitHubNotFoundError,
   GitHubRateLimitError,
   GitHubAuthenticationError,
+  RepositoryNotAllowedError,
   sanitizeDetails,
 } from "./errors.ts";
 import {
   assertValidationPassed,
   assertNotProtectedBranch,
+  assertTargetRepoAllowed,
+  assertRepoNotArchived,
+  assertWritePermission,
   buildRepairBranchName,
   validateCommitMessage,
 } from "./validationGate.ts";
@@ -40,6 +48,8 @@ export class GitHubIntegrationService {
   private readonly baseUrl: string;
   private readonly token?: string;
   private readonly defaultBaseBranch: string;
+  private readonly allowedRepositories?: readonly string[];
+  private readonly defaultRepo?: string;
   private readonly timeoutMs: number;
 
   constructor(config: GitHubServiceConfig = {}) {
@@ -47,22 +57,44 @@ export class GitHubIntegrationService {
     this.defaultBaseBranch = config.defaultBaseBranch || "main";
     this.timeoutMs = config.timeoutMs || 15000;
 
-    // Securely resolve token: configuration object or server-side process environment
+    // Securely resolve token and environment config: configuration object or server-side process environment
     let resolvedToken = config.token;
+    let envAllowedRepos: string[] | undefined = config.allowedRepositories;
+    let envDefaultRepo = config.defaultRepo;
+
     const processEnv = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env;
-    if (!resolvedToken && processEnv) {
-      resolvedToken = processEnv.GITHUB_TOKEN || processEnv.OMNISIGHT_GITHUB_TOKEN;
+    if (processEnv) {
+      if (!resolvedToken) {
+        resolvedToken = processEnv.GITHUB_TOKEN || processEnv.OMNISIGHT_GITHUB_TOKEN;
+      }
+      if (!envAllowedRepos && processEnv.OMNISIGHT_GITHUB_ALLOWED_REPOS) {
+        envAllowedRepos = processEnv.OMNISIGHT_GITHUB_ALLOWED_REPOS.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+      if (!envDefaultRepo && processEnv.OMNISIGHT_TARGET_REPO) {
+        envDefaultRepo = processEnv.OMNISIGHT_TARGET_REPO.trim();
+      }
     }
+
     this.token = resolvedToken;
+    this.allowedRepositories = envAllowedRepos;
+    this.defaultRepo = envDefaultRepo;
+  }
+
+  public getDefaultRepo(): string | undefined {
+    return this.defaultRepo;
+  }
+
+  public getAllowedRepositories(): readonly string[] | undefined {
+    return this.allowedRepositories;
   }
 
   /**
-   * Internal HTTP request helper with rate-limiting detection, token injection, and error redaction.
+   * Internal HTTP request helper returning data, response headers, and status code.
    */
-  private async request<T>(
+  private async requestWithHeaders<T>(
     endpoint: string,
     options: RequestInit = {}
-  ): Promise<T> {
+  ): Promise<{ data: T; headers: Headers; status: number }> {
     const cleanEndpoint = endpoint.replace(/^\//, "");
     const url = `${this.baseUrl}/${cleanEndpoint}`;
 
@@ -123,10 +155,11 @@ export class GitHubIntegrationService {
 
       // Handle 204 No Content
       if (response.status === 204) {
-        return undefined as unknown as T;
+        return { data: undefined as unknown as T, headers: response.headers, status: response.status };
       }
 
-      return (await response.json()) as T;
+      const data = (await response.json()) as T;
+      return { data, headers: response.headers, status: response.status };
     } catch (err: unknown) {
       if (err instanceof GitHubIntegrationError) {
         throw err;
@@ -149,6 +182,231 @@ export class GitHubIntegrationService {
       });
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const { data } = await this.requestWithHeaders<T>(endpoint, options);
+    return data;
+  }
+
+  /**
+   * Retrieves the authenticated user/bot identity associated with the configured token.
+   * GET /user
+   */
+  public async getAuthenticatedIdentity(): Promise<AuthenticatedIdentity> {
+    if (!this.token) {
+      throw new GitHubAuthenticationError(
+        "Authentication required: Server-side GITHUB_TOKEN or OMNISIGHT_GITHUB_TOKEN not configured."
+      );
+    }
+
+    try {
+      const { data, headers } = await this.requestWithHeaders<any>("user");
+      const scopesHeader = headers.get("x-oauth-scopes");
+      const scopes = scopesHeader ? scopesHeader.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+
+      const authMethod = this.token.startsWith("ghs_") ? "app_installation" : "token";
+      const identityType =
+        data.type === "Bot"
+          ? "Bot"
+          : data.type === "Organization"
+          ? "Organization"
+          : "User";
+
+      return {
+        login: data.login || "authenticated-user",
+        id: data.id || 0,
+        type: identityType,
+        authMethod,
+        scopes,
+      };
+    } catch (err: unknown) {
+      // If /user is forbidden (e.g. GitHub App installation tokens do not have a /user profile),
+      // attempt fallback inspection or return app identity
+      if (err instanceof GitHubIntegrationError && (err.status === 403 || err.status === 404)) {
+        if (this.token.startsWith("ghs_")) {
+          return {
+            login: "omnisight-app[bot]",
+            id: 0,
+            type: "Bot",
+            authMethod: "app_installation",
+          };
+        }
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Verifies the authenticated identity and audits repository access and permissions.
+   * Confirms read vs. write access and checks target repository allowlist.
+   */
+  public async verifyRepositoryAccess(owner: string, repo: string): Promise<RepositoryPermissionReport> {
+    const targetFullName = `${owner}/${repo}`;
+
+    // 1. Check repository allowlist first
+    try {
+      assertTargetRepoAllowed(targetFullName, this.allowedRepositories);
+    } catch (err: unknown) {
+      if (err instanceof RepositoryNotAllowedError) {
+        return {
+          authenticated: Boolean(this.token),
+          identity: null,
+          repository: null,
+          permissions: { canRead: false, canWrite: false, canAdmin: false, hasRequiredPermissions: false },
+          isTargetRepoAllowed: false,
+          error: {
+            code: "REPO_NOT_ALLOWED",
+            message: err.message,
+            help: `Add "${targetFullName}" to OMNISIGHT_GITHUB_ALLOWED_REPOS environment variable to authorize operations.`,
+          },
+        };
+      }
+      throw err;
+    }
+
+    // 2. Check token presence
+    if (!this.token) {
+      return {
+        authenticated: false,
+        identity: null,
+        repository: null,
+        permissions: { canRead: false, canWrite: false, canAdmin: false, hasRequiredPermissions: false },
+        isTargetRepoAllowed: true,
+        error: {
+          code: "MISSING_CREDENTIALS",
+          message: "No GitHub credentials configured in server environment.",
+          help: "Set GITHUB_TOKEN or OMNISIGHT_GITHUB_TOKEN with 'contents:write' and 'pull_requests:write' permissions in your backend environment.",
+        },
+      };
+    }
+
+    // 3. Resolve identity
+    let identity: AuthenticatedIdentity | null = null;
+    try {
+      identity = await this.getAuthenticatedIdentity();
+    } catch (err: unknown) {
+      if (err instanceof GitHubAuthenticationError) {
+        return {
+          authenticated: false,
+          identity: null,
+          repository: null,
+          permissions: { canRead: false, canWrite: false, canAdmin: false, hasRequiredPermissions: false },
+          isTargetRepoAllowed: true,
+          error: {
+            code: "INVALID_CREDENTIALS",
+            message: "Configured GitHub token was rejected by GitHub API (401 Unauthorized).",
+            help: "The token may have expired, been revoked, or is mistyped. Generate a fresh personal access token or app installation token.",
+          },
+        };
+      }
+      if (err instanceof GitHubRateLimitError) {
+        return {
+          authenticated: true,
+          identity: null,
+          repository: null,
+          permissions: { canRead: false, canWrite: false, canAdmin: false, hasRequiredPermissions: false },
+          isTargetRepoAllowed: true,
+          error: {
+            code: "RATE_LIMITED",
+            message: err.message,
+            help: "Wait for the rate limit window to reset before attempting further GitHub operations.",
+          },
+        };
+      }
+    }
+
+    // 4. Retrieve repository metadata & permission flags
+    try {
+      const repoMeta = await this.getRepository(owner, repo);
+
+      const canRead = Boolean(repoMeta.permissions?.pull ?? true);
+      const canWrite = Boolean(repoMeta.permissions?.push ?? false);
+      const canAdmin = Boolean(repoMeta.permissions?.admin ?? false);
+      const isArchived = repoMeta.isArchived;
+
+      const hasRequiredPermissions = canRead && canWrite && !isArchived;
+
+      let error: RepositoryPermissionReport["error"] = undefined;
+
+      if (isArchived) {
+        error = {
+          code: "REPO_ARCHIVED",
+          message: `Repository "${targetFullName}" is archived.`,
+          help: "GitHub disallows creating branches or commits in archived repositories. Unarchive the repository to enable self-healing.",
+        };
+      } else if (!canWrite) {
+        error = {
+          code: "INSUFFICIENT_PERMISSIONS",
+          message: `Authenticated identity "${identity?.login || "user"}" has READ access to "${targetFullName}" but lacks WRITE permission.`,
+          help: "Ensure your fine-grained token has Repository permission 'Contents: Read and write' and 'Pull requests: Read and write'.",
+        };
+      }
+
+      return {
+        authenticated: true,
+        identity,
+        repository: {
+          owner: repoMeta.owner,
+          name: repoMeta.name,
+          fullName: repoMeta.fullName,
+          isPrivate: repoMeta.isPrivate,
+          isArchived: repoMeta.isArchived,
+          defaultBranch: repoMeta.defaultBranch,
+        },
+        permissions: {
+          canRead,
+          canWrite,
+          canAdmin,
+          hasRequiredPermissions,
+        },
+        isTargetRepoAllowed: true,
+        error,
+      };
+    } catch (err: unknown) {
+      if (err instanceof GitHubNotFoundError) {
+        return {
+          authenticated: true,
+          identity,
+          repository: null,
+          permissions: { canRead: false, canWrite: false, canAdmin: false, hasRequiredPermissions: false },
+          isTargetRepoAllowed: true,
+          error: {
+            code: "REPO_NOT_FOUND",
+            message: `Repository "${targetFullName}" was not found or the token does not have read access.`,
+            help: "Confirm repository spelling and ensure the token has been granted access to this repository.",
+          },
+        };
+      }
+      if (err instanceof GitHubRateLimitError) {
+        return {
+          authenticated: true,
+          identity,
+          repository: null,
+          permissions: { canRead: false, canWrite: false, canAdmin: false, hasRequiredPermissions: false },
+          isTargetRepoAllowed: true,
+          error: {
+            code: "RATE_LIMITED",
+            message: err.message,
+            help: "Wait for the rate limit window to reset before attempting further GitHub operations.",
+          },
+        };
+      }
+
+      const msg = err instanceof Error ? err.message : "Failed to verify repository permissions";
+      return {
+        authenticated: true,
+        identity,
+        repository: null,
+        permissions: { canRead: false, canWrite: false, canAdmin: false, hasRequiredPermissions: false },
+        isTargetRepoAllowed: true,
+        error: {
+          code: "API_ERROR",
+          message: msg,
+          help: "Check network connectivity and GitHub API status.",
+        },
+      };
     }
   }
 
@@ -226,26 +484,37 @@ export class GitHubIntegrationService {
    * Prepares a repair branch from an approved base branch.
    *
    * SAFETY GATES ENFORCED:
-   * 1. Requires explicit validation passage (status === "passed", failedChecks === 0).
-   * 2. Cannot target or write to protected base branches.
-   * 3. Validates branch name format against strict git ref standards.
-   * 4. Idempotent: if branch already exists with matching base, avoids duplicate creation.
+   * 1. Restricts operations to configured target repository allowlist.
+   * 2. Requires explicit validation passage (status === "passed", failedChecks === 0).
+   * 3. Confirms identity has write permissions before attempting branch creation.
+   * 4. Cannot target or write to protected base branches.
+   * 5. Validates branch name format against strict git ref standards.
+   * 6. Idempotent: if branch already exists with matching base, avoids duplicate creation.
    */
   public async prepareRepairBranch(
     params: PrepareRepairBranchParams
   ): Promise<PrepareRepairBranchResult> {
-    // 1. Enforce validation gate
+    const targetFullName = `${params.owner}/${params.repo}`;
+
+    // 1. Enforce repository allowlist
+    assertTargetRepoAllowed(targetFullName, this.allowedRepositories);
+
+    // 2. Enforce validation gate
     assertValidationPassed(params.validation);
 
-    // 2. Compute canonical branch name and verify it is not protected
+    // 3. Compute canonical branch name and verify it is not protected
     const branchName = buildRepairBranchName(params.jobId, params.findingId, params.branchSuffix);
     assertNotProtectedBranch(branchName);
 
-    // 3. Resolve base branch
+    // 4. Resolve base branch
     const baseBranch = params.baseBranch || this.defaultBaseBranch;
 
-    // 4. Retrieve base branch commit SHA
-    const baseBranchInfo = await this.getBranch(params.owner, params.repo, baseBranch);
+    // 5. Retrieve base branch commit SHA and verify write permission
+    const [baseBranchInfo, repoMeta] = await Promise.all([
+      this.getBranch(params.owner, params.repo, baseBranch),
+      this.getRepository(params.owner, params.repo),
+    ]);
+
     if (!baseBranchInfo.commitSha) {
       throw new GitHubIntegrationError({
         message: `Base branch "${baseBranch}" commit SHA could not be resolved.`,
@@ -253,7 +522,11 @@ export class GitHubIntegrationService {
       });
     }
 
-    // 5. Check if repair branch already exists (idempotency guard)
+    // 6. Enforce write permission & non-archived status
+    assertRepoNotArchived(repoMeta.isArchived, repoMeta.fullName);
+    assertWritePermission(Boolean(repoMeta.permissions?.push ?? true), repoMeta.fullName);
+
+    // 7. Check if repair branch already exists (idempotency guard)
     try {
       const existingBranch = await this.getBranch(params.owner, params.repo, branchName);
       if (existingBranch) {
@@ -273,7 +546,7 @@ export class GitHubIntegrationService {
       }
     }
 
-    // 6. Create git reference for repair branch: POST /repos/{owner}/{repo}/git/refs
+    // 8. Create git reference for repair branch: POST /repos/{owner}/{repo}/git/refs
     const refData = await this.request<any>(`repos/${params.owner}/${params.repo}/git/refs`, {
       method: "POST",
       body: JSON.stringify({
@@ -296,21 +569,28 @@ export class GitHubIntegrationService {
    * Prepares and stages a commit containing validated repair changes.
    *
    * SAFETY GATES ENFORCED:
-   * 1. Requires explicit validation passage.
-   * 2. Refuses commits to protected branches (main, master, etc.).
-   * 3. Validates commit message structure and attribution.
-   * 4. Requires non-empty file changes.
+   * 1. Restricts operations to configured target repository allowlist.
+   * 2. Requires explicit validation passage.
+   * 3. Confirms identity has write permissions.
+   * 4. Refuses commits to protected branches (main, master, etc.).
+   * 5. Validates commit message structure and attribution.
+   * 6. Requires non-empty file changes.
    */
   public async prepareRepairCommit(
     params: PrepareRepairCommitParams
   ): Promise<PrepareRepairCommitResult> {
-    // 1. Enforce validation gate
+    const targetFullName = `${params.owner}/${params.repo}`;
+
+    // 1. Enforce repository allowlist
+    assertTargetRepoAllowed(targetFullName, this.allowedRepositories);
+
+    // 2. Enforce validation gate
     assertValidationPassed(params.validation);
 
-    // 2. Refuse direct commit to protected branch
+    // 3. Refuse direct commit to protected branch
     assertNotProtectedBranch(params.branch);
 
-    // 3. Validate commit message and changes
+    // 4. Validate commit message and changes
     const validatedMessage = validateCommitMessage(params.commitMessage);
     if (!Array.isArray(params.changes) || params.changes.length === 0) {
       throw new GitHubIntegrationError({
@@ -319,11 +599,18 @@ export class GitHubIntegrationService {
       });
     }
 
-    // 4. Retrieve current HEAD of target repair branch
-    const branchInfo = await this.getBranch(params.owner, params.repo, params.branch);
+    // 5. Verify write permissions & retrieve current HEAD of target repair branch
+    const [branchInfo, repoMeta] = await Promise.all([
+      this.getBranch(params.owner, params.repo, params.branch),
+      this.getRepository(params.owner, params.repo),
+    ]);
+
+    assertRepoNotArchived(repoMeta.isArchived, repoMeta.fullName);
+    assertWritePermission(Boolean(repoMeta.permissions?.push ?? true), repoMeta.fullName);
+
     const parentSha = branchInfo.commitSha;
 
-    // 5. Create Git tree with the updated file changes: POST /repos/{owner}/{repo}/git/trees
+    // 6. Create Git tree with the updated file changes: POST /repos/{owner}/{repo}/git/trees
     const treePayload = {
       base_tree: parentSha,
       tree: params.changes.map((file) => ({
@@ -339,7 +626,7 @@ export class GitHubIntegrationService {
       body: JSON.stringify(treePayload),
     });
 
-    // 6. Create Git commit: POST /repos/{owner}/{repo}/git/commits
+    // 7. Create Git commit: POST /repos/{owner}/{repo}/git/commits
     const commitPayload = {
       message: `${validatedMessage}\n\nOmniSight-Job-ID: ${params.jobId}\nOmniSight-Finding-ID: ${params.findingId}\nOmniSight-Validated: true`,
       tree: treeData.sha,
@@ -351,7 +638,7 @@ export class GitHubIntegrationService {
       body: JSON.stringify(commitPayload),
     });
 
-    // 7. Update branch reference to new commit: PATCH /repos/{owner}/{repo}/git/refs/heads/{branch}
+    // 8. Update branch reference to new commit: PATCH /repos/{owner}/{repo}/git/refs/heads/{branch}
     const cleanBranch = params.branch.replace(/^refs\/heads\//, "");
     await this.request<any>(`repos/${params.owner}/${params.repo}/git/refs/heads/${cleanBranch}`, {
       method: "PATCH",

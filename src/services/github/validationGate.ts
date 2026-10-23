@@ -5,10 +5,18 @@
  * - Never push or write to protected base branches (main, master, prod, etc.)
  * - Never create automated repair branches or commits without explicit validation passage
  * - Validate git branch names and commit messages to prevent shell injection or illegal refs
+ * - Restrict operations to configured target repository allowlist
+ * - Verify that the identity has write permission before attempting mutations
  */
 
 import type { ValidationGateStatus } from "./types.ts";
-import { ValidationGateError, ProtectedBranchError } from "./errors.ts";
+import {
+  ValidationGateError,
+  ProtectedBranchError,
+  InsufficientPermissionsError,
+  RepositoryNotAllowedError,
+  ArchivedRepositoryError,
+} from "./errors.ts";
 
 /**
  * Branches that are protected from automated repair commits and writes
@@ -53,6 +61,49 @@ export function assertNotProtectedBranch(branch: string): void {
       branch,
       `Safety violation: Automated repairs may not write directly to protected branch "${branch}". Must create an isolated repair branch.`
     );
+  }
+}
+
+/**
+ * Asserts that the requested target repository is permitted by the configured allowlist.
+ * If allowedRepos is configured, repoFullName must be in the list (case-insensitive).
+ */
+export function assertTargetRepoAllowed(
+  repoFullName: string,
+  allowedRepos?: readonly string[]
+): void {
+  if (!repoFullName || typeof repoFullName !== "string") {
+    throw new RepositoryNotAllowedError("undefined", allowedRepos);
+  }
+
+  // If no allowlist is configured, allow any valid owner/repo
+  if (!allowedRepos || allowedRepos.length === 0) {
+    return;
+  }
+
+  const cleanTarget = repoFullName.trim().toLowerCase();
+  const isMatch = allowedRepos.some((r) => r.trim().toLowerCase() === cleanTarget);
+
+  if (!isMatch) {
+    throw new RepositoryNotAllowedError(repoFullName, allowedRepos);
+  }
+}
+
+/**
+ * Asserts that the target repository is not archived.
+ */
+export function assertRepoNotArchived(isArchived: boolean, repoFullName: string): void {
+  if (isArchived) {
+    throw new ArchivedRepositoryError(repoFullName);
+  }
+}
+
+/**
+ * Asserts that the authenticated identity has write permissions on the repository.
+ */
+export function assertWritePermission(canWrite: boolean, repoFullName: string): void {
+  if (!canWrite) {
+    throw new InsufficientPermissionsError(repoFullName, "write");
   }
 }
 
