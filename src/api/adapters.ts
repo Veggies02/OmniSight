@@ -11,6 +11,7 @@
 import type {
   BackendJobResponse,
   BackendArtifactRef,
+  BackendJobStatus,
 } from "../types/contracts.ts";
 import {
   type InspectionJob,

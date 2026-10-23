@@ -8,4 +8,5 @@ export * from "./services/jobsService.ts";
 export * from "./services/evidenceService.ts";
 export * from "./services/defectsService.ts";
 export * from "./services/validationService.ts";
+export * from "./services/githubService.ts";
 export * from "./hooks/index.ts";
