@@ -315,6 +315,14 @@ export class VisualEvidenceHarness {
     return this.runId;
   }
 
+  public getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  public getOutputDir(): string {
+    return this.outputDir;
+  }
+
   public getRunDirectory(): string {
     return path.join(this.outputDir, this.runId);
   }
@@ -535,9 +543,99 @@ export class VisualEvidenceHarness {
 }
 
 // CLI entry point
+export function parseCaptureCliArgs(argv: string[]): CaptureOptions {
+  const options: CaptureOptions = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--run-id") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("--")) {
+        throw new Error("Missing value for --run-id");
+      }
+      options.runId = argv[++i];
+    } else if (arg.startsWith("--run-id=")) {
+      const val = arg.slice("--run-id=".length);
+      if (!val) throw new Error("Missing value for --run-id");
+      options.runId = val;
+    } else if (arg === "--base-url") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("--")) {
+        throw new Error("Missing value for --base-url");
+      }
+      options.baseUrl = argv[++i];
+    } else if (arg.startsWith("--base-url=")) {
+      const val = arg.slice("--base-url=".length);
+      if (!val) throw new Error("Missing value for --base-url");
+      options.baseUrl = val;
+    } else if (arg === "--output-dir") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("--")) {
+        throw new Error("Missing value for --output-dir");
+      }
+      options.outputDir = argv[++i];
+    } else if (arg.startsWith("--output-dir=")) {
+      const val = arg.slice("--output-dir=".length);
+      if (!val) throw new Error("Missing value for --output-dir");
+      options.outputDir = val;
+    } else if (arg.startsWith("--")) {
+      throw new Error(`Unknown option: '${arg}'`);
+    } else {
+      throw new Error(`Unexpected argument: '${arg}'`);
+    }
+  }
+
+  // Validate runId if provided: alphanumeric, hyphen, underscore only, no path separators
+  if (options.runId !== undefined) {
+    const trimmed = options.runId.trim();
+    if (!trimmed || !/^[A-Za-z0-9_-]+$/.test(trimmed)) {
+      throw new Error(`Invalid --run-id: '${options.runId}'. Must contain only alphanumeric, hyphen, or underscore characters.`);
+    }
+    options.runId = trimmed;
+  }
+
+  // Validate baseUrl if provided: valid http/https URL
+  if (options.baseUrl !== undefined) {
+    const trimmed = options.baseUrl.trim();
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("Must use http or https protocol");
+      }
+      options.baseUrl = trimmed.replace(/\/+$/, ""); // normalize trailing slash
+    } catch (e: any) {
+      throw new Error(`Invalid --base-url: '${options.baseUrl}'. Must be a valid HTTP/HTTPS URL.`);
+    }
+  }
+
+  // Validate outputDir if provided: must resolve to safe path without directory traversal escape
+  if (options.outputDir !== undefined) {
+    const trimmed = options.outputDir.trim();
+    if (!trimmed) {
+      throw new Error("Invalid --output-dir: path cannot be empty.");
+    }
+    const resolved = path.resolve(process.cwd(), trimmed);
+    const repoRoot = process.cwd();
+    // Allow paths inside the repository, or an explicit directory
+    if (trimmed.includes("..") && !resolved.startsWith(repoRoot)) {
+      throw new Error(`Invalid --output-dir: '${options.outputDir}'. Path traversal outside repository root is forbidden.`);
+    }
+    options.outputDir = resolved;
+  }
+
+  return options;
+}
+
 if (process.argv[1] && process.argv[1].endsWith("capture-visual-evidence.ts")) {
-  const harness = new VisualEvidenceHarness();
+  let options: CaptureOptions = {};
+  try {
+    options = parseCaptureCliArgs(process.argv.slice(2));
+  } catch (err: any) {
+    console.error(`CLI argument error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const harness = new VisualEvidenceHarness(options);
   console.log(`Starting Visual Evidence Capture Harness (Run ID: ${harness.getRunId()})...`);
+  console.log(`- Base URL: ${(harness as any).baseUrl}`);
+  console.log(`- Output Directory: ${harness.getRunDirectory()}`);
+
   harness
     .executeCapture()
     .then((manifest) => {
