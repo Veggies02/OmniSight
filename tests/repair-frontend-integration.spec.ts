@@ -184,4 +184,49 @@ test.describe("Frontend Repair Review to FastAPI Backend Integration Tests", () 
     await expect(page.getByTestId("repair-job-summary")).toContainText("Execution Duration: 14.2s");
     await expect(page.getByTestId("repair-job-summary")).toContainText("job-poll-mock-456");
   });
+
+  test("5. blocks approval and execution when backend approval fails", async ({ page }) => {
+    await page.goto("/review/proposals/prop_product-image-distortion_001");
+
+    // Inject linked backend job
+    await page.evaluate(() => {
+      const stored = JSON.parse(localStorage.getItem("omnisight:review-proposals") || "[]");
+      const target = stored.find((p: any) => p.proposalId === "prop_product-image-distortion_001");
+      if (target) {
+        target.backendJobId = "job-unauth-789";
+        localStorage.setItem("omnisight:review-proposals", JSON.stringify(stored));
+      }
+    });
+
+    // Mock 401 unauthorized on approval endpoint
+    await page.route("**/jobs/job-unauth-789/approval", async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Missing or wrong X-Operator-Token." }),
+      });
+    });
+
+    // Click approve
+    await page.getByTestId("btn-approve").click();
+    await page.getByTestId("btn-confirm-dialog").click();
+
+    // Verify error notification is displayed
+    await expect(page.getByTestId("notification-banner")).toBeVisible();
+    await expect(page.getByTestId("notification-banner")).toContainText("Missing or wrong X-Operator-Token");
+
+    // Ensure status remains PENDING_REVIEW because backend refused approval
+    await expect(page.getByTestId("detail-review-status")).toHaveText("PENDING_REVIEW");
+
+    // 'Execute Isolated Repair' button must NOT appear
+    await expect(page.getByRole("button", { name: "Execute Isolated Repair" })).not.toBeVisible();
+  });
+
+  test("6. verifies client does not leak operator token into browser storage", async ({ page }) => {
+    await page.goto("/review");
+    const sessionToken = await page.evaluate(() => window.sessionStorage.getItem("omnisight:operator-token"));
+    const localToken = await page.evaluate(() => window.localStorage.getItem("omnisight:operator-token"));
+    expect(sessionToken).toBeNull();
+    expect(localToken).toBeNull();
+  });
 });

@@ -128,7 +128,9 @@ export class LocalStorageReviewRepository implements IReviewRepository {
       try {
         await this.apiClient.recordApproval(associatedJobId, reviewer);
       } catch (err: any) {
-        console.warn(`Backend approval sync for job ${associatedJobId} failed:`, err.message);
+        throw new Error(
+          `Failed to record human approval in backend for job ${associatedJobId}: ${err.message || String(err)}`
+        );
       }
     }
 

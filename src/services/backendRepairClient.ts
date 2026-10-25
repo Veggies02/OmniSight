@@ -93,13 +93,19 @@ export class BackendRepairError extends Error {
 export interface BackendRepairClientConfig {
   baseUrl?: string;
   timeoutMs?: number;
-  getOperatorToken?: () => string | null;
+  /**
+   * Optional hook for injecting authorization headers when running behind a
+   * trusted server proxy or secure session gateway.
+   * Privileged backend operator tokens must NEVER be stored in browser storage
+   * (sessionStorage / localStorage) or Vite environment variables.
+   */
+  getAuthHeader?: () => Record<string, string>;
 }
 
 export class BackendRepairClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
-  private readonly getOperatorToken: () => string | null;
+  private readonly getAuthHeader?: () => Record<string, string>;
 
   constructor(config: BackendRepairClientConfig = {}) {
     const envBase =
@@ -109,16 +115,7 @@ export class BackendRepairClient {
 
     this.baseUrl = (config.baseUrl ?? envBase).replace(/\/+$/, "");
     this.timeoutMs = config.timeoutMs ?? 15000;
-    this.getOperatorToken =
-      config.getOperatorToken ??
-      (() => {
-        if (typeof window === "undefined") return null;
-        try {
-          return window.sessionStorage.getItem("omnisight:operator-token");
-        } catch {
-          return null;
-        }
-      });
+    this.getAuthHeader = config.getAuthHeader;
   }
 
   public getBaseUrl(): string {
@@ -141,11 +138,9 @@ export class BackendRepairClient {
       headers["Content-Type"] = "application/json";
     }
 
-    if (options.requireAuth) {
-      const token = this.getOperatorToken();
-      if (token) {
-        headers["X-Operator-Token"] = token;
-      }
+    if (options.requireAuth && this.getAuthHeader) {
+      const authHeaders = this.getAuthHeader();
+      Object.assign(headers, authHeaders);
     }
 
     const controller = new AbortController();
