@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ReviewSidebar } from "../../components/review/ReviewSidebar";
 import { ReviewDecisionDialog } from "../../components/review/ReviewDecisionDialog";
+import { EvidenceViewer } from "../../components/review/EvidenceViewer";
 import { reviewRepository } from "../../services/reviewRepository";
 import { type ReviewProposalItem } from "../../types/review-types";
 
@@ -393,53 +394,12 @@ export const ProposalDetailPage: React.FC = () => {
               Comparison between clean baseline render and defective state under identical browser viewport.
             </p>
 
-            <div className="evidence-comparison-grid">
-              <div className="evidence-side" data-testid="baseline-evidence-side">
-                <div className="evidence-label-bar">
-                  <span className="badge-side-clean">Clean Baseline</span>
-                  <span className="viewport-tag">
-                    {proposal.visualEvidence?.viewport.width} × {proposal.visualEvidence?.viewport.height}
-                  </span>
-                </div>
-                <div className="evidence-image-container">
-                  {proposal.visualEvidence?.baselineScreenshotUrl ? (
-                    <img
-                      src={proposal.visualEvidence.baselineScreenshotUrl}
-                      alt="Baseline clean screenshot"
-                      className="evidence-img"
-                      data-testid="baseline-image"
-                    />
-                  ) : (
-                    <div className="image-placeholder" data-testid="baseline-placeholder">
-                      Clean Baseline Screenshot Not Available
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="evidence-side" data-testid="defective-evidence-side">
-                <div className="evidence-label-bar">
-                  <span className="badge-side-defective">Defective State</span>
-                  <span className="viewport-tag">
-                    {proposal.visualEvidence?.viewport.width} × {proposal.visualEvidence?.viewport.height}
-                  </span>
-                </div>
-                <div className="evidence-image-container">
-                  {proposal.visualEvidence?.defectiveScreenshotUrl ? (
-                    <img
-                      src={proposal.visualEvidence.defectiveScreenshotUrl}
-                      alt="Defective state screenshot"
-                      className="evidence-img"
-                      data-testid="defective-image"
-                    />
-                  ) : (
-                    <div className="image-placeholder" data-testid="defective-placeholder">
-                      Defective Screenshot Not Available
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+            <EvidenceViewer
+              scenarioId={proposal.scenarioId}
+              defectCategory={proposal.defectCategory}
+              visualEvidence={proposal.visualEvidence}
+              repairResult={repairJobResult}
+            />
 
             {proposal.visualEvidence?.measurements && (
               <div className="measurements-box" data-testid="measurements-box">

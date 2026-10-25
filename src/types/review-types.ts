@@ -55,6 +55,7 @@ export interface VisualEvidencePair {
   viewport: { width: number; height: number };
   baselineScreenshotUrl: string;
   defectiveScreenshotUrl: string;
+  postRepairScreenshotUrl?: string;
   pageTitle: string;
   measurements?: Record<string, any>;
 }
