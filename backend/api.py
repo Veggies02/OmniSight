@@ -4,36 +4,58 @@ Flow:  POST /webhooks/ci  or  POST /jobs
          -> job is saved in SQLite with status "queued"
          -> a background task asks the BrowserRunner to inspect the site
               queued -> inspecting -> analyzing   (or -> failed with an error message)
-         -> GET /jobs/{job_id} shows status, the inspection summary and artifact references
+         -> a proposal is attached      POST /jobs/{id}/proposal   analyzing -> repair_proposed
+         -> a human approves it         POST /jobs/{id}/approval   (records who and when)
+         -> the repair is executed      POST /jobs/{id}/repair     repair_proposed -> applying_patch
+              -> completed (all checks passed) or failed (reason and report stored on the job)
+         -> GET /jobs/{job_id} shows status, stage, inspection, approval, repair and artifacts
 
-Week 1 uses the MOCK runner, so every result is labelled as mock.
+The three repair-flow endpoints need the header  X-Operator-Token  to match the environment
+variable OMNISIGHT_OPERATOR_TOKEN. If that variable is not set they are DISABLED (503), so a
+forgotten setting can never leave repairs open to anyone. This is a stop-gap for demos, not
+real user authentication.
 """
+import hmac
+import json
 import logging
 import os
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from browser_runner import BrowserRunner, RunnerError, runner_from_env
 from job_schemas import (
+    ApprovalRequest,
+    ArtifactDraft,
     ArtifactRef,
     BrowserResultNote,
     CIWebhookRequest,
     CIWebhookResponse,
+    InvalidTransitionError,
     Inspection,
     JobCreateRequest,
     JobListResponse,
     JobResponse,
+    JobStateError,
     JobStatus,
+    ProposalRequest,
 )
-from job_store import JobStore
+from job_store import JobNotFoundError, JobStore
+from repair_runner import (
+    RepairApproval,
+    RepairPreflightError,
+    RepairResult,
+    RepairRunner,
+    repair_runner_from_env,
+)
 
 logger = logging.getLogger("omnisight.backend")
 
 DEFAULT_DB_PATH = Path(__file__).with_name("jobs.db")
 SUPPORTED_CI_EVENTS = {"build_success"}
+MAX_PROPOSAL_BYTES = 200_000
 
 
 def run_inspection(store: JobStore, runner: BrowserRunner, job_id: str, website_url: str) -> None:
@@ -65,13 +87,59 @@ def run_inspection(store: JobStore, runner: BrowserRunner, job_id: str, website_
         except Exception:  # noqa: BLE001
             logger.exception("job %s could not be marked failed", job_id)
 
-def create_app(db_path: Optional[Path] = None, runner: Optional[BrowserRunner] = None) -> FastAPI:
+
+def _repair_artifacts(result: RepairResult) -> List[ArtifactDraft]:
+    drafts = []
+    if result.proposal_path:
+        drafts.append(ArtifactDraft(kind="other", uri=result.proposal_path, description="Approved proposal given to the repair CLI"))
+    if result.report_path:
+        drafts.append(ArtifactDraft(kind="other", uri=result.report_path, description="Repair execution report"))
+    return drafts
+
+
+def run_repair(store: JobStore, runner: RepairRunner, job_id: str) -> None:
+    """Background task. Never raises: the outcome, or any failure, is recorded on the job.
+    The job is already in applying_patch when this starts."""
+    try:
+        job = store.get_job(job_id)
+        if job is None or not job.get("proposal") or not job.get("approval"):
+            raise RepairPreflightError("not_approved", "Job has no stored proposal and approval.")
+        result = runner.run(job_id, job["proposal"], RepairApproval(**job["approval"]))
+        store.add_artifacts(job_id, _repair_artifacts(result))
+        if result.passed:
+            store.update_status(job_id, JobStatus.COMPLETED, repair=result.model_dump())
+        else:
+            store.update_status(job_id, JobStatus.FAILED, error=result.message, repair=result.model_dump())
+        logger.info("job %s repair finished: %s", job_id, result.outcome)
+    except RepairPreflightError as exc:
+        logger.error("job %s repair refused: %s", job_id, exc)
+        _mark_failed(store, job_id, f"Repair refused ({exc.code}): {exc}")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("job %s failed during repair", job_id)
+        _mark_failed(store, job_id, f"{type(exc).__name__}: {exc}")
+
+
+def _mark_failed(store: JobStore, job_id: str, message: str) -> None:
+    try:
+        store.update_status(job_id, JobStatus.FAILED, error=message)
+    except Exception:  # noqa: BLE001
+        logger.exception("job %s could not be marked failed", job_id)
+
+
+def create_app(
+    db_path: Optional[Path] = None,
+    runner: Optional[BrowserRunner] = None,
+    repair_runner: Optional[RepairRunner] = None,
+    operator_token: Optional[str] = None,
+) -> FastAPI:
     store = JobStore(db_path or os.getenv("OMNISIGHT_DB_PATH") or DEFAULT_DB_PATH)
     browser_runner = runner or runner_from_env()
+    repairer = repair_runner or repair_runner_from_env()
+    token = operator_token if operator_token is not None else os.getenv("OMNISIGHT_OPERATOR_TOKEN", "")
 
     app = FastAPI(
         title="OmniSight Backend",
-        version="0.1.0",
+        version="0.2.0",
         description="Job intake, status tracking and orchestration for OmniSight (Person 3).",
     )
 
@@ -83,6 +151,15 @@ def create_app(db_path: Optional[Path] = None, runner: Optional[BrowserRunner] =
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    def require_operator(supplied: Optional[str]) -> None:
+        if not token:
+            raise HTTPException(
+                status_code=503,
+                detail="Repair actions are disabled: set OMNISIGHT_OPERATOR_TOKEN on the server.",
+            )
+        if not supplied or not hmac.compare_digest(supplied.encode(), token.encode()):
+            raise HTTPException(status_code=401, detail="Missing or wrong X-Operator-Token.")
 
     router = APIRouter()
 
@@ -121,6 +198,63 @@ def create_app(db_path: Optional[Path] = None, runner: Optional[BrowserRunner] =
             raise HTTPException(status_code=404, detail="Job not found")
         return job["artifacts"]
 
+    # ------------------------------------------------------------ repair flow
+    @router.post("/jobs/{job_id}/proposal", response_model=JobResponse)
+    def attach_proposal(
+        job_id: str, request: ProposalRequest, x_operator_token: Optional[str] = Header(default=None)
+    ):
+        require_operator(x_operator_token)
+        proposal = dict(request.proposal)
+        if not isinstance(proposal.get("proposalId"), str) or not proposal["proposalId"]:
+            raise HTTPException(status_code=422, detail="Proposal needs a proposalId string.")
+        if len(json.dumps(proposal)) > MAX_PROPOSAL_BYTES:
+            raise HTTPException(status_code=422, detail="Proposal is too large.")
+        # Whatever the proposal claims about review is discarded: approval has one source only.
+        proposal["humanReviewStatus"] = "pending_review"
+        proposal.pop("reviewedBy", None)
+        proposal.pop("reviewedAt", None)
+        try:
+            return store.update_status(job_id, JobStatus.REPAIR_PROPOSED, proposal=proposal)
+        except JobNotFoundError:
+            raise HTTPException(status_code=404, detail="Job not found")
+        except InvalidTransitionError:
+            raise HTTPException(status_code=409, detail="A proposal can only be attached to a job that finished inspection (status analyzing).")
+
+    @router.post("/jobs/{job_id}/approval", response_model=JobResponse)
+    def approve_proposal(
+        job_id: str, request: ApprovalRequest, x_operator_token: Optional[str] = Header(default=None)
+    ):
+        require_operator(x_operator_token)
+        try:
+            return store.record_approval(job_id, request.reviewed_by)
+        except JobNotFoundError:
+            raise HTTPException(status_code=404, detail="Job not found")
+        except JobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @router.post("/jobs/{job_id}/repair", status_code=202, response_model=JobResponse)
+    def execute_repair(
+        job_id: str, background_tasks: BackgroundTasks, x_operator_token: Optional[str] = Header(default=None)
+    ):
+        require_operator(x_operator_token)
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job["status"] != JobStatus.REPAIR_PROPOSED.value or not job["proposal"]:
+            raise HTTPException(status_code=409, detail="Only a job with an attached proposal can be repaired.")
+        if not job["approval"]:
+            raise HTTPException(status_code=409, detail="This proposal has not been approved by a human reviewer.")
+        if repairer.is_busy():
+            raise HTTPException(status_code=409, detail="Another repair is running. Try again when it finishes.")
+        try:
+            # Moving to applying_patch is the atomic claim: a second request fails this check.
+            claimed = store.update_status(job_id, JobStatus.APPLYING_PATCH)
+        except InvalidTransitionError:
+            raise HTTPException(status_code=409, detail="This job's repair has already been started.")
+        background_tasks.add_task(run_repair, store, repairer, job_id)
+        return claimed
+
+    # ------------------------------------------------------------------- CI
     @router.post("/webhooks/ci", status_code=201, response_model=CIWebhookResponse)
     def ci_webhook(request: CIWebhookRequest, background_tasks: BackgroundTasks):
         if request.event_type not in SUPPORTED_CI_EVENTS:

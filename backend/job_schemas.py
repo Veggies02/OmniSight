@@ -5,9 +5,11 @@ Named job_schemas.py (not schemas.py) so it never collides with ai-engine/schema
 when both modules are imported together in Week 2.
 """
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Set
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from pydantic import AliasChoices, AnyHttpUrl, BaseModel, Field
+
+from repair_runner import RepairApproval, RepairResult
 
 
 # --------------------------------------------------------------------------- #
@@ -22,7 +24,7 @@ class JobStatus(str, Enum):
     VALIDATING = "validating"
     PR_CREATED = "pr_created"
     NEEDS_REVIEW = "needs_review"
-    COMPLETED = "completed"  # inspection finished, nothing to repair
+    COMPLETED = "completed"  # inspection finished with nothing to repair, or a repair passed
     FAILED = "failed"
 
 
@@ -37,7 +39,9 @@ ALLOWED_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
         JobStatus.FAILED,
     },
     JobStatus.REPAIR_PROPOSED: {JobStatus.APPLYING_PATCH, JobStatus.NEEDS_REVIEW, JobStatus.FAILED},
-    JobStatus.APPLYING_PATCH: {JobStatus.VALIDATING, JobStatus.FAILED},
+    # The repair CLI runs patch, build, tests and visual checks as ONE process, so the backend
+    # sees applying_patch until it ends and then moves straight to completed or failed.
+    JobStatus.APPLYING_PATCH: {JobStatus.VALIDATING, JobStatus.COMPLETED, JobStatus.FAILED},
     JobStatus.VALIDATING: {JobStatus.PR_CREATED, JobStatus.NEEDS_REVIEW, JobStatus.FAILED},
     JobStatus.PR_CREATED: set(),
     JobStatus.NEEDS_REVIEW: set(),
@@ -45,9 +49,24 @@ ALLOWED_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
     JobStatus.FAILED: set(),
 }
 
+# The finer-grained `stage` that goes with each status (agreed with Ajay for the dashboard).
+# Terminal statuses are not listed: the stage stays where the job stopped.
+STAGE_FOR_STATUS: Dict[JobStatus, str] = {
+    JobStatus.QUEUED: "queued",
+    JobStatus.INSPECTING: "inspecting",
+    JobStatus.ANALYZING: "analyzing",
+    JobStatus.REPAIR_PROPOSED: "awaiting_approval",
+    JobStatus.APPLYING_PATCH: "repairing",
+    JobStatus.VALIDATING: "verifying",
+}
+
 
 class InvalidTransitionError(ValueError):
     """Raised when a job is asked to move to a status it may not move to."""
+
+
+class JobStateError(ValueError):
+    """Raised when an action does not fit the job's current state (maps to HTTP 409)."""
 
 
 def check_transition(current: JobStatus, new: JobStatus) -> None:
@@ -71,6 +90,17 @@ class CIWebhookRequest(BaseModel):
     website_url: AnyHttpUrl = Field(validation_alias=AliasChoices("website_url", "target_url"))
     repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description="owner/name")
     commit_sha: str = Field(pattern=r"^[0-9a-fA-F]{7,40}$")
+
+
+class ProposalRequest(BaseModel):
+    """A repair proposal from the diagnosis/proposal pipeline, attached to a job for review.
+    Any approval fields inside it are ignored: approval only comes from POST .../approval."""
+
+    proposal: Dict[str, Any]
+
+
+class ApprovalRequest(BaseModel):
+    reviewed_by: str = Field(min_length=1, max_length=200)
 
 
 # --------------------------------------------------------------------------- #
@@ -105,16 +135,21 @@ class Inspection(BaseModel):
     stdout_tail: Optional[str] = Field(default=None, description="Last part of the process output")
     stderr_tail: Optional[str] = Field(default=None, description="Last part of the process errors")
 
+
 class JobResponse(BaseModel):
     job_id: str
     website_url: str
     status: JobStatus
+    stage: Optional[str] = Field(default=None, description="Finer progress label for the dashboard")
     source: Literal["manual", "ci_webhook"]
     repository: Optional[str] = None
     commit_sha: Optional[str] = None
     created_at: str
     updated_at: str
     inspection: Optional[Inspection] = None
+    proposal: Optional[Dict[str, Any]] = Field(default=None, description="Proposal awaiting or past review")
+    approval: Optional[RepairApproval] = Field(default=None, description="Who approved the repair, and when")
+    repair: Optional[RepairResult] = Field(default=None, description="Result of the repair CLI run")
     error: Optional[str] = None
     artifacts: List[ArtifactRef] = Field(default_factory=list)
 
