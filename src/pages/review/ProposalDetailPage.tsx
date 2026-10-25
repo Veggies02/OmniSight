@@ -397,6 +397,7 @@ export const ProposalDetailPage: React.FC = () => {
             <EvidenceViewer
               scenarioId={proposal.scenarioId}
               defectCategory={proposal.defectCategory}
+              proposalId={proposal.proposalId}
               visualEvidence={proposal.visualEvidence}
               repairResult={repairJobResult}
             />

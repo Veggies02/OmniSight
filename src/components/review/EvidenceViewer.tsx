@@ -6,13 +6,21 @@ export type ComparisonMode = "side-by-side" | "slider" | "before-only" | "after-
 export interface EvidenceViewerProps {
   scenarioId: string;
   defectCategory: string;
+  proposalId?: string;
   visualEvidence?: VisualEvidencePair;
   repairResult?: ClientRepairJobResult | null;
+}
+
+interface ImageDimension {
+  width: number;
+  height: number;
+  aspectRatio: number;
 }
 
 export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
   scenarioId,
   defectCategory,
+  proposalId,
   visualEvidence,
   repairResult,
 }) => {
@@ -23,21 +31,143 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
   const [beforeLoading, setBeforeLoading] = useState(true);
   const [afterLoading, setAfterLoading] = useState(true);
 
-  // Before image: Defective screenshot (or baseline if defective is missing)
+  // Natural dimensions recorded on image load
+  const [beforeDims, setBeforeDims] = useState<ImageDimension | null>(null);
+  const [afterDims, setAfterDims] = useState<ImageDimension | null>(null);
+
+  // Evidence integrity validation:
+  // Check if repairResult belongs to this proposal/scenario
+  const hasProposalMismatch = Boolean(
+    repairResult && proposalId && repairResult.proposalId && repairResult.proposalId !== proposalId
+  );
+
+  // Check if visualEvidence scenario matches component scenario
+  const hasScenarioMismatch = Boolean(
+    visualEvidence && visualEvidence.scenarioId && visualEvidence.scenarioId !== scenarioId
+  );
+
+  // Before image: Defective screenshot
   const beforeUrl = visualEvidence?.defectiveScreenshotUrl;
-  // After image: Real post-repair screenshot if available, or static post_repair.png, or clean baseline
-  const afterUrl =
-    repairResult?.postRepairScreenshotUrl ||
-    visualEvidence?.postRepairScreenshotUrl ||
-    (repairResult?.status === "PASSED" ? "/evidence/verification/post_repair.png" : undefined) ||
-    visualEvidence?.baselineScreenshotUrl;
+
+  // After image provenance:
+  // If repairResult has mismatched proposalId, do NOT silently use its screenshot
+  const afterUrl = hasProposalMismatch
+    ? visualEvidence?.baselineScreenshotUrl
+    : repairResult?.postRepairScreenshotUrl ||
+      visualEvidence?.postRepairScreenshotUrl ||
+      visualEvidence?.baselineScreenshotUrl;
 
   const hasBefore = Boolean(beforeUrl) && !beforeImgError;
   const hasAfter = Boolean(afterUrl) && !afterImgError;
 
+  // Dimension and aspect ratio comparison
+  const aspectTolerance = 0.05; // 5% ratio variance tolerance
+  const aspectMismatch = Boolean(
+    beforeDims &&
+      afterDims &&
+      Math.abs(beforeDims.aspectRatio - afterDims.aspectRatio) > aspectTolerance
+  );
+
+  const dimensionMismatch = Boolean(
+    beforeDims &&
+      afterDims &&
+      (Math.abs(beforeDims.width - afterDims.width) > 5 ||
+        Math.abs(beforeDims.height - afterDims.height) > 5)
+  );
+
+  // Compute common aspect ratio for consistent slider canvas
+  // When dimensions differ, canvas uses the base image's ratio and scales overlay with contain/alignment
+  const canvasAspectRatio = afterDims
+    ? afterDims.aspectRatio
+    : beforeDims
+    ? beforeDims.aspectRatio
+    : (visualEvidence?.viewport.width || 1440) / (visualEvidence?.viewport.height || 900);
+
+  const handleBeforeLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    setBeforeLoading(false);
+    const img = e.currentTarget;
+    if (img.naturalWidth && img.naturalHeight) {
+      setBeforeDims({
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+        aspectRatio: img.naturalWidth / img.naturalHeight,
+      });
+    }
+  };
+
+  const handleAfterLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    setAfterLoading(false);
+    const img = e.currentTarget;
+    if (img.naturalWidth && img.naturalHeight) {
+      setAfterDims({
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+        aspectRatio: img.naturalWidth / img.naturalHeight,
+      });
+    }
+  };
+
+  // Determine authoritative verification status
+  // Missing evidence must NEVER be treated as successful
+  let verificationStatusText = "INCONCLUSIVE";
+  let verificationStatusClass = "pill-inconclusive";
+
+  if (hasProposalMismatch) {
+    verificationStatusText = "PROVENANCE MISMATCH";
+    verificationStatusClass = "pill-failed";
+  } else if (repairResult) {
+    if (repairResult.verificationStatus === "passed" || repairResult.visualPassed) {
+      // Must have actual post-repair evidence or baseline verification
+      if (!hasAfter) {
+        verificationStatusText = "INCONCLUSIVE (MISSING EVIDENCE)";
+        verificationStatusClass = "pill-inconclusive";
+      } else {
+        verificationStatusText = (repairResult.verificationStatus || "PASSED").toUpperCase();
+        verificationStatusClass = "pill-passed";
+      }
+    } else if (repairResult.verificationStatus === "failed") {
+      verificationStatusText = "FAILED";
+      verificationStatusClass = "pill-failed";
+    } else {
+      verificationStatusText = (repairResult.verificationStatus || "INCONCLUSIVE").toUpperCase();
+      verificationStatusClass = "pill-inconclusive";
+    }
+  }
 
   return (
     <div className="evidence-viewer-root" data-testid="evidence-viewer-root">
+      {/* Integrity & Metadata Alerts */}
+      {hasProposalMismatch && (
+        <div className="evidence-integrity-alert alert-warning" data-testid="integrity-mismatch-alert">
+          <span className="alert-icon">⚠️</span>
+          <div className="alert-content">
+            <strong>Evidence Provenance Warning:</strong> The active repair job result belongs to proposal{" "}
+            <code>{repairResult?.proposalId}</code>, but this viewer is displaying proposal <code>{proposalId}</code>.
+            Job results and post-repair screenshots have been disassociated to prevent false verification claims.
+          </div>
+        </div>
+      )}
+
+      {hasScenarioMismatch && (
+        <div className="evidence-integrity-alert alert-warning" data-testid="scenario-mismatch-alert">
+          <span className="alert-icon">⚠️</span>
+          <div className="alert-content">
+            <strong>Scenario Metadata Inconsistency:</strong> Evidence is tagged with scenario{" "}
+            <code>{visualEvidence?.scenarioId}</code> but the proposal is for <code>{scenarioId}</code>.
+          </div>
+        </div>
+      )}
+
+      {/* Alignment & Aspect Ratio Warning Banner */}
+      {(aspectMismatch || dimensionMismatch) && mode === "slider" && (
+        <div className="evidence-alignment-notice" data-testid="aspect-mismatch-notice">
+          <span className="notice-icon">ℹ️</span>
+          <div className="notice-text">
+            <strong>Mismatched Dimensions:</strong> Before image ({beforeDims?.width}×{beforeDims?.height}) and After image ({afterDims?.width}×{afterDims?.height}) have different {aspectMismatch ? "aspect ratios" : "pixel dimensions"}. Each image preserves its aspect ratio without distortion; visual alignment is centered and not pixel-identical.
+          </div>
+        </div>
+      )}
+
       {/* Controls & Mode Selection Header */}
       <div className="evidence-viewer-toolbar">
         <div className="mode-toggle-group" data-testid="mode-toggle-group" role="radiogroup" aria-label="Evidence comparison mode">
@@ -82,21 +212,13 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
         {/* Status Chip & Viewport */}
         <div className="evidence-status-bar">
           <span
-            className={`evidence-status-pill ${
-              repairResult?.verificationStatus === "passed" || repairResult?.visualPassed
-                ? "pill-passed"
-                : repairResult?.verificationStatus === "failed"
-                ? "pill-failed"
-                : "pill-inconclusive"
-            }`}
+            className={`evidence-status-pill ${verificationStatusClass}`}
             data-testid="verification-status-pill"
           >
-            {repairResult
-              ? (repairResult.verificationStatus || (repairResult.visualPassed ? "passed" : "failed")).toUpperCase()
-              : "INCONCLUSIVE"}
+            {verificationStatusText}
           </span>
           <span className="viewport-badge" data-testid="viewer-viewport">
-            {visualEvidence?.viewport.width || 1440} × {visualEvidence?.viewport.height || 900}
+            {visualEvidence?.viewport ? `${visualEvidence.viewport.width} × ${visualEvidence.viewport.height}` : "1440 × 900"}
           </span>
         </div>
       </div>
@@ -110,6 +232,11 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
               <div className="side-card-header before-header">
                 <span className="label-badge badge-before">Original Defective UI</span>
                 <span className="meta-text">{defectCategory}</span>
+                {beforeDims && (
+                  <span className="dim-tag" data-testid="before-dim-tag">
+                    {beforeDims.width}×{beforeDims.height}
+                  </span>
+                )}
               </div>
               <div className="image-view-box">
                 {beforeUrl && !beforeImgError ? (
@@ -120,7 +247,7 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
                       alt={`Defective UI for ${scenarioId}`}
                       className="comparison-img"
                       data-testid="defective-image"
-                      onLoad={() => setBeforeLoading(false)}
+                      onLoad={handleBeforeLoad}
                       onError={() => {
                         setBeforeImgError(true);
                         setBeforeLoading(false);
@@ -140,8 +267,13 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
               <div className="side-card-header after-header">
                 <span className="label-badge badge-after">Post-Repair Verified State</span>
                 <span className="meta-text">
-                  {repairResult ? `Job ${repairResult.jobId}` : "Expected Repaired Flow"}
+                  {repairResult && !hasProposalMismatch ? `Job ${repairResult.jobId}` : "Expected Repaired Flow"}
                 </span>
+                {afterDims && (
+                  <span className="dim-tag" data-testid="after-dim-tag">
+                    {afterDims.width}×{afterDims.height}
+                  </span>
+                )}
               </div>
               <div className="image-view-box">
                 {afterUrl && !afterImgError ? (
@@ -152,7 +284,7 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
                       alt={`Post-repair state for ${scenarioId}`}
                       className="comparison-img"
                       data-testid="baseline-image"
-                      onLoad={() => setAfterLoading(false)}
+                      onLoad={handleAfterLoad}
                       onError={() => {
                         setAfterImgError(true);
                         setAfterLoading(false);
@@ -172,15 +304,21 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
         {mode === "slider" && (
           <div className="comparison-slider-container" data-testid="comparison-slider">
             {hasBefore && hasAfter ? (
-              <div className="slider-canvas" data-testid="slider-canvas">
+              <div
+                className="slider-canvas"
+                data-testid="slider-canvas"
+                style={{ aspectRatio: `${canvasAspectRatio}` }}
+              >
                 {/* Underneath: After image */}
-                <img
-                  src={afterUrl!}
-                  alt={`Post-repair state for ${scenarioId}`}
-                  className="slider-base-img"
-                  data-testid="slider-img-after"
-                />
-                <span className="slider-tag tag-after">After Repair</span>
+                <div className="slider-base-container" style={{ width: "100%", height: "100%" }}>
+                  <img
+                    src={afterUrl!}
+                    alt={`Post-repair state for ${scenarioId}`}
+                    className="slider-base-img"
+                    data-testid="slider-img-after"
+                  />
+                  <span className="slider-tag tag-after">After Repair</span>
+                </div>
 
                 {/* Overlay: Before image clipped by slider position */}
                 <div
@@ -188,12 +326,17 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
                   style={{ width: `${sliderPos}%` }}
                   data-testid="slider-overlay-clip"
                 >
-                  <img
-                    src={beforeUrl!}
-                    alt={`Defective state for ${scenarioId}`}
-                    className="slider-overlay-img"
-                    data-testid="slider-img-before"
-                  />
+                  <div
+                    className="slider-overlay-inner"
+                    style={{ width: `${100 / (sliderPos / 100 || 0.001)}%` }}
+                  >
+                    <img
+                      src={beforeUrl!}
+                      alt={`Defective state for ${scenarioId}`}
+                      className="slider-overlay-img"
+                      data-testid="slider-img-before"
+                    />
+                  </div>
                   <span className="slider-tag tag-before">Before Repair</span>
                 </div>
 
@@ -228,6 +371,9 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
           <div className="single-view-container" data-testid="comparison-single-before">
             <div className="single-view-header" data-testid="single-card-before">
               <span className="label-badge badge-before">Original Defective UI</span>
+              {beforeDims && (
+                <span className="dim-tag">{beforeDims.width}×{beforeDims.height}</span>
+              )}
             </div>
             <div className="image-view-box">
               {hasBefore ? (
@@ -250,6 +396,9 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
           <div className="single-view-container" data-testid="comparison-single-after">
             <div className="single-view-header" data-testid="single-card-after">
               <span className="label-badge badge-after">Post-Repair Verified State</span>
+              {afterDims && (
+                <span className="dim-tag">{afterDims.width}×{afterDims.height}</span>
+              )}
             </div>
             <div className="image-view-box">
               {hasAfter ? (
@@ -270,7 +419,7 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
       </div>
 
       {/* Verification Check Badges & Quantitative Metrics */}
-      {repairResult?.verificationChecks && repairResult.verificationChecks.length > 0 && (
+      {repairResult?.verificationChecks && repairResult.verificationChecks.length > 0 && !hasProposalMismatch && (
         <div className="viewer-checks-panel" data-testid="verification-checks-summary">
           <div className="checks-header">
             <h4>Automated Verification Checks ({repairResult.verificationChecks.length})</h4>

@@ -58,6 +58,9 @@ export interface VisualEvidencePair {
   postRepairScreenshotUrl?: string;
   pageTitle: string;
   measurements?: Record<string, any>;
+  runId?: string;
+  postRepairRunId?: string;
+  postRepairJobId?: string;
 }
 
 export interface ReviewProposalItem {

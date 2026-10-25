@@ -2759,22 +2759,79 @@ button {
   box-shadow: var(--shadow-xs);
 }
 
+.evidence-integrity-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-md);
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+.evidence-integrity-alert .alert-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.evidence-integrity-alert code {
+  background-color: #fee2e2;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.evidence-alignment-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.85rem;
+  background-color: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+  font-size: 0.8125rem;
+}
+
+.dim-tag {
+  font-size: 0.6875rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background-color: var(--color-surface-subtle);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  font-family: monospace;
+}
+
 .slider-canvas {
   position: relative;
   width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
   overflow: hidden;
   user-select: none;
-  display: flex;
-  justify-content: center;
   background-color: var(--color-surface-subtle);
-  min-height: 320px;
+  border-radius: var(--radius-md);
+}
+
+.slider-base-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .slider-base-img {
   display: block;
   width: 100%;
-  height: auto;
-  max-height: 520px;
+  height: 100%;
   object-fit: contain;
 }
 
@@ -2787,13 +2844,19 @@ button {
   border-right: 2px solid #ffffff;
 }
 
+.slider-overlay-inner {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .slider-overlay-img {
   display: block;
   width: 100%;
   height: 100%;
-  max-height: 520px;
-  object-fit: cover;
-  object-position: left;
+  object-fit: contain;
 }
 
 .slider-divider {
