@@ -287,6 +287,7 @@ export class LocalStorageReviewRepository implements IReviewRepository {
       jobId: simulatedJobId,
       proposalId: proposal.proposalId,
       status: "PASSED",
+      verificationStatus: "passed",
       executedAt: new Date().toISOString(),
       worktreeBranch: branchName,
       patchId: `patch-${proposal.defectCategory}-001`,
@@ -294,6 +295,11 @@ export class LocalStorageReviewRepository implements IReviewRepository {
       visualPassed: true,
       cleanupCompleted: true,
       reportPath: `artifacts/repair-executions/${simulatedJobId}/repair_execution_report.json`,
+      postRepairScreenshotUrl: "/evidence/verification/post_repair.png",
+      verificationChecks: [
+        { name: "defect-symptom-resolved", expected: "resolved", actual: "resolved", passed: true },
+        { name: "wcag-aa-contrast-or-geometry", expected: "pass", actual: "pass", passed: true },
+      ],
       summary:
         "Isolated repair job executed successfully in temporary worktree. Build and visual validation passed. Original working tree preserved.",
       stage: "completed",

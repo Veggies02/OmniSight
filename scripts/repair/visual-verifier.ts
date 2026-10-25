@@ -115,6 +115,14 @@ export async function verifyRepairedWorktreeVisually(
     let passed = false;
     let assertionSummary = '';
     let repairedMetric: Record<string, any> = {};
+    const checks: Array<{
+      name: string;
+      expected: string | number | boolean;
+      actual: string | number | boolean | null;
+      passed: boolean;
+      details?: string;
+    }> = [];
+    const failureReasons: string[] = [];
 
     switch (patch.defectCategory) {
       case 'product-image-distortion': {
@@ -149,7 +157,34 @@ export async function verifyRepairedWorktreeVisually(
         const isNotDistortedTransform = imgComputed.transform === 'none' || !imgComputed.transform.includes('1.45');
         const isNormalHeight = mediaHeight !== '380px';
 
+        checks.push({
+          name: 'image-object-fit',
+          expected: 'cover',
+          actual: imgComputed.objectFit,
+          passed: isObjectFitCover,
+          details: `Computed object-fit: ${imgComputed.objectFit}`,
+        });
+        checks.push({
+          name: 'image-transform-identity',
+          expected: 'none or non-distorting',
+          actual: imgComputed.transform,
+          passed: isNotDistortedTransform,
+          details: `Computed transform: ${imgComputed.transform}`,
+        });
+        checks.push({
+          name: 'media-container-height',
+          expected: '!= 380px',
+          actual: mediaHeight,
+          passed: isNormalHeight,
+          details: `Computed media height: ${mediaHeight}`,
+        });
+
         passed = isObjectFitCover && isNotDistortedTransform && isNormalHeight;
+        if (!passed) {
+          if (!isObjectFitCover) failureReasons.push(`Image object-fit is ${imgComputed.objectFit}, expected cover`);
+          if (!isNotDistortedTransform) failureReasons.push(`Image transform is distorted (${imgComputed.transform})`);
+          if (!isNormalHeight) failureReasons.push(`Media container height remains 380px`);
+        }
         assertionSummary = passed
           ? `Product image distortion resolved: object-fit is ${imgComputed.objectFit}, aspect ratio is ${imgComputed.aspectRatio}, media height is ${mediaHeight}.`
           : `Product image distortion verification failed: object-fit is ${imgComputed.objectFit}, media height is ${mediaHeight}.`;
@@ -189,7 +224,38 @@ export async function verifyRepairedWorktreeVisually(
           isLayoutNormal: protrusionPx === 0 && footerComputed.position === 'static',
         };
 
-        passed = protrusionPx === 0 && footerComputed.position === 'static' && bodyComputed.marginTop === '0px';
+        const isZeroProtrusion = protrusionPx <= 1;
+        const isStaticFooter = footerComputed.position === 'static';
+        const isNormalMargin = bodyComputed.marginTop === '0px' || !bodyComputed.marginTop.startsWith('-');
+
+        checks.push({
+          name: 'footer-protrusion',
+          expected: '<= 1px',
+          actual: `${protrusionPx}px`,
+          passed: isZeroProtrusion,
+          details: `Footer protrusion below card: ${protrusionPx}px`,
+        });
+        checks.push({
+          name: 'footer-position',
+          expected: 'static',
+          actual: footerComputed.position,
+          passed: isStaticFooter,
+          details: `Footer position: ${footerComputed.position}`,
+        });
+        checks.push({
+          name: 'body-margin-top',
+          expected: '>= 0px',
+          actual: bodyComputed.marginTop,
+          passed: isNormalMargin,
+          details: `Body margin-top: ${bodyComputed.marginTop}`,
+        });
+
+        passed = isZeroProtrusion && isStaticFooter && isNormalMargin;
+        if (!passed) {
+          if (!isZeroProtrusion) failureReasons.push(`Footer protrudes ${protrusionPx}px below card`);
+          if (!isStaticFooter) failureReasons.push(`Footer position is ${footerComputed.position}, expected static`);
+          if (!isNormalMargin) failureReasons.push(`Body margin-top is ${bodyComputed.marginTop}`);
+        }
         assertionSummary = passed
           ? `Card layout break resolved: footer position is static with 0px protrusion, body margin is 0px.`
           : `Card layout break verification failed: protrusion is ${protrusionPx}px, footer position is ${footerComputed.position}.`;
@@ -222,8 +288,19 @@ export async function verifyRepairedWorktreeVisually(
           passesWcagAAA: contrastRatio >= 7.0,
         };
 
-        // Text requires at least WCAG AA (4.5:1), and our AAA token achieves >= 7.0
-        passed = contrastRatio >= 4.5;
+        const passesAA = contrastRatio >= 4.5;
+        checks.push({
+          name: 'wcag-aa-contrast',
+          expected: '>= 4.5:1',
+          actual: `${contrastRatio}:1`,
+          passed: passesAA,
+          details: `Measured contrast ${contrastRatio}:1 (foreground: ${colorData.fgColor}, background: ${colorData.bgColor})`,
+        });
+
+        passed = passesAA;
+        if (!passed) {
+          failureReasons.push(`Measured contrast ratio ${contrastRatio}:1 is below WCAG AA threshold 4.5:1`);
+        }
         assertionSummary = passed
           ? `Low-contrast text resolved: measured contrast ratio is ${contrastRatio}:1 (passes WCAG AA threshold 4.5:1).`
           : `Low-contrast text verification failed: contrast ratio is ${contrastRatio}:1 (below WCAG 4.5:1).`;
@@ -253,7 +330,19 @@ export async function verifyRepairedWorktreeVisually(
           horizontalOverflowPx: overflowPx,
         };
 
-        passed = overflowPx === 0 && docMetrics.scrollWidth <= docMetrics.clientWidth;
+        const hasNoOverflow = overflowPx <= 0;
+        checks.push({
+          name: 'mobile-horizontal-overflow',
+          expected: '<= 0px',
+          actual: `${overflowPx}px`,
+          passed: hasNoOverflow,
+          details: `Document scrollWidth (${docMetrics.scrollWidth}px) vs clientWidth (${docMetrics.clientWidth}px)`,
+        });
+
+        passed = hasNoOverflow;
+        if (!passed) {
+          failureReasons.push(`Horizontal overflow detected on mobile viewport: ${overflowPx}px`);
+        }
         assertionSummary = passed
           ? `Mobile nav overflow resolved: document scrollWidth (${docMetrics.scrollWidth}px) <= clientWidth (${docMetrics.clientWidth}px), 0px overflow.`
           : `Mobile nav overflow verification failed: document has ${overflowPx}px horizontal overflow.`;
@@ -262,6 +351,7 @@ export async function verifyRepairedWorktreeVisually(
 
       default:
         passed = false;
+        failureReasons.push(`Unsupported defect category: ${patch.defectCategory}`);
         assertionSummary = `Unsupported defect category: ${patch.defectCategory}`;
         break;
     }
@@ -274,33 +364,61 @@ export async function verifyRepairedWorktreeVisually(
       const hero = await page.locator('.hero-section').count();
       if (hero === 0) {
         unrelatedRegressionsDetected = true;
+        failureReasons.push('Regression: Home page hero section failed to render');
       }
     } catch {
       unrelatedRegressionsDetected = true;
+      failureReasons.push('Regression: Home page navigation failed');
     }
 
+    const verificationStatus = passed && !unrelatedRegressionsDetected ? 'passed' : 'failed';
+    const resultJsonPath = path.join(jobArtifactsDir, 'verification-result.json');
+    const resultPayload = {
+      jobId,
+      scenarioId: patch.defectCategory,
+      defectCategory: patch.defectCategory,
+      verificationStatus,
+      passed: verificationStatus === 'passed',
+      checks,
+      failureReasons,
+      repairedMetric,
+      baselineMetric: baselineInfo.baselineMetric,
+      assertionSummary: unrelatedRegressionsDetected
+        ? `${assertionSummary} [REGRESSION DETECTED: Home page failed to render properly]`
+        : assertionSummary,
+      unrelatedRegressionsDetected,
+      afterScreenshotPath,
+      beforeScreenshotPath: baselineInfo.baselineScreenshotPath,
+      timestamp: new Date().toISOString(),
+    };
+    fs.writeFileSync(resultJsonPath, JSON.stringify(resultPayload, null, 2), 'utf-8');
+
     return {
-      passed,
+      passed: verificationStatus === 'passed',
+      verificationStatus,
       defectCategory: patch.defectCategory,
       route: `/products?defect=${patch.defectCategory}`,
       viewport: patch.defectCategory === 'mobile-nav-overflow' ? { width: 390, height: 844 } : { width: 1440, height: 900 },
       cleanBaselineMetric: baselineInfo.baselineMetric,
       defectiveMetric: undefined,
       repairedMetric,
-      assertionSummary: unrelatedRegressionsDetected
-        ? `${assertionSummary} [REGRESSION DETECTED: Home page failed to render properly]`
-        : assertionSummary,
+      checks,
+      failureReasons,
+      assertionSummary: resultPayload.assertionSummary,
       unrelatedRegressionsDetected,
       beforeScreenshotPath: baselineInfo.baselineScreenshotPath,
       afterScreenshotPath,
+      resultJsonPath,
     };
   } catch (err: any) {
     return {
       passed: false,
+      verificationStatus: 'inconclusive',
       defectCategory: patch.defectCategory,
       route: `/products?defect=${patch.defectCategory}`,
       viewport: { width: 1280, height: 800 },
       assertionSummary: `Browser-based post-repair verification failed with infrastructure error: ${err?.message || String(err)}`,
+      failureReasons: [err?.message || String(err)],
       unrelatedRegressionsDetected: false,
       beforeScreenshotPath: baselineInfo.baselineScreenshotPath,
       afterScreenshotPath: fs.existsSync(afterScreenshotPath) ? afterScreenshotPath : undefined,

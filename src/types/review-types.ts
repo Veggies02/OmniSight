@@ -121,6 +121,7 @@ export interface ClientRepairJobResult {
   jobId: string;
   proposalId: string;
   status: 'PENDING' | 'PASSED' | 'FAILED' | 'REJECTED';
+  verificationStatus?: 'passed' | 'failed' | 'inconclusive';
   executedAt: string;
   worktreeBranch: string;
   patchId: string;
@@ -135,4 +136,11 @@ export interface ClientRepairJobResult {
   stdoutTail?: string;
   stderrTail?: string;
   durationSeconds?: number;
+  postRepairScreenshotUrl?: string;
+  verificationChecks?: Array<{
+    name: string;
+    expected: string | number | boolean;
+    actual: string | number | boolean | null;
+    passed: boolean;
+  }>;
 }

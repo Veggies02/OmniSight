@@ -256,6 +256,23 @@ export const ProposalDetailPage: React.FC = () => {
                       </span>
                       {repairJobResult.stage && <span style={{ marginLeft: "0.5rem", color: "#64748b", fontSize: "0.8rem" }}>({repairJobResult.stage})</span>}
                     </p>
+                    <p data-testid="verification-status-row">
+                      <strong>Post-Repair Verification:</strong>{" "}
+                      <span
+                        style={{
+                          fontWeight: "bold",
+                          color:
+                            repairJobResult.verificationStatus === "passed" || repairJobResult.visualPassed
+                              ? "#16a34a"
+                              : repairJobResult.verificationStatus === "inconclusive"
+                              ? "#d97706"
+                              : "#dc2626",
+                        }}
+                        data-testid="verification-status-badge"
+                      >
+                        {(repairJobResult.verificationStatus || (repairJobResult.visualPassed ? "passed" : "failed")).toUpperCase()}
+                      </span>
+                    </p>
                     <p><strong>Job ID:</strong> <code>{repairJobResult.jobId}</code></p>
                     <p><strong>Worktree Branch:</strong> <code>{repairJobResult.worktreeBranch}</code></p>
                     <p><strong>Build Verification:</strong> {repairJobResult.buildPassed ? "✓ Passed" : "✕ Failed"}</p>
@@ -264,8 +281,31 @@ export const ProposalDetailPage: React.FC = () => {
                       <p><strong>Execution Duration:</strong> {repairJobResult.durationSeconds.toFixed(1)}s</p>
                     )}
                     <p><strong>Artifact Report:</strong> <code>{repairJobResult.reportPath}</code></p>
+                    {repairJobResult.verificationChecks && repairJobResult.verificationChecks.length > 0 && (
+                      <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#f1f5f9", borderRadius: "4px" }} data-testid="verification-checks-list">
+                        <strong style={{ fontSize: "0.8rem", color: "#334155" }}>Verification Checks:</strong>
+                        <ul style={{ margin: "0.25rem 0 0 1rem", padding: 0, fontSize: "0.75rem" }}>
+                          {repairJobResult.verificationChecks.map((chk, idx) => (
+                            <li key={idx} style={{ color: chk.passed ? "#166534" : "#991b1b" }}>
+                              {chk.passed ? "✓" : "✕"} {chk.name}: {String(chk.actual)} (expected {String(chk.expected)})
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {repairJobResult.postRepairScreenshotUrl && (
+                      <div style={{ marginTop: "0.5rem" }} data-testid="post-repair-evidence-preview">
+                        <strong style={{ fontSize: "0.8rem", color: "#334155" }}>Post-Repair Screenshot Evidence:</strong>
+                        <img
+                          src={repairJobResult.postRepairScreenshotUrl}
+                          alt="Post Repair Verification Screenshot"
+                          style={{ width: "100%", maxHeight: "140px", objectFit: "cover", borderRadius: "4px", marginTop: "0.25rem", border: "1px solid #cbd5e1" }}
+                          data-testid="post-repair-screenshot-img"
+                        />
+                      </div>
+                    )}
                     {repairJobResult.failureReason && (
-                      <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "4px", color: "#991b1b" }}>
+                      <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "4px", color: "#991b1b" }} data-testid="verification-failure-reason">
                         <strong>Failure Reason:</strong> {repairJobResult.failureReason}
                       </div>
                     )}
