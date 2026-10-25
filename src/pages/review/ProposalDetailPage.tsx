@@ -27,6 +27,7 @@ export const ProposalDetailPage: React.FC = () => {
 
   const [repairModalOpen, setRepairModalOpen] = useState(false);
   const [executingRepair, setExecutingRepair] = useState(false);
+  const [executionProgress, setExecutionProgress] = useState<string | null>(null);
   const [repairJobResult, setRepairJobResult] = useState<import("../../types/review-types").ClientRepairJobResult | null>(null);
 
   const loadProposal = async () => {
@@ -235,14 +236,39 @@ export const ProposalDetailPage: React.FC = () => {
                   </ul>
                 </div>
 
+                {executingRepair && (
+                  <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", padding: "0.75rem 1rem", borderRadius: "6px", marginBottom: "1rem" }} data-testid="repair-execution-progress">
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <div className="spinner" style={{ width: "16px", height: "16px", borderWidth: "2px" }} />
+                      <span style={{ fontWeight: 500, color: "#334155" }}>
+                        {executionProgress || "Executing repair in isolated worktree..."}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 {repairJobResult && (
                   <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", padding: "0.75rem", borderRadius: "6px", marginBottom: "1rem" }} data-testid="repair-job-summary">
-                    <p><strong>Status:</strong> <span style={{ color: "#16a34a", fontWeight: "bold" }}>{repairJobResult.status}</span></p>
+                    <p>
+                      <strong>Status:</strong>{" "}
+                      <span style={{ color: repairJobResult.status === "PASSED" ? "#16a34a" : "#dc2626", fontWeight: "bold" }}>
+                        {repairJobResult.status}
+                      </span>
+                      {repairJobResult.stage && <span style={{ marginLeft: "0.5rem", color: "#64748b", fontSize: "0.8rem" }}>({repairJobResult.stage})</span>}
+                    </p>
                     <p><strong>Job ID:</strong> <code>{repairJobResult.jobId}</code></p>
                     <p><strong>Worktree Branch:</strong> <code>{repairJobResult.worktreeBranch}</code></p>
                     <p><strong>Build Verification:</strong> {repairJobResult.buildPassed ? "✓ Passed" : "✕ Failed"}</p>
                     <p><strong>Visual Delta Validation:</strong> {repairJobResult.visualPassed ? "✓ Passed" : "✕ Failed"}</p>
+                    {repairJobResult.durationSeconds !== undefined && (
+                      <p><strong>Execution Duration:</strong> {repairJobResult.durationSeconds.toFixed(1)}s</p>
+                    )}
                     <p><strong>Artifact Report:</strong> <code>{repairJobResult.reportPath}</code></p>
+                    {repairJobResult.failureReason && (
+                      <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "4px", color: "#991b1b" }}>
+                        <strong>Failure Reason:</strong> {repairJobResult.failureReason}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -265,11 +291,20 @@ export const ProposalDetailPage: React.FC = () => {
                       if (!proposal) return;
                       try {
                         setExecutingRepair(true);
-                        const res = await reviewRepository.triggerRepairExecution(proposal.proposalId);
+                        setExecutionProgress("Initializing repair job...");
+                        const res = await reviewRepository.triggerRepairExecution(
+                          proposal.proposalId,
+                          (stage, status) => {
+                            setExecutionProgress(`${status} (${stage})`);
+                          }
+                        );
                         setRepairJobResult(res);
                         setNotification({
-                          type: "success",
-                          message: `Repair job ${res.jobId} completed successfully! Worktree validated and cleaned up.`,
+                          type: res.status === "PASSED" ? "success" : "error",
+                          message:
+                            res.status === "PASSED"
+                              ? `Repair job ${res.jobId} completed successfully! Worktree validated and cleaned up.`
+                              : `Repair job ${res.jobId} failed: ${res.failureReason || "Validation check failed"}`,
                         });
                       } catch (err: any) {
                         setNotification({
@@ -278,6 +313,7 @@ export const ProposalDetailPage: React.FC = () => {
                         });
                       } finally {
                         setExecutingRepair(false);
+                        setExecutionProgress(null);
                       }
                     }}
                   >

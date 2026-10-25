@@ -129,4 +129,10 @@ export interface ClientRepairJobResult {
   cleanupCompleted: boolean;
   reportPath: string;
   summary: string;
+  stage?: string;
+  finalState?: string;
+  failureReason?: string;
+  stdoutTail?: string;
+  stderrTail?: string;
+  durationSeconds?: number;
 }
