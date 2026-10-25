@@ -208,4 +208,67 @@ test.describe('Automated UI Post-Repair Verification & Regression Pipeline', () 
     expect(positionCheck).toBeDefined();
     expect(positionCheck!.passed).toBe(true);
   });
+
+  // Test 8: Comprehensive Multi-Page Post-Repair Regression Audit
+  test('Test 8: Regression audit — verifies Home, Cart, and Navigation remain intact after repair', async ({ page }) => {
+    const runId = `test-run-regression-audit-${Date.now()}`;
+    const result = await runPostRepairVerification(page, {
+      runId,
+      scenarioId: 'product-image-distortion',
+      targetUrl: 'http://127.0.0.1:5173/products',
+      repoRoot,
+    });
+
+    expect(result.verificationStatus).toBe('passed');
+    expect(result.unrelatedRegressionsDetected).toBe(false);
+    expect(result.regressionAudit).toBeDefined();
+    expect(result.regressionAudit!.length).toBeGreaterThanOrEqual(3);
+
+    const homeAudit = result.regressionAudit!.find((a) => a.area === 'home');
+    const cartAudit = result.regressionAudit!.find((a) => a.area === 'cart');
+    const navAudit = result.regressionAudit!.find((a) => a.area === 'navigation');
+
+    expect(homeAudit?.passed).toBe(true);
+    expect(cartAudit?.passed).toBe(true);
+    expect(navAudit?.passed).toBe(true);
+
+    // Verify regression audit is persisted in measurements.json
+    const measurementsPath = path.join(repoRoot, 'artifacts', 'verification', runId, 'product-image-distortion', 'measurements.json');
+    const measurements = JSON.parse(fs.readFileSync(measurementsPath, 'utf-8'));
+    expect(measurements.regressionAudit).toBeDefined();
+    expect(measurements.regressionAudit.length).toBeGreaterThanOrEqual(3);
+  });
+
+  // Test 9: Consistent WCAG AA 4.5:1 Contrast Threshold Enforcement
+  test('Test 9: Consistent contrast thresholds — rejects low contrast below 4.5:1 and accepts >= 4.5:1', async ({ page }) => {
+    // 9A. Active defect route has ~1.4:1 contrast -> fails check and is detected as defect
+    const runIdFail = `test-run-contrast-fail-${Date.now()}`;
+    const resultFail = await runPostRepairVerification(page, {
+      runId: runIdFail,
+      scenarioId: 'low-contrast-text',
+      targetUrl: 'http://127.0.0.1:5173/products?defect=low-contrast-text',
+      repoRoot,
+    });
+
+    expect(resultFail.verificationStatus).toBe('failed');
+    const contrastCheckFail = resultFail.checks.find((c) => c.name === 'wcag-aa-contrast-ratio');
+    expect(contrastCheckFail).toBeDefined();
+    expect(contrastCheckFail!.passed).toBe(false);
+    expect(resultFail.repairedMetrics?.contrastRatio).toBeLessThan(4.5);
+
+    // 9B. Clean route has high contrast (> 7:1) -> passes WCAG AA check and defect is resolved
+    const runIdPass = `test-run-contrast-pass-${Date.now()}`;
+    const resultPass = await runPostRepairVerification(page, {
+      runId: runIdPass,
+      scenarioId: 'low-contrast-text',
+      targetUrl: 'http://127.0.0.1:5173/products',
+      repoRoot,
+    });
+
+    expect(resultPass.verificationStatus).toBe('passed');
+    const contrastCheckPass = resultPass.checks.find((c) => c.name === 'wcag-aa-contrast-ratio');
+    expect(contrastCheckPass).toBeDefined();
+    expect(contrastCheckPass!.passed).toBe(true);
+    expect(resultPass.repairedMetrics?.contrastRatio).toBeGreaterThanOrEqual(4.5);
+  });
 });

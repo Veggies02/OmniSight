@@ -260,7 +260,7 @@ export async function measureScenarioOnPage(
         details: `Contrast ratio is ${contrastRatio}:1 (foreground: ${colorData.fgColor}, background: ${colorData.bgColor})`,
       });
 
-      const isDefectPresent = contrastRatio < 3.0;
+      const isDefectPresent = contrastRatio < 4.5; // Defect is present whenever text fails WCAG AA 4.5:1 threshold
 
       return {
         metrics: {
@@ -421,20 +421,96 @@ export async function runPostRepairVerification(
     // 5. Measure Repaired State & Run Defect-Specific Checks
     const measurement = await measureScenarioOnPage(page, scenarioId);
 
-    // 6. Check for Unrelated UI Regressions on Home Page
+    // 6. Comprehensive Multi-Page Regression Audit (Home, Cart, Navbar)
     let unrelatedRegressionsDetected = false;
-    try {
-      const urlObj = new URL(options.targetUrl);
-      const homeUrl = `${urlObj.origin}/`;
-      await page.goto(homeUrl, { waitUntil: 'networkidle', timeout: 10000 });
-      const heroCount = await page.locator('.hero-section').count();
-      if (heroCount === 0) {
+    const regressionAudit: import('./verification-schema').RegressionCheck[] = [];
+
+    if (!options.skipRegressionAudit) {
+      try {
+        const urlObj = new URL(options.targetUrl);
+        const origin = urlObj.origin;
+
+        // 6A. Home Page Verification (Hero section and featured products)
+        const homeUrl = `${origin}/`;
+        try {
+          await page.goto(homeUrl, { waitUntil: 'networkidle', timeout: 8000 });
+          const heroCount = await page.locator('.hero-section').count();
+          const hasHero = heroCount > 0;
+          regressionAudit.push({
+            area: 'home',
+            route: '/',
+            passed: hasHero,
+            details: hasHero ? 'Home hero section renders cleanly.' : 'Home hero section missing from DOM.',
+          });
+          if (!hasHero) {
+            unrelatedRegressionsDetected = true;
+            failureReasons.push('Regression: Home page hero section failed to render properly.');
+          }
+        } catch (homeErr: any) {
+          unrelatedRegressionsDetected = true;
+          failureReasons.push(`Regression: Home page navigation failed: ${homeErr.message}`);
+          regressionAudit.push({
+            area: 'home',
+            route: '/',
+            passed: false,
+            details: `Navigation error: ${homeErr.message}`,
+          });
+        }
+
+        // 6B. Shopping Cart Verification (Cart empty state or table renders cleanly without error)
+        const cartUrl = `${origin}/cart`;
+        try {
+          await page.goto(cartUrl, { waitUntil: 'networkidle', timeout: 8000 });
+          const hasCartContainer = (await page.locator('.cart-page, .cart-empty-state, .shopping-cart-container, main').count()) > 0;
+          regressionAudit.push({
+            area: 'cart',
+            route: '/cart',
+            passed: hasCartContainer,
+            details: hasCartContainer ? 'Cart view renders expected layout.' : 'Cart container missing from DOM.',
+          });
+          if (!hasCartContainer) {
+            unrelatedRegressionsDetected = true;
+            failureReasons.push('Regression: Shopping cart page failed to render expected layout.');
+          }
+        } catch (cartErr: any) {
+          unrelatedRegressionsDetected = true;
+          failureReasons.push(`Regression: Cart page navigation failed: ${cartErr.message}`);
+          regressionAudit.push({
+            area: 'cart',
+            route: '/cart',
+            passed: false,
+            details: `Navigation error: ${cartErr.message}`,
+          });
+        }
+
+        // 6C. Navigation Bar Verification (Brand link and main links present)
+        try {
+          const navBrandCount = await page.locator('.navbar-brand, .nav-brand, .brand-logo, a[href="/"]').count();
+          const hasBrand = navBrandCount > 0;
+          regressionAudit.push({
+            area: 'navigation',
+            route: '/cart',
+            passed: hasBrand,
+            details: hasBrand ? 'Global navigation bar rendered intact.' : 'Navbar brand missing from layout.',
+          });
+          if (!hasBrand) {
+            unrelatedRegressionsDetected = true;
+            failureReasons.push('Regression: Global navigation bar brand element missing.');
+          }
+        } catch (navErr: any) {
+          unrelatedRegressionsDetected = true;
+          failureReasons.push(`Regression: Navbar check failed: ${navErr.message}`);
+          regressionAudit.push({
+            area: 'navigation',
+            route: '/cart',
+            passed: false,
+            details: `Navbar check error: ${navErr.message}`,
+          });
+        }
+      } catch (auditErr: any) {
         unrelatedRegressionsDetected = true;
-        failureReasons.push('Regression: Home page hero section failed to render properly.');
+        failureReasons.push(`Regression: Overall audit harness error: ${auditErr.message}`);
       }
-    } catch {
-      unrelatedRegressionsDetected = true;
-      failureReasons.push('Regression: Failed to navigate to home page during regression audit.');
     }
 
     // Determine final status
@@ -473,6 +549,7 @@ export async function runPostRepairVerification(
           defectiveMetrics: existingEvidence.defective?.metrics,
           repairedMetrics: measurement.metrics,
           checks: measurement.checks,
+          regressionAudit,
         },
         null,
         2
@@ -501,6 +578,7 @@ export async function runPostRepairVerification(
       failureReasons,
       durationMs,
       unrelatedRegressionsDetected,
+      regressionAudit,
       assertionSummary,
     };
 

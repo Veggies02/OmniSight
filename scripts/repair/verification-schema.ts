@@ -20,6 +20,13 @@ export interface VerificationEvidencePaths {
   measurementsPath?: string;
 }
 
+export interface RegressionCheck {
+  area: 'home' | 'cart' | 'navigation';
+  route: string;
+  passed: boolean;
+  details: string;
+}
+
 export interface PostRepairVerificationResult {
   runId: string;
   scenarioId: string;
@@ -40,6 +47,7 @@ export interface PostRepairVerificationResult {
   failureReasons: string[];
   durationMs: number;
   unrelatedRegressionsDetected: boolean;
+  regressionAudit?: RegressionCheck[];
   assertionSummary: string;
 }
 
@@ -52,4 +60,5 @@ export interface VerificationOptions {
   artifactsDir?: string;
   repoRoot?: string;
   timeoutMs?: number;
+  skipRegressionAudit?: boolean;
 }
