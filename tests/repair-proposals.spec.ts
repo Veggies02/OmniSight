@@ -280,38 +280,117 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
     const proposalService = new RepairProposalService({ isMock: true });
 
     test("generates valid proposals for all four seeded defect diagnosis outputs", () => {
-      const evidenceBase = path.resolve(process.cwd(), "artifacts/visual-evidence");
-      const runs = fs
-        .readdirSync(evidenceBase)
-        .filter((d) => d.startsWith("run-") && fs.statSync(path.join(evidenceBase, d)).isDirectory())
-        .sort()
-        .reverse();
+      // Create isolated test fixture directory so test doesn't depend on another test's generated run
+      const testFixtureDir = path.resolve(process.cwd(), `artifacts/temp_test_diagnoses_${Date.now()}`);
+      const testOutputDir = path.resolve(process.cwd(), `artifacts/temp_test_proposals_${Date.now()}`);
+      fs.mkdirSync(testFixtureDir, { recursive: true });
 
-      expect(runs.length).toBeGreaterThan(0);
-      const manifestPath = path.join(evidenceBase, runs[0], "diagnoses/diagnoses-manifest.json");
-      expect(fs.existsSync(manifestPath)).toBe(true);
+      const scenarios: Array<{ id: string; category: any; summary: string; cause: string; fix: string; selector: string }> = [
+        {
+          id: "product-image-distortion",
+          category: "image_distortion",
+          summary: "Image aspect ratio distorted",
+          cause: "object-fit: fill with scaling",
+          fix: "object-fit: cover",
+          selector: ".product-image",
+        },
+        {
+          id: "product-card-layout-break",
+          category: "layout_breakage",
+          summary: "Card layout boundary overflow",
+          cause: "absolute positioning breaking flex flow",
+          fix: "restore flex layout",
+          selector: ".product-card-body",
+        },
+        {
+          id: "low-contrast-text",
+          category: "low_contrast",
+          summary: "Text contrast violation",
+          cause: "color: #cbd5e1 on light background",
+          fix: "color: var(--color-text-muted)",
+          selector: ".product-snippet",
+        },
+        {
+          id: "mobile-nav-overflow",
+          category: "responsive_overflow",
+          summary: "Mobile viewport overflow",
+          cause: "width: 650px fixed on mobile",
+          fix: "width: 100%; max-width: 1200px",
+          selector: ".navbar-container",
+        },
+      ];
 
-      const runManifest = proposalService.generateProposalsForRun(manifestPath);
-
-      expect(runManifest.totalDiagnosesProcessed).toBe(4);
-      expect(runManifest.proposalsGenerated).toBe(4);
-      expect(runManifest.unsupportedOrInconclusive).toBe(0);
-
-      // Verify each scenario proposal
-      for (const [scenarioId, proposal] of Object.entries(runManifest.results)) {
-        expect(proposal.status).toBe("proposed");
-        expect(proposal.humanReviewStatus).toBe("pending_review");
-        expect(proposal.isMock).toBe(true);
-        expect(proposal.localization.status).toBe("localized");
-        expect(proposal.localization.filePath).toBe("src/index.css");
-        expect(proposal.proposedCorrection.proposedCode).not.toBe("");
-        expect(proposal.requiredValidationTests.length).toBeGreaterThan(0);
+      const resultsMap: Record<string, any> = {};
+      for (const s of scenarios) {
+        resultsMap[s.id] = {
+          scenarioId: s.id,
+          status: "diagnosed",
+          model: "mock-vlm-v1",
+          provider: "mock",
+          diagnosis: {
+            schema_version: "1.0",
+            summary: s.summary,
+            defects: [
+              {
+                id: `def-${s.id}`,
+                category: s.category,
+                severity: "medium",
+                confidence: 0.95,
+                evidence: [s.summary],
+                suspected_cause: s.cause,
+                suggested_fix: s.fix,
+                affected_element: { selector: s.selector },
+              },
+            ],
+          },
+        };
       }
 
-      // Check files created
-      expect(fs.existsSync(path.join(runManifest.outputDirectory, "repair_proposals.json"))).toBe(true);
-      expect(fs.existsSync(path.join(runManifest.outputDirectory, "source_localization.json"))).toBe(true);
-      expect(fs.existsSync(path.join(runManifest.outputDirectory, "repair_proposal_summary.md"))).toBe(true);
+      const manifestPath = path.join(testFixtureDir, "diagnoses-manifest.json");
+      fs.writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          runId: `isolated-fixture-run-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          provider: "mock",
+          model: "mock-vlm-v1",
+          scenariosDiagnosed: 4,
+          totalScenarios: 4,
+          results: resultsMap,
+          outputArtifactsDirectory: testFixtureDir,
+        })
+      );
+
+      try {
+        const runManifest = proposalService.generateProposalsForRun(manifestPath, testOutputDir);
+
+        expect(runManifest.totalDiagnosesProcessed).toBe(4);
+        expect(runManifest.proposalsGenerated).toBe(4);
+        expect(runManifest.unsupportedOrInconclusive).toBe(0);
+
+        // Verify each scenario proposal
+        for (const [scenarioId, proposal] of Object.entries(runManifest.results)) {
+          expect(proposal.status).toBe("proposed");
+          expect(proposal.humanReviewStatus).toBe("pending_review");
+          expect(proposal.isMock).toBe(true);
+          expect(proposal.localization.status).toBe("localized");
+          expect(proposal.localization.filePath).toBe("src/index.css");
+          expect(proposal.proposedCorrection.proposedCode).not.toBe("");
+          expect(proposal.requiredValidationTests.length).toBeGreaterThan(0);
+        }
+
+        // Check files created
+        expect(fs.existsSync(path.join(testOutputDir, "repair_proposals.json"))).toBe(true);
+        expect(fs.existsSync(path.join(testOutputDir, "source_localization.json"))).toBe(true);
+        expect(fs.existsSync(path.join(testOutputDir, "repair_proposal_summary.md"))).toBe(true);
+      } finally {
+        if (fs.existsSync(testFixtureDir)) {
+          fs.rmSync(testFixtureDir, { recursive: true, force: true });
+        }
+        if (fs.existsSync(testOutputDir)) {
+          fs.rmSync(testOutputDir, { recursive: true, force: true });
+        }
+      }
     });
 
     test("generates inconclusive proposal when diagnosis reports no defect or error", () => {

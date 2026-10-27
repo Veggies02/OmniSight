@@ -250,12 +250,66 @@ export const ProposalDetailPage: React.FC = () => {
 
                 {repairJobResult && (
                   <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", padding: "0.75rem", borderRadius: "6px", marginBottom: "1rem" }} data-testid="repair-job-summary">
-                    <p>
+                    <p data-testid="repair-job-status-row">
                       <strong>Status:</strong>{" "}
-                      <span style={{ color: repairJobResult.status === "PASSED" ? "#16a34a" : "#dc2626", fontWeight: "bold" }}>
-                        {repairJobResult.status}
+                      <span
+                        data-testid="repair-job-status"
+                        style={{
+                          color:
+                            repairJobResult.status === "PASSED"
+                              ? "#16a34a"
+                              : repairJobResult.status === "REJECTED"
+                              ? "#d97706"
+                              : "#dc2626",
+                          fontWeight: "bold",
+                        }}
+                      >
+                        {repairJobResult.status || "UNKNOWN"}
                       </span>
-                      {repairJobResult.stage && <span style={{ marginLeft: "0.5rem", color: "#64748b", fontSize: "0.8rem" }}>({repairJobResult.stage})</span>}
+                      {repairJobResult.outcome && (
+                        <span
+                          data-testid="repair-job-outcome"
+                          style={{
+                            marginLeft: "0.5rem",
+                            padding: "0.15rem 0.4rem",
+                            borderRadius: "4px",
+                            fontSize: "0.75rem",
+                            fontWeight: 600,
+                            backgroundColor:
+                              repairJobResult.outcome === "passed"
+                                ? "#dcfce7"
+                                : repairJobResult.outcome === "rejected"
+                                ? "#fef3c7"
+                                : "#fee2e2",
+                            color:
+                              repairJobResult.outcome === "passed"
+                                ? "#166534"
+                                : repairJobResult.outcome === "rejected"
+                                ? "#92400e"
+                                : "#991b1b",
+                          }}
+                        >
+                          Outcome: {repairJobResult.outcome}
+                        </span>
+                      )}
+                    </p>
+                    <p data-testid="repair-job-stage-row">
+                      <strong>Backend Stage:</strong>{" "}
+                      <span
+                        data-testid="repair-job-stage"
+                        style={{
+                          display: "inline-block",
+                          padding: "0.15rem 0.5rem",
+                          borderRadius: "4px",
+                          fontSize: "0.8rem",
+                          fontWeight: 500,
+                          backgroundColor: "#f1f5f9",
+                          color: "#334155",
+                          border: "1px solid #cbd5e1",
+                        }}
+                      >
+                        {repairJobResult.stage || "unspecified"}
+                      </span>
                     </p>
                     <p data-testid="verification-status-row">
                       <strong>Post-Repair Verification:</strong>{" "}

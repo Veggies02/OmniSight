@@ -5,6 +5,8 @@ import { DiagnosisService } from "./vlm/diagnosis-service";
 async function main() {
   const args = process.argv.slice(2);
   let runId: string | undefined;
+  let runDir: string | undefined;
+  let outputDir: string | undefined;
   let scenarioId: string | undefined;
   let provider: string | undefined;
   let model: string | undefined;
@@ -12,6 +14,10 @@ async function main() {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--run-id" && args[i + 1]) {
       runId = args[++i];
+    } else if ((args[i] === "--run-dir" || args[i] === "--input") && args[i + 1]) {
+      runDir = args[++i];
+    } else if (args[i] === "--output" && args[i + 1]) {
+      outputDir = args[++i];
     } else if (args[i] === "--scenario" && args[i + 1]) {
       scenarioId = args[++i];
     } else if (args[i] === "--provider" && args[i + 1]) {
@@ -33,6 +39,8 @@ async function main() {
   try {
     const manifest = await service.diagnoseRun({
       runId,
+      runDirectory: runDir,
+      outputDirectory: outputDir,
       scenarioId,
     });
 

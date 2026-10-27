@@ -11,7 +11,10 @@ async function main() {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--run-id" && args[i + 1]) {
       runId = args[++i];
-    } else if (args[i] === "--diagnosis" && args[i + 1]) {
+    } else if (
+      (args[i] === "--diagnosis" || args[i] === "--diagnoses" || args[i] === "--input" || args[i] === "--diagnoses-dir") &&
+      args[i + 1]
+    ) {
       diagnosisManifestPath = args[++i];
     } else if (args[i] === "--output" && args[i + 1]) {
       outputDirectory = args[++i];
@@ -22,7 +25,21 @@ async function main() {
   console.log("OmniSight Defect Localization & Repair Proposals");
   console.log("==================================================");
 
-  // If manifest not directly supplied, find latest in visual-evidence runs
+  // If a directory was provided for diagnosisManifestPath, check for manifest inside it
+  if (diagnosisManifestPath && fs.existsSync(diagnosisManifestPath)) {
+    const stat = fs.statSync(diagnosisManifestPath);
+    if (stat.isDirectory()) {
+      const candidateInside = path.join(diagnosisManifestPath, "diagnoses-manifest.json");
+      const candidateUnderDiagnoses = path.join(diagnosisManifestPath, "diagnoses/diagnoses-manifest.json");
+      if (fs.existsSync(candidateInside)) {
+        diagnosisManifestPath = candidateInside;
+      } else if (fs.existsSync(candidateUnderDiagnoses)) {
+        diagnosisManifestPath = candidateUnderDiagnoses;
+      }
+    }
+  }
+
+  // If manifest not directly supplied, find by run-id or fallback to latest in visual-evidence runs
   if (!diagnosisManifestPath) {
     const evidenceBase = path.resolve(process.cwd(), "artifacts/visual-evidence");
     if (!fs.existsSync(evidenceBase)) {

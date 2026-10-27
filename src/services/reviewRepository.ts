@@ -239,19 +239,30 @@ export class LocalStorageReviewRepository implements IReviewRepository {
         const finalJob = await this.pollJobCompletion(associatedJobId, onProgress);
         const repair = finalJob.repair;
 
-        const isPassed = finalJob.status === "completed" && (repair?.passed ?? true);
-        const resultStatus: ClientRepairJobResult["status"] = isPassed ? "PASSED" : "FAILED";
+        const isPassed =
+          finalJob.status === "completed" &&
+          (repair?.outcome === "passed" || repair?.passed === true || (!repair?.outcome && repair?.passed !== false));
+        const resultStatus: ClientRepairJobResult["status"] = isPassed
+          ? "PASSED"
+          : repair?.outcome === "rejected"
+          ? "REJECTED"
+          : "FAILED";
 
         return {
           jobId: finalJob.job_id,
           proposalId: proposal.proposalId,
           status: resultStatus,
+          outcome: repair?.outcome || (isPassed ? "passed" : "failed"),
           executedAt: finalJob.updated_at || new Date().toISOString(),
           worktreeBranch: `omnisight-repair/${finalJob.job_id}`,
           patchId: repair?.patch_id || `patch-${proposal.defectCategory}-001`,
           buildPassed: repair?.build_passed ?? isPassed,
+          testPassed: repair?.test_passed,
           visualPassed: repair?.visual_passed ?? isPassed,
+          approved: repair?.approved,
           cleanupCompleted: Boolean(repair?.cleanup?.worktree_cleaned ?? true),
+          cleanup: repair?.cleanup,
+          proposalPath: repair?.proposal_path,
           reportPath:
             repair?.report_path ||
             `artifacts/repair-executions/${finalJob.job_id}/repair_execution_report.json`,
@@ -259,10 +270,11 @@ export class LocalStorageReviewRepository implements IReviewRepository {
             repair?.message ||
             (isPassed
               ? "Isolated repair job executed successfully via backend. Worktree validated and cleaned up."
-              : `Repair failed: ${repair?.failure_reason || finalJob.error || "Execution error"}`),
+              : `Repair ${repair?.outcome || "failed"}: ${repair?.failure_reason || finalJob.error || "Execution error"}`),
           stage: finalJob.stage,
           finalState: repair?.final_state || (isPassed ? "PASSED" : "FAILED"),
           failureReason: repair?.failure_reason || finalJob.error,
+          exitCode: repair?.exit_code,
           stdoutTail: repair?.stdout_tail,
           stderrTail: repair?.stderr_tail,
           durationSeconds: repair?.duration_seconds,

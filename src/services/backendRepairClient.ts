@@ -23,6 +23,15 @@ export type BackendJobStatus =
   | "completed"
   | "failed";
 
+export type BackendJobStage =
+  | "queued"
+  | "inspecting"
+  | "analyzing"
+  | "awaiting_approval"
+  | "repairing"
+  | "verifying"
+  | (string & {});
+
 export interface BackendRepairApproval {
   reviewed_by: string;
   reviewed_at: string;
@@ -30,9 +39,9 @@ export interface BackendRepairApproval {
 
 export interface BackendRepairResult {
   outcome: "passed" | "failed" | "rejected" | "error";
-  passed: boolean;
-  job_id: string;
-  message: string;
+  passed?: boolean;
+  job_id?: string;
+  message?: string;
   exit_code?: number;
   final_state?: string;
   failure_reason?: string;
@@ -53,7 +62,7 @@ export interface BackendRepairResult {
 export interface BackendArtifactRef {
   artifact_id: string;
   job_id?: string;
-  kind: "screenshot" | "dom_snapshot" | "trace" | "log" | "other";
+  kind: "screenshot" | "dom_snapshot" | "trace" | "log" | "other" | (string & {});
   uri: string;
   description: string;
   mock: boolean;
@@ -63,9 +72,9 @@ export interface BackendArtifactRef {
 export interface BackendJobResponse {
   job_id: string;
   website_url: string;
-  status: BackendJobStatus;
-  stage?: string;
-  source: "manual" | "ci_webhook";
+  status: BackendJobStatus | (string & {});
+  stage: BackendJobStage;
+  source: "manual" | "ci_webhook" | (string & {});
   repository?: string;
   commit_sha?: string;
   created_at: string;
