@@ -103,6 +103,9 @@ def execute_with_retry(
 class VisionModel(ABC):
     """Interface every vision provider implements."""
 
+    provider_name: str = "unknown"
+    is_mock: bool = False
+
     @abstractmethod
     def analyze(self, image_path: str, prompt: str) -> str:
         """Send one image plus a prompt; return the raw model text."""
@@ -114,6 +117,8 @@ class VisionModel(ABC):
 # =====================================================================
 
 class MockVisionModel(VisionModel):
+    provider_name = "mock"
+    is_mock = True
     """Deterministic mock provider for offline development and fast CI testing.
     
     Can return default synthetic findings, custom configured responses, or simulated errors.
@@ -165,6 +170,8 @@ class MockVisionModel(VisionModel):
 # =====================================================================
 
 class GeminiVisionModel(VisionModel):
+    provider_name = "gemini"
+    is_mock = False
     """Concrete adapter for Google Gemini multimodal models."""
 
     DEFAULT_MODEL = "gemini-2.0-flash"

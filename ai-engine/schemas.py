@@ -77,6 +77,9 @@ class AnalysisResponse(BaseModel):
     findings: List[AIFinding] = Field(default_factory=list, description="List of structured findings")
     analysis_latency_ms: Optional[float] = Field(default=None, description="VLM inference & parsing time in milliseconds")
     raw_model_response: Optional[str] = Field(default=None, description="Raw unparsed model text for auditing")
+    is_mock: bool = Field(default=False, description="Flag indicating if inference was produced by a mock provider")
+    provider: str = Field(default="mock", description="Name of the VLM provider used, e.g. 'mock', 'gemini'")
+    error: Optional[str] = Field(default=None, description="Error message if analysis failed or was incomplete")
 
 
 # --- Patch proposal schemas ---

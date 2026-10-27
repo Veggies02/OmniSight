@@ -231,3 +231,32 @@ def test_patch_proposal_json_round_trip():
     )
     restored = PatchProposal.model_validate_json(original.model_dump_json())
     assert restored == original
+
+def test_analysis_response_provider_metadata_and_error():
+    resp = AnalysisResponse(
+        job_id="j-prov-1",
+        has_defect=False,
+        is_mock=True,
+        provider="mock",
+        error=None,
+    )
+    assert resp.is_mock is True
+    assert resp.provider == "mock"
+    assert resp.error is None
+
+    dumped = resp.model_dump()
+    assert dumped["is_mock"] is True
+    assert dumped["provider"] == "mock"
+    assert "error" in dumped
+
+    # Test error reporting
+    err_resp = AnalysisResponse(
+        job_id="j-err-1",
+        has_defect=False,
+        is_mock=False,
+        provider="gemini",
+        error="VLM rate limit exceeded",
+    )
+    assert err_resp.error == "VLM rate limit exceeded"
+    assert err_resp.is_mock is False
+    assert err_resp.provider == "gemini"

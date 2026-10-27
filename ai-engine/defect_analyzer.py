@@ -408,9 +408,13 @@ def analyze_evidence(
             parsed, was_repaired = extract_json_with_status(raw_response)
     except ValueError:
         # Model returned unparseable output — report as inconclusive
+        is_mock = getattr(model, "is_mock", True)
+        provider = getattr(model, "provider_name", "mock" if is_mock else "unknown")
         return AnalysisResponse(
             job_id=evidence.job_id,
             has_defect=False,
+            is_mock=is_mock,
+            provider=provider,
             findings=[
                 AIFinding(
                     job_id=evidence.job_id,
@@ -424,6 +428,7 @@ def analyze_evidence(
             ],
             analysis_latency_ms=latency_ms,
             raw_model_response=raw_response,
+            error="Model response could not be parsed into structured findings.",
         )
 
     # Step 5: Build findings
@@ -450,10 +455,15 @@ def analyze_evidence(
         )
     findings = annotate_findings(findings, response_repaired=was_repaired)
 
+    is_mock = getattr(model, "is_mock", True)
+    provider = getattr(model, "provider_name", "mock" if is_mock else "unknown")
     return AnalysisResponse(
         job_id=evidence.job_id,
         has_defect=has_defect,
+        is_mock=is_mock,
+        provider=provider,
         findings=findings,
         analysis_latency_ms=latency_ms,
         raw_model_response=raw_response,
+        error=None,
     )
