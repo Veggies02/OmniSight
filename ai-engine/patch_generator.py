@@ -24,6 +24,7 @@ from pydantic import ValidationError
 
 from defect_analyzer import extract_json_with_status
 from localization import localize_finding
+from patch_scope import DEFAULT_POLICY, ScopePolicy, check_path, validate_changes
 from prompts import MAX_REPAIR_FILES, RepairSource, build_repair_prompt
 from schemas import (
     AIFinding,
@@ -244,6 +245,7 @@ def generate_patch(
     model: VisionModel,
     evidence: Optional[EvidenceContext] = None,
     limits: PatchLimits = DEFAULT_LIMITS,
+    policy: ScopePolicy = DEFAULT_POLICY,
 ) -> PatchResult:
     """Propose a minimal, verified code fix for one defect finding.
 
@@ -266,12 +268,15 @@ def generate_patch(
     if finding.defect_category == DefectCategory.NONE:
         return PatchResult(STATUS_NO_DEFECT, reasons=("The finding is not a defect.",))
 
-    matches = localize_finding(finding, repo_root, max_results=limits.max_files)
+    candidates = localize_finding(finding, repo_root, max_results=limits.max_files * 4)
+    matches = [
+        m for m in candidates if not check_path(m.file_path, policy, repo_root)
+    ][:limits.max_files]
     texts, sources = _load_sources(repo_root, matches)
     if not sources:
         return PatchResult(
             STATUS_NO_SOURCE,
-            reasons=("No source files matched the selector or component hint.",),
+            reasons=("No allowed source files matched the selector or component hint.",),
         )
 
     width, height, is_mobile = 1280, 720, False
@@ -356,6 +361,13 @@ def generate_patch(
     if problems:
         return PatchResult(STATUS_REJECTED, reasons=tuple(problems))
 
+    scope = validate_changes(changes, policy=policy, repo_root=repo_root)
+    if not scope.ok:
+        return PatchResult(
+            STATUS_REJECTED,
+            reasons=tuple(v.message for v in scope.violations),
+        )
+    
     confidence = _clamp_confidence(data.get("confidence", 0.5))
     notes: Tuple[str, ...] = ()
     if repaired:

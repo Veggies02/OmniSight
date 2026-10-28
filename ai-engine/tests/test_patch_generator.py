@@ -341,3 +341,39 @@ def test_evidence_overrides_screenshot_and_viewport(finding, repo, make_evidence
     generate_patch(finding, repo, model, evidence=evidence)
     assert model.calls[0][0] == evidence.screenshot_path
     assert "Viewport: 375x812 (mobile)" in model.calls[0][1]
+
+# --- Scope policy ---
+
+from patch_scope import ScopePolicy
+
+TSX_UNSAFE_DIFF = (
+    f"--- a/{TSX_PATH}\n+++ b/{TSX_PATH}\n"
+    "@@ -3,3 +3,3 @@\n"
+    '     <div className="product-card">\n'
+    '-      <button className="add-to-cart btn">Add</button>\n'
+    '+      <button className="add-to-cart btn" onClick={() => track()}>Add</button>\n'
+    "     </div>\n"
+)
+
+
+def test_policy_filters_files_sent_to_model(finding, repo):
+    policy = ScopePolicy(allowed_extensions=frozenset({".css"}))
+    model = _Recorder(_reply([_change()]))
+    result = generate_patch(finding, repo, model, policy=policy)
+    prompt = model.calls[0][1]
+    assert result.ok
+    assert f"<<<FILE {CSS_PATH}>>>" in prompt
+    assert f"<<<FILE {TSX_PATH}>>>" not in prompt
+
+
+def test_unsafe_added_content_is_rejected_by_scope(finding, repo):
+    result = _run(finding, repo, _reply([_change(path=TSX_PATH, diff=TSX_UNSAFE_DIFF)]))
+    assert result.status == STATUS_REJECTED
+    assert "behaviour" in _reasons(result)
+
+
+def test_no_allowed_files_means_the_model_is_not_called(finding, repo):
+    policy = ScopePolicy(allowed_dirs=("elsewhere",))
+    model = MockVisionModel(simulate_error=VLMError("model should not be called"))
+    result = generate_patch(finding, repo, model, policy=policy)
+    assert result.status == STATUS_NO_SOURCE
