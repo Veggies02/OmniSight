@@ -377,3 +377,4 @@ def test_no_allowed_files_means_the_model_is_not_called(finding, repo):
     model = MockVisionModel(simulate_error=VLMError("model should not be called"))
     result = generate_patch(finding, repo, model, policy=policy)
     assert result.status == STATUS_NO_SOURCE
+    
