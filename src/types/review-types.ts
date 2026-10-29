@@ -55,8 +55,12 @@ export interface VisualEvidencePair {
   viewport: { width: number; height: number };
   baselineScreenshotUrl: string;
   defectiveScreenshotUrl: string;
+  postRepairScreenshotUrl?: string;
   pageTitle: string;
   measurements?: Record<string, any>;
+  runId?: string;
+  postRepairRunId?: string;
+  postRepairJobId?: string;
 }
 
 export interface ReviewProposalItem {
@@ -121,12 +125,32 @@ export interface ClientRepairJobResult {
   jobId: string;
   proposalId: string;
   status: 'PENDING' | 'PASSED' | 'FAILED' | 'REJECTED';
+  outcome?: 'passed' | 'failed' | 'rejected' | 'error' | (string & {});
+  verificationStatus?: 'passed' | 'failed' | 'inconclusive';
   executedAt: string;
   worktreeBranch: string;
   patchId: string;
   buildPassed: boolean;
+  testPassed?: boolean;
   visualPassed: boolean;
+  approved?: boolean;
   cleanupCompleted: boolean;
+  cleanup?: Record<string, any>;
+  proposalPath?: string;
   reportPath: string;
   summary: string;
+  stage?: string;
+  finalState?: string;
+  failureReason?: string;
+  exitCode?: number;
+  stdoutTail?: string;
+  stderrTail?: string;
+  durationSeconds?: number;
+  postRepairScreenshotUrl?: string;
+  verificationChecks?: Array<{
+    name: string;
+    expected: string | number | boolean;
+    actual: string | number | boolean | null;
+    passed: boolean;
+  }>;
 }

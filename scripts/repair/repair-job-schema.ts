@@ -60,6 +60,7 @@ export interface CommandExecutionResult {
 
 export interface VisualValidationResult {
   passed: boolean;
+  verificationStatus?: 'passed' | 'failed' | 'inconclusive';
   defectCategory: string;
   route: string;
   viewport: {
@@ -69,10 +70,19 @@ export interface VisualValidationResult {
   cleanBaselineMetric?: Record<string, any>;
   defectiveMetric?: Record<string, any>;
   repairedMetric?: Record<string, any>;
+  checks?: Array<{
+    name: string;
+    expected: string | number | boolean;
+    actual: string | number | boolean | null;
+    passed: boolean;
+    details?: string;
+  }>;
+  failureReasons?: string[];
   assertionSummary: string;
   unrelatedRegressionsDetected: boolean;
   beforeScreenshotPath?: string;
   afterScreenshotPath?: string;
+  resultJsonPath?: string;
 }
 
 export interface PatchApplicationResult {

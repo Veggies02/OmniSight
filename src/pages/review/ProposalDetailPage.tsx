@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ReviewSidebar } from "../../components/review/ReviewSidebar";
 import { ReviewDecisionDialog } from "../../components/review/ReviewDecisionDialog";
+import { EvidenceViewer } from "../../components/review/EvidenceViewer";
 import { reviewRepository } from "../../services/reviewRepository";
 import { type ReviewProposalItem } from "../../types/review-types";
 
@@ -27,6 +28,7 @@ export const ProposalDetailPage: React.FC = () => {
 
   const [repairModalOpen, setRepairModalOpen] = useState(false);
   const [executingRepair, setExecutingRepair] = useState(false);
+  const [executionProgress, setExecutionProgress] = useState<string | null>(null);
   const [repairJobResult, setRepairJobResult] = useState<import("../../types/review-types").ClientRepairJobResult | null>(null);
 
   const loadProposal = async () => {
@@ -235,14 +237,133 @@ export const ProposalDetailPage: React.FC = () => {
                   </ul>
                 </div>
 
+                {executingRepair && (
+                  <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", padding: "0.75rem 1rem", borderRadius: "6px", marginBottom: "1rem" }} data-testid="repair-execution-progress">
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <div className="spinner" style={{ width: "16px", height: "16px", borderWidth: "2px" }} />
+                      <span style={{ fontWeight: 500, color: "#334155" }}>
+                        {executionProgress || "Executing repair in isolated worktree..."}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 {repairJobResult && (
                   <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", padding: "0.75rem", borderRadius: "6px", marginBottom: "1rem" }} data-testid="repair-job-summary">
-                    <p><strong>Status:</strong> <span style={{ color: "#16a34a", fontWeight: "bold" }}>{repairJobResult.status}</span></p>
+                    <p data-testid="repair-job-status-row">
+                      <strong>Status:</strong>{" "}
+                      <span
+                        data-testid="repair-job-status"
+                        style={{
+                          color:
+                            repairJobResult.status === "PASSED"
+                              ? "#16a34a"
+                              : repairJobResult.status === "REJECTED"
+                              ? "#d97706"
+                              : "#dc2626",
+                          fontWeight: "bold",
+                        }}
+                      >
+                        {repairJobResult.status || "UNKNOWN"}
+                      </span>
+                      {repairJobResult.outcome && (
+                        <span
+                          data-testid="repair-job-outcome"
+                          style={{
+                            marginLeft: "0.5rem",
+                            padding: "0.15rem 0.4rem",
+                            borderRadius: "4px",
+                            fontSize: "0.75rem",
+                            fontWeight: 600,
+                            backgroundColor:
+                              repairJobResult.outcome === "passed"
+                                ? "#dcfce7"
+                                : repairJobResult.outcome === "rejected"
+                                ? "#fef3c7"
+                                : "#fee2e2",
+                            color:
+                              repairJobResult.outcome === "passed"
+                                ? "#166534"
+                                : repairJobResult.outcome === "rejected"
+                                ? "#92400e"
+                                : "#991b1b",
+                          }}
+                        >
+                          Outcome: {repairJobResult.outcome}
+                        </span>
+                      )}
+                    </p>
+                    <p data-testid="repair-job-stage-row">
+                      <strong>Backend Stage:</strong>{" "}
+                      <span
+                        data-testid="repair-job-stage"
+                        style={{
+                          display: "inline-block",
+                          padding: "0.15rem 0.5rem",
+                          borderRadius: "4px",
+                          fontSize: "0.8rem",
+                          fontWeight: 500,
+                          backgroundColor: "#f1f5f9",
+                          color: "#334155",
+                          border: "1px solid #cbd5e1",
+                        }}
+                      >
+                        {repairJobResult.stage || "unspecified"}
+                      </span>
+                    </p>
+                    <p data-testid="verification-status-row">
+                      <strong>Post-Repair Verification:</strong>{" "}
+                      <span
+                        style={{
+                          fontWeight: "bold",
+                          color:
+                            repairJobResult.verificationStatus === "passed" || repairJobResult.visualPassed
+                              ? "#16a34a"
+                              : repairJobResult.verificationStatus === "inconclusive"
+                              ? "#d97706"
+                              : "#dc2626",
+                        }}
+                        data-testid="verification-status-badge"
+                      >
+                        {(repairJobResult.verificationStatus || (repairJobResult.visualPassed ? "passed" : "failed")).toUpperCase()}
+                      </span>
+                    </p>
                     <p><strong>Job ID:</strong> <code>{repairJobResult.jobId}</code></p>
                     <p><strong>Worktree Branch:</strong> <code>{repairJobResult.worktreeBranch}</code></p>
                     <p><strong>Build Verification:</strong> {repairJobResult.buildPassed ? "✓ Passed" : "✕ Failed"}</p>
                     <p><strong>Visual Delta Validation:</strong> {repairJobResult.visualPassed ? "✓ Passed" : "✕ Failed"}</p>
+                    {repairJobResult.durationSeconds !== undefined && (
+                      <p><strong>Execution Duration:</strong> {repairJobResult.durationSeconds.toFixed(1)}s</p>
+                    )}
                     <p><strong>Artifact Report:</strong> <code>{repairJobResult.reportPath}</code></p>
+                    {repairJobResult.verificationChecks && repairJobResult.verificationChecks.length > 0 && (
+                      <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#f1f5f9", borderRadius: "4px" }} data-testid="verification-checks-list">
+                        <strong style={{ fontSize: "0.8rem", color: "#334155" }}>Verification Checks:</strong>
+                        <ul style={{ margin: "0.25rem 0 0 1rem", padding: 0, fontSize: "0.75rem" }}>
+                          {repairJobResult.verificationChecks.map((chk, idx) => (
+                            <li key={idx} style={{ color: chk.passed ? "#166534" : "#991b1b" }}>
+                              {chk.passed ? "✓" : "✕"} {chk.name}: {String(chk.actual)} (expected {String(chk.expected)})
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {repairJobResult.postRepairScreenshotUrl && (
+                      <div style={{ marginTop: "0.5rem" }} data-testid="post-repair-evidence-preview">
+                        <strong style={{ fontSize: "0.8rem", color: "#334155" }}>Post-Repair Screenshot Evidence:</strong>
+                        <img
+                          src={repairJobResult.postRepairScreenshotUrl}
+                          alt="Post Repair Verification Screenshot"
+                          style={{ width: "100%", maxHeight: "140px", objectFit: "cover", borderRadius: "4px", marginTop: "0.25rem", border: "1px solid #cbd5e1" }}
+                          data-testid="post-repair-screenshot-img"
+                        />
+                      </div>
+                    )}
+                    {repairJobResult.failureReason && (
+                      <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "4px", color: "#991b1b" }} data-testid="verification-failure-reason">
+                        <strong>Failure Reason:</strong> {repairJobResult.failureReason}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -265,11 +386,20 @@ export const ProposalDetailPage: React.FC = () => {
                       if (!proposal) return;
                       try {
                         setExecutingRepair(true);
-                        const res = await reviewRepository.triggerRepairExecution(proposal.proposalId);
+                        setExecutionProgress("Initializing repair job...");
+                        const res = await reviewRepository.triggerRepairExecution(
+                          proposal.proposalId,
+                          (stage, status) => {
+                            setExecutionProgress(`${status} (${stage})`);
+                          }
+                        );
                         setRepairJobResult(res);
                         setNotification({
-                          type: "success",
-                          message: `Repair job ${res.jobId} completed successfully! Worktree validated and cleaned up.`,
+                          type: res.status === "PASSED" ? "success" : "error",
+                          message:
+                            res.status === "PASSED"
+                              ? `Repair job ${res.jobId} completed successfully! Worktree validated and cleaned up.`
+                              : `Repair job ${res.jobId} failed: ${res.failureReason || "Validation check failed"}`,
                         });
                       } catch (err: any) {
                         setNotification({
@@ -278,6 +408,7 @@ export const ProposalDetailPage: React.FC = () => {
                         });
                       } finally {
                         setExecutingRepair(false);
+                        setExecutionProgress(null);
                       }
                     }}
                   >
@@ -317,53 +448,13 @@ export const ProposalDetailPage: React.FC = () => {
               Comparison between clean baseline render and defective state under identical browser viewport.
             </p>
 
-            <div className="evidence-comparison-grid">
-              <div className="evidence-side" data-testid="baseline-evidence-side">
-                <div className="evidence-label-bar">
-                  <span className="badge-side-clean">Clean Baseline</span>
-                  <span className="viewport-tag">
-                    {proposal.visualEvidence?.viewport.width} × {proposal.visualEvidence?.viewport.height}
-                  </span>
-                </div>
-                <div className="evidence-image-container">
-                  {proposal.visualEvidence?.baselineScreenshotUrl ? (
-                    <img
-                      src={proposal.visualEvidence.baselineScreenshotUrl}
-                      alt="Baseline clean screenshot"
-                      className="evidence-img"
-                      data-testid="baseline-image"
-                    />
-                  ) : (
-                    <div className="image-placeholder" data-testid="baseline-placeholder">
-                      Clean Baseline Screenshot Not Available
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="evidence-side" data-testid="defective-evidence-side">
-                <div className="evidence-label-bar">
-                  <span className="badge-side-defective">Defective State</span>
-                  <span className="viewport-tag">
-                    {proposal.visualEvidence?.viewport.width} × {proposal.visualEvidence?.viewport.height}
-                  </span>
-                </div>
-                <div className="evidence-image-container">
-                  {proposal.visualEvidence?.defectiveScreenshotUrl ? (
-                    <img
-                      src={proposal.visualEvidence.defectiveScreenshotUrl}
-                      alt="Defective state screenshot"
-                      className="evidence-img"
-                      data-testid="defective-image"
-                    />
-                  ) : (
-                    <div className="image-placeholder" data-testid="defective-placeholder">
-                      Defective Screenshot Not Available
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+            <EvidenceViewer
+              scenarioId={proposal.scenarioId}
+              defectCategory={proposal.defectCategory}
+              proposalId={proposal.proposalId}
+              visualEvidence={proposal.visualEvidence}
+              repairResult={repairJobResult}
+            />
 
             {proposal.visualEvidence?.measurements && (
               <div className="measurements-box" data-testid="measurements-box">
