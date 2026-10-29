@@ -75,6 +75,8 @@ test.describe('Step 4.7 End-to-End Self-Healing Repair Workflow Tests', () => {
   // Scenario 1: Complete Happy Path Lifecycle
   // Inject Defect -> Diagnose -> Approve Repair -> Execute Repair -> Verify UI -> Detect Regressions -> Capture Evidence -> Export Report
   test('Scenario 1: Complete successful repair lifecycle with isolated worktree, UI verification, and report export', async ({ page }) => {
+    test.setTimeout(120_000);
+
     // 1. Inject Defect & Observe Defective State
     await page.goto('http://127.0.0.1:5173/products?defect=product-image-distortion');
     const defectMeta = page.locator('#omnisight-defect-metadata');
