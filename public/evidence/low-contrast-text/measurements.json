@@ -1,0 +1,91 @@
+{
+  "scenarioId": "low-contrast-text",
+  "baseline": {
+    "defectId": "low-contrast-text",
+    "category": "color-contrast",
+    "route": "/products",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "state": "baseline",
+    "elementBoundingBoxes": {
+      "card": {
+        "x": 144,
+        "y": 361.765625,
+        "width": 267,
+        "height": 493.390625
+      },
+      "snippet": {
+        "x": 165,
+        "y": 730.28125,
+        "width": 225,
+        "height": 40.59375
+      }
+    },
+    "computedStyles": {
+      "snippet.color": "rgb(100, 116, 139)",
+      "card.backgroundColor": "rgb(255, 255, 255)",
+      "snippet.fontSize": "14px",
+      "snippet.fontWeight": "400"
+    },
+    "specificMetrics": {
+      "foregroundColor": "rgb(100, 116, 139)",
+      "backgroundColor": "rgb(255, 255, 255)",
+      "contrastRatio": 4.76,
+      "passesWcagAA": true,
+      "passesWcagLargeText": true
+    },
+    "hasHorizontalOverflow": false,
+    "documentMetrics": {
+      "clientWidth": 1440,
+      "scrollWidth": 1440,
+      "clientHeight": 900,
+      "scrollHeight": 1697
+    }
+  },
+  "defective": {
+    "defectId": "low-contrast-text",
+    "category": "color-contrast",
+    "route": "/products",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "state": "defective",
+    "elementBoundingBoxes": {
+      "card": {
+        "x": 144,
+        "y": 361.765625,
+        "width": 267,
+        "height": 493.390625
+      },
+      "snippet": {
+        "x": 165,
+        "y": 730.28125,
+        "width": 225,
+        "height": 40.59375
+      }
+    },
+    "computedStyles": {
+      "snippet.color": "rgb(203, 213, 225)",
+      "card.backgroundColor": "rgb(255, 255, 255)",
+      "snippet.fontSize": "14px",
+      "snippet.fontWeight": "400"
+    },
+    "specificMetrics": {
+      "foregroundColor": "rgb(203, 213, 225)",
+      "backgroundColor": "rgb(255, 255, 255)",
+      "contrastRatio": 1.48,
+      "passesWcagAA": false,
+      "passesWcagLargeText": false
+    },
+    "hasHorizontalOverflow": false,
+    "documentMetrics": {
+      "clientWidth": 1440,
+      "scrollWidth": 1440,
+      "clientHeight": 900,
+      "scrollHeight": 1697
+    }
+  }
+}

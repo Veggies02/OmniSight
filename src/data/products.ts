@@ -84,4 +84,16 @@ export const products: Product[] = [
     inStock: true,
     featured: false,
   },
+  {
+    id: "prod-7",
+    name: "Apex Studio Monitor Speakers",
+    price: 320.0,
+    category: "Audio",
+    description: "Bi-amplified nearfield reference studio monitors delivering ultra-flat frequency response, balanced XLR inputs, and acoustic space tuning.",
+    image: "https://images.unsplash.com/photo-1545454675-3531b543be5d?auto=format&fit=crop&w=800&q=80",
+    rating: 4.9,
+    reviewCount: 41,
+    inStock: false,
+    featured: false,
+  },
 ];

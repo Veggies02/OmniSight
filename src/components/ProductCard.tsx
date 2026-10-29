@@ -1,13 +1,56 @@
+import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import type { Product } from "../data/products";
+import { useCart } from "../hooks/useCart";
+import { useDefects } from "../hooks/useDefects";
 
 interface ProductCardProps {
   product: Product;
 }
 
 export function ProductCard({ product }: ProductCardProps) {
+  const { addItem } = useCart();
+  const [addedNotice, setAddedNotice] = useState(false);
+  const { isDefectActive } = useDefects();
+
+  const isImageDistortionActive = isDefectActive("product-image-distortion");
+  const isLayoutBreakActive = isDefectActive("product-card-layout-break");
+  const isLowContrastActive = isDefectActive("low-contrast-text");
+
+  const cardDefectClasses = [
+    isImageDistortionActive ? "defect-product-image-distortion" : "",
+    isLayoutBreakActive ? "defect-product-card-layout-break" : "",
+    isLowContrastActive ? "defect-low-contrast-text" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const activeCardDefect = isImageDistortionActive
+    ? "product-image-distortion"
+    : isLayoutBreakActive
+    ? "product-card-layout-break"
+    : isLowContrastActive
+    ? "low-contrast-text"
+    : undefined;
+
+  const handleAddToCart = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!product.inStock) return;
+
+    addItem(product, 1);
+    setAddedNotice(true);
+    setTimeout(() => {
+      setAddedNotice(false);
+    }, 2500);
+  };
+
   return (
-    <article className="product-card" data-product-id={product.id}>
+    <article
+      className={`product-card ${cardDefectClasses}`}
+      data-product-id={product.id}
+      data-defect-applied={activeCardDefect}
+    >
       <Link
         to={`/products/${product.id}`}
         className="product-card-media"
@@ -44,13 +87,30 @@ export function ProductCard({ product }: ProductCardProps) {
 
         <div className="product-card-footer">
           <span className="product-price">${product.price.toFixed(2)}</span>
-          <Link
-            to={`/products/${product.id}`}
-            className="btn btn-secondary btn-sm"
-            aria-label={`View details for ${product.name}`}
-          >
-            View Details
-          </Link>
+          <div className="card-action-group">
+            <Link
+              to={`/products/${product.id}`}
+              className="btn btn-outline btn-sm"
+              aria-label={`View details for ${product.name}`}
+            >
+              Details
+            </Link>
+            <button
+              type="button"
+              className={`btn btn-sm ${product.inStock ? "btn-primary" : "btn-disabled"}`}
+              onClick={handleAddToCart}
+              disabled={!product.inStock}
+              aria-label={
+                addedNotice
+                  ? `Added ${product.name} to cart`
+                  : product.inStock
+                  ? `Add ${product.name} to cart`
+                  : `${product.name} is out of stock`
+              }
+            >
+              {addedNotice ? "✓ Added" : product.inStock ? "Add to Cart" : "Out of Stock"}
+            </button>
+          </div>
         </div>
       </div>
     </article>

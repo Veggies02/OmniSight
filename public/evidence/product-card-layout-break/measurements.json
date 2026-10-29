@@ -1,0 +1,95 @@
+{
+  "scenarioId": "product-card-layout-break",
+  "baseline": {
+    "defectId": "product-card-layout-break",
+    "category": "layout-shift",
+    "route": "/products",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "state": "baseline",
+    "elementBoundingBoxes": {
+      "card": {
+        "x": 144,
+        "y": 361.765625,
+        "width": 267,
+        "height": 493.390625
+      },
+      "body": {
+        "x": 145,
+        "y": 627.765625,
+        "width": 265,
+        "height": 226.390625
+      },
+      "footer": {
+        "x": 165,
+        "y": 786.875,
+        "width": 225,
+        "height": 47.28125
+      }
+    },
+    "computedStyles": {
+      "footer.position": "static",
+      "footer.bottom": "auto",
+      "body.marginTop": "0px"
+    },
+    "specificMetrics": {
+      "footerProtrusionPx": 0,
+      "isLayoutDisplaced": false
+    },
+    "hasHorizontalOverflow": false,
+    "documentMetrics": {
+      "clientWidth": 1440,
+      "scrollWidth": 1440,
+      "clientHeight": 900,
+      "scrollHeight": 1697
+    }
+  },
+  "defective": {
+    "defectId": "product-card-layout-break",
+    "category": "layout-shift",
+    "route": "/products",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "state": "defective",
+    "elementBoundingBoxes": {
+      "card": {
+        "x": 144,
+        "y": 361.765625,
+        "width": 267,
+        "height": 366.109375
+      },
+      "body": {
+        "x": 145,
+        "y": 587.765625,
+        "width": 265,
+        "height": 123.109375
+      },
+      "footer": {
+        "x": 145,
+        "y": 708.59375,
+        "width": 295,
+        "height": 47.28125
+      }
+    },
+    "computedStyles": {
+      "footer.position": "absolute",
+      "footer.bottom": "-45px",
+      "body.marginTop": "-40px"
+    },
+    "specificMetrics": {
+      "footerProtrusionPx": 28,
+      "isLayoutDisplaced": true
+    },
+    "hasHorizontalOverflow": false,
+    "documentMetrics": {
+      "clientWidth": 1440,
+      "scrollWidth": 1440,
+      "clientHeight": 900,
+      "scrollHeight": 1419
+    }
+  }
+}
