@@ -226,7 +226,11 @@ export class OmniSightApiClient {
       }
 
       // Handle external cancellation
-      if (err instanceof DOMException && err.name === "AbortError") {
+      const isAbort =
+        (err instanceof Error && err.name === "AbortError") ||
+        (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError");
+
+      if (isAbort) {
         throw new ApiError({
           message: `Request to ${cleanEndpoint} was cancelled`,
           kind: "ABORT_ERROR",

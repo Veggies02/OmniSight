@@ -28,17 +28,18 @@ export function adaptBackendArtifactToEvidence(
   artifact: BackendArtifactRef,
   jobId: string
 ): InspectionEvidence {
-  const isImage = artifact.kind === "screenshot";
+  const isImage = artifact?.kind === "screenshot";
+  const artId = artifact?.artifact_id || `art-${jobId}-${Math.random().toString(36).slice(2, 7)}`;
 
   return {
-    id: artifact.artifact_id,
-    type: artifact.kind === "screenshot" ? "screenshot" : artifact.kind === "trace" ? "playwright-trace" : "dom-snapshot",
-    title: artifact.description || `Artifact ${artifact.artifact_id}`,
+    id: artId,
+    type: artifact?.kind === "screenshot" ? "screenshot" : artifact?.kind === "trace" ? "playwright-trace" : "dom-snapshot",
+    title: artifact?.description || `Artifact ${artId}`,
     viewport: "Desktop (1440 × 900)",
-    capturedAt: artifact.created_at,
-    description: artifact.description,
-    imageUrl: isImage ? artifact.uri : undefined,
-    defectiveImageUrl: isImage ? artifact.uri : undefined,
+    capturedAt: artifact?.created_at || new Date().toISOString(),
+    description: artifact?.description,
+    imageUrl: isImage ? artifact?.uri : undefined,
+    defectiveImageUrl: isImage ? artifact?.uri : undefined,
     jobId,
   };
 }
@@ -61,25 +62,54 @@ export function adaptBackendJobToInspectionJob(backend: BackendJobResponse): Ins
 
   // Derive evidence artifacts
   const evidence: InspectionEvidence[] = (backend.artifacts || []).map((art) =>
-    adaptBackendArtifactToEvidence(art, backend.job_id)
+    adaptBackendArtifactToEvidence(art, backend.job_id || "unknown")
   );
+
+  // Safely extract target route from website_url
+  const rawUrl = typeof backend.website_url === "string" ? backend.website_url : "";
+  const targetRoute = rawUrl.startsWith("http")
+    ? (rawUrl.replace(/^https?:\/\/[^/]+/, "") || "/")
+    : rawUrl.startsWith("/")
+    ? rawUrl
+    : rawUrl
+    ? `/${rawUrl}`
+    : "/";
+
+  // Safely format startedAt timestamp
+  const dateObj = backend.created_at ? new Date(backend.created_at) : new Date();
+  const startedAt = !isNaN(dateObj.getTime())
+    ? dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "Recently";
+
+  // Map defects count
+  const defectsCount =
+    backend.status === "failed" ||
+    backend.status === "needs_review" ||
+    backend.status === "repair_proposed"
+      ? 1
+      : 0;
+
+  // Map validation status consistently
+  const validationStatus =
+    backend.status === "completed" || backend.status === "pr_created"
+      ? "passed"
+      : backend.status === "failed"
+      ? "failed"
+      : backend.status === "validating"
+      ? "running"
+      : backend.status === "needs_review" || backend.status === "repair_proposed"
+      ? "needs-review"
+      : "pending";
 
   return {
     id: backend.job_id,
     application: "OmniShop Storefront",
-    targetRoute: backend.website_url.replace(/^https?:\/\/[^/]+/, "") || "/",
-    timestamp: backend.created_at,
-    startedAt: new Date(backend.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    targetRoute,
+    timestamp: backend.created_at || new Date().toISOString(),
+    startedAt,
     status: badgeStatus,
-    defectsCount: backend.status === "failed" ? 1 : 0,
-    validationStatus:
-      backend.status === "completed"
-        ? "passed"
-        : backend.status === "failed"
-        ? "failed"
-        : backend.status === "validating"
-        ? "running"
-        : "pending",
+    defectsCount,
+    validationStatus,
     duration,
     viewport: "Desktop (1440 × 900)",
     defectSummary: backend.error || backend.inspection?.message || "Automated scan run",
