@@ -29,6 +29,7 @@ _ADDED_JOB_COLUMNS = {
     "proposal": "TEXT",  # JSON repair proposal attached for review
     "approval": "TEXT",  # JSON {reviewed_by, reviewed_at}, set only by the approval endpoint
     "repair": "TEXT",  # JSON result of the repair CLI run
+    "pull_request": "TEXT",  # JSON pull request metadata {pr_number, pr_url, title, ...}
 }
 
 
@@ -203,6 +204,33 @@ class JobStore:
             )
         return self.get_job(job_id)  # type: ignore[return-value]
 
+    def record_pull_request(self, job_id: str, pr_data: Dict[str, Any]) -> Dict:
+        """Store created pull request metadata and update status to PR_CREATED."""
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT status, pull_request FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise JobNotFoundError(job_id)
+            current_status = JobStatus(row["status"])
+            if current_status != JobStatus.PR_CREATED:
+                check_transition(current_status, JobStatus.PR_CREATED)
+            db.execute(
+                """
+                UPDATE jobs
+                SET status = ?, stage = ?, pull_request = ?, updated_at = ?
+                WHERE job_id = ?
+                """,
+                (
+                    JobStatus.PR_CREATED.value,
+                    STAGE_FOR_STATUS[JobStatus.PR_CREATED],
+                    json.dumps(pr_data),
+                    utc_now(),
+                    job_id,
+                ),
+            )
+        return self.get_job(job_id)  # type: ignore[return-value]
+
     def add_artifacts(self, job_id: str, drafts: List[ArtifactDraft]) -> None:
         with self._connect() as db:
             for draft in drafts:
@@ -254,6 +282,7 @@ class JobStore:
             "proposal": _loads(row["proposal"]),
             "approval": _loads(row["approval"]),
             "repair": _loads(row["repair"]),
+            "pull_request": _loads(row["pull_request"]) if "pull_request" in row.keys() else None,
             "error": row["error"],
             "artifacts": self._artifacts_for(db, row["job_id"]),
         }

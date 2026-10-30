@@ -41,8 +41,19 @@ from job_schemas import (
     JobStateError,
     JobStatus,
     ProposalRequest,
+    PullRequestCreateRequest,
+    PullRequestResponse,
 )
 from job_store import JobNotFoundError, JobStore
+from github_client import (
+    GitHubAPIError,
+    GitHubAuthError,
+    GitHubAuthMissingError,
+    GitHubClient,
+    GitHubNotFoundError,
+    GitHubRateLimitError,
+    github_client_from_env,
+)
 from repair_runner import (
     RepairApproval,
     RepairPreflightError,
@@ -131,10 +142,12 @@ def create_app(
     runner: Optional[BrowserRunner] = None,
     repair_runner: Optional[RepairRunner] = None,
     operator_token: Optional[str] = None,
+    github_client: Optional[GitHubClient] = None,
 ) -> FastAPI:
     store = JobStore(db_path or os.getenv("OMNISIGHT_DB_PATH") or DEFAULT_DB_PATH)
     browser_runner = runner or runner_from_env()
     repairer = repair_runner or repair_runner_from_env()
+    gh_client = github_client or github_client_from_env()
     token = operator_token if operator_token is not None else os.getenv("OMNISIGHT_OPERATOR_TOKEN", "")
 
     app = FastAPI(
@@ -253,6 +266,141 @@ def create_app(
             raise HTTPException(status_code=409, detail="This job's repair has already been started.")
         background_tasks.add_task(run_repair, store, repairer, job_id)
         return claimed
+
+    # ----------------------------------------------------------- PR creation
+    @router.post("/jobs/{job_id}/pr", status_code=201, response_model=PullRequestResponse)
+    def create_pull_request(
+        job_id: str,
+        request: Optional[PullRequestCreateRequest] = None,
+        x_operator_token: Optional[str] = Header(default=None),
+    ):
+        require_operator(x_operator_token)
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # Idempotency check: if PR is already recorded for this job, return it directly
+        if job.get("pull_request"):
+            existing_pr = dict(job["pull_request"])
+            existing_pr["existing"] = True
+            return existing_pr
+
+        # Preflight status eligibility check
+        if job["status"] not in (JobStatus.COMPLETED.value, JobStatus.PR_CREATED.value):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Only completed jobs with successful repairs can create pull requests (current status: {job['status']}).",
+            )
+
+        if not job.get("approval"):
+            raise HTTPException(
+                status_code=409,
+                detail="Repair proposal has not been approved by a human reviewer.",
+            )
+
+        repair = job.get("repair")
+        if not repair or not repair.get("passed"):
+            raise HTTPException(
+                status_code=409,
+                detail="Repair did not pass or has not been successfully executed.",
+            )
+
+        if repair.get("visual_passed") is False:
+            raise HTTPException(
+                status_code=409,
+                detail="Repair failed visual regression verification; PR creation blocked.",
+            )
+
+        req = request or PullRequestCreateRequest()
+
+        target_repo = (
+            req.repository
+            or job.get("repository")
+            or os.getenv("OMNISIGHT_GITHUB_REPO")
+            or "Veggies02/OmniSight"
+        )
+        if "/" not in target_repo:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Target repository '{target_repo}' is invalid; must be in 'owner/repo' format.",
+            )
+        owner, repo_name = target_repo.split("/", 1)
+
+        base_branch = req.base_branch or "main"
+        proposal = job.get("proposal") or {}
+        scenario_id = (
+            proposal.get("scenarioId")
+            or proposal.get("id")
+            or "ui-defect"
+        )
+        clean_job_id = job_id.replace("job-", "")
+        default_branch = f"repair/{scenario_id}-{clean_job_id[:8]}"
+        head_branch = (
+            req.head_branch
+            or repair.get("branch")
+            or proposal.get("branch")
+            or default_branch
+        )
+
+        title = req.title or f"fix(ui): automated visual repair for {scenario_id} [{clean_job_id[:8]}]"
+        reviewer = job["approval"].get("reviewed_by", "operator")
+        reviewed_at = job["approval"].get("reviewed_at", "")
+        body_lines = [
+            "### OmniSight Automated UI Repair Summary",
+            "",
+            f"- **Job ID**: `{job_id}`",
+            f"- **Scenario**: `{scenario_id}`",
+            f"- **Human Reviewer**: {reviewer} ({reviewed_at})",
+            f"- **Repair Outcome**: `{repair.get('outcome', 'passed')}` (Exit code {repair.get('exit_code', 0)})",
+            f"- **Build Passed**: `{repair.get('build_passed', True)}`",
+            f"- **Test Passed**: `{repair.get('test_passed', True)}`",
+            f"- **Visual Verification**: `{repair.get('visual_passed', True)}`",
+            "",
+            "#### Verification Report",
+            f"```\n{repair.get('message', 'All post-repair checks passed.')}\n```",
+            "",
+            "> *Safety Notice*: Automated PR created in Draft state. Please inspect visual diffs before merging.",
+        ]
+        body = req.body or "\n".join(body_lines)
+
+        try:
+            pr_data = gh_client.create_draft_pull_request(
+                owner=owner,
+                repo=repo_name,
+                title=title,
+                head=head_branch,
+                base=base_branch,
+                body=body,
+                labels=req.labels,
+            )
+        except GitHubAuthMissingError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        except GitHubAuthError as exc:
+            raise HTTPException(status_code=502, detail=f"GitHub authentication failed: {exc}")
+        except GitHubRateLimitError as exc:
+            raise HTTPException(status_code=429, detail=str(exc))
+        except GitHubNotFoundError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        except GitHubAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        except Exception as exc:
+            logger.exception("Unexpected error creating pull request: %s", exc)
+            raise HTTPException(status_code=502, detail=f"Failed to create pull request: {exc}")
+
+        pr_data["job_id"] = job_id
+        store.record_pull_request(job_id, pr_data)
+        return pr_data
+
+    @router.get("/jobs/{job_id}/pr", response_model=PullRequestResponse)
+    def get_pull_request(job_id: str):
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if not job.get("pull_request"):
+            raise HTTPException(
+                status_code=404, detail=f"No pull request has been created for job {job_id}."
+            )
+        return job["pull_request"]
 
     # ------------------------------------------------------------------- CI
     @router.post("/webhooks/ci", status_code=201, response_model=CIWebhookResponse)

@@ -261,8 +261,9 @@ def test_invalid_transitions_are_rejected(current, new):
 
 def test_every_status_has_a_transition_rule_and_terminals_are_final():
     assert set(ALLOWED_TRANSITIONS) == set(JobStatus)
-    for terminal in (JobStatus.PR_CREATED, JobStatus.NEEDS_REVIEW, JobStatus.COMPLETED, JobStatus.FAILED):
+    for terminal in (JobStatus.PR_CREATED, JobStatus.NEEDS_REVIEW, JobStatus.FAILED):
         assert ALLOWED_TRANSITIONS[terminal] == set()
+    assert ALLOWED_TRANSITIONS[JobStatus.COMPLETED] == {JobStatus.PR_CREATED}
 
 
 # --------------------------------------------------------------- runner

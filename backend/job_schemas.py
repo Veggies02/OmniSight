@@ -43,9 +43,9 @@ ALLOWED_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
     # sees applying_patch until it ends and then moves straight to completed or failed.
     JobStatus.APPLYING_PATCH: {JobStatus.VALIDATING, JobStatus.COMPLETED, JobStatus.FAILED},
     JobStatus.VALIDATING: {JobStatus.PR_CREATED, JobStatus.NEEDS_REVIEW, JobStatus.FAILED},
+    JobStatus.COMPLETED: {JobStatus.PR_CREATED},
     JobStatus.PR_CREATED: set(),
     JobStatus.NEEDS_REVIEW: set(),
-    JobStatus.COMPLETED: set(),
     JobStatus.FAILED: set(),
 }
 
@@ -58,6 +58,7 @@ STAGE_FOR_STATUS: Dict[JobStatus, str] = {
     JobStatus.REPAIR_PROPOSED: "awaiting_approval",
     JobStatus.APPLYING_PATCH: "repairing",
     JobStatus.VALIDATING: "verifying",
+    JobStatus.PR_CREATED: "pr_created",
 }
 
 
@@ -101,6 +102,55 @@ class ProposalRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     reviewed_by: str = Field(min_length=1, max_length=200)
+
+
+class PullRequestCreateRequest(BaseModel):
+    """Request to create a Draft Pull Request for an approved and verified repair job."""
+
+    title: Optional[str] = None
+    body: Optional[str] = None
+    base_branch: Optional[str] = Field(
+        default="main",
+        validation_alias=AliasChoices("base_branch", "baseBranch", "base"),
+    )
+    head_branch: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("head_branch", "headBranch", "sourceBranch", "head"),
+    )
+    draft: bool = Field(
+        default=True,
+        description="Safety invariant: automated repair PRs must always be draft",
+    )
+    repository: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("repository", "targetRepository", "target_repository"),
+    )
+    labels: Optional[List[str]] = Field(
+        default_factory=lambda: ["automated-repair", "omnisight"]
+    )
+
+
+class PullRequestResponse(BaseModel):
+    """Pull request metadata returned to the dashboard and review UI."""
+
+    pr_number: int = Field(validation_alias=AliasChoices("pr_number", "prNumber", "number"))
+    pr_url: str = Field(validation_alias=AliasChoices("pr_url", "prUrl", "html_url"))
+    title: str
+    head_branch: str = Field(
+        validation_alias=AliasChoices("head_branch", "headBranch", "sourceBranch", "source_branch")
+    )
+    base_branch: str = Field(default="main", validation_alias=AliasChoices("base_branch", "baseBranch"))
+    head_commit_sha: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("head_commit_sha", "headCommitSha")
+    )
+    status: str = "draft"
+    is_draft: bool = Field(default=True, validation_alias=AliasChoices("is_draft", "isDraft"))
+    merged: bool = False
+    created_at: str = Field(validation_alias=AliasChoices("created_at", "createdAt"))
+    repository: str
+    existing: bool = False
+    author: Optional[str] = None
+    job_id: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -150,6 +200,9 @@ class JobResponse(BaseModel):
     proposal: Optional[Dict[str, Any]] = Field(default=None, description="Proposal awaiting or past review")
     approval: Optional[RepairApproval] = Field(default=None, description="Who approved the repair, and when")
     repair: Optional[RepairResult] = Field(default=None, description="Result of the repair CLI run")
+    pull_request: Optional[PullRequestResponse] = Field(
+        default=None, description="Created draft pull request metadata"
+    )
     error: Optional[str] = None
     artifacts: List[ArtifactRef] = Field(default_factory=list)
 
