@@ -19,12 +19,17 @@ import type {
   CreateDraftPullRequestParams,
   CreateDraftPullRequestResult,
 } from "../../services/github/types.ts";
+import {
+  toStructuredGitHubError,
+  type StructuredGitHubError,
+} from "../../services/github/errors.ts";
 import { gitHubIntegrationService } from "../../services/github/githubIntegrationService.ts";
 
 export interface RepairWorkflowResponse {
   success: boolean;
   result?: ExecuteRepairWorkflowResult;
   error?: string;
+  structuredError?: StructuredGitHubError;
   isBackendConfirmed: boolean;
 }
 
@@ -32,6 +37,7 @@ export interface DraftPullRequestResponse {
   success: boolean;
   result?: CreateDraftPullRequestResult;
   error?: string;
+  structuredError?: StructuredGitHubError;
   isBackendConfirmed: boolean;
 }
 
@@ -136,11 +142,11 @@ export class ClientGitHubService {
           isBackendConfirmed: true,
         };
       } catch (serviceErr: unknown) {
-        const message =
-          serviceErr instanceof Error ? serviceErr.message : "Failed to execute repair workflow";
+        const structured = toStructuredGitHubError(serviceErr);
         return {
           success: false,
-          error: message,
+          error: structured.message,
+          structuredError: structured,
           isBackendConfirmed: false,
         };
       }
@@ -184,11 +190,11 @@ export class ClientGitHubService {
           isBackendConfirmed: true,
         };
       } catch (serviceErr: unknown) {
-        const message =
-          serviceErr instanceof Error ? serviceErr.message : "Failed to create draft pull request";
+        const structured = toStructuredGitHubError(serviceErr);
         return {
           success: false,
-          error: message,
+          error: structured.message,
+          structuredError: structured,
           isBackendConfirmed: false,
         };
       }

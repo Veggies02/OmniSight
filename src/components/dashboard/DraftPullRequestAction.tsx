@@ -4,6 +4,7 @@ import type {
   CreateDraftPullRequestResult,
   ValidationGateStatus,
 } from "../../services/github/types.ts";
+import type { StructuredGitHubError } from "../../services/github/errors.ts";
 import { clientGitHubService } from "../../api/services/githubService.ts";
 
 export interface DraftPullRequestActionProps {
@@ -21,7 +22,8 @@ export function DraftPullRequestAction({
 }: DraftPullRequestActionProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [prResult, setPrResult] = useState<CreateDraftPullRequestResult | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [structuredError, setStructuredError] = useState<StructuredGitHubError | null>(null);
+  const [opState, setOpState] = useState<"idle" | "running" | "succeeded" | "failed" | "unknown">("idle");
   const [isCheckingExisting, setIsCheckingExisting] = useState(false);
 
   const isValidationPassed = job.validationStatus === "passed";
@@ -73,7 +75,8 @@ export function DraftPullRequestAction({
     if (isSubmitting || !effectiveBranch || !effectiveSha) return;
 
     setIsSubmitting(true);
-    setErrorMessage(null);
+    setStructuredError(null);
+    setOpState("running");
 
     const validation: ValidationGateStatus = {
       status: job.validationStatus as any,
@@ -114,9 +117,20 @@ export function DraftPullRequestAction({
 
     if (response.success && response.result) {
       setPrResult(response.result);
+      setOpState("succeeded");
       if (onSuccess) onSuccess(response.result);
     } else {
-      setErrorMessage(response.error || "Failed to create GitHub Draft Pull Request");
+      const err = response.structuredError || {
+        code: "UNKNOWN_ERROR" as const,
+        message: response.error || "Failed to create GitHub Draft Pull Request",
+        isRetryable: false,
+        help: "Review the system log or check GitHub repository permissions before re-attempting.",
+        status: 500,
+        timestamp: new Date().toISOString(),
+        outcome: "failed" as const,
+      };
+      setStructuredError(err);
+      setOpState(err.outcome === "unknown" ? "unknown" : "failed");
     }
   };
 
@@ -375,25 +389,89 @@ export function DraftPullRequestAction({
         </div>
       )}
 
-      {/* Actionable Error Banner */}
-      {errorMessage && (
+      {/* Actionable structured error banner */}
+      {structuredError && (
         <div
           style={{
             marginTop: "1rem",
-            padding: "0.75rem 1rem",
-            backgroundColor: "rgba(239, 68, 68, 0.1)",
-            border: "1px solid rgba(239, 68, 68, 0.3)",
+            padding: "0.85rem 1.1rem",
+            backgroundColor:
+              opState === "unknown"
+                ? "rgba(234, 179, 8, 0.1)"
+                : "rgba(239, 68, 68, 0.1)",
+            border: `1px solid ${
+              opState === "unknown"
+                ? "rgba(234, 179, 8, 0.35)"
+                : "rgba(239, 68, 68, 0.35)"
+            }`,
             borderRadius: "6px",
-            color: "#ef4444",
             fontSize: "0.85rem",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
           }}
           role="alert"
         >
-          <span aria-hidden="true">✕</span>
-          <span>{errorMessage}</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.4rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <span style={{ color: opState === "unknown" ? "#eab308" : "#ef4444", fontWeight: 700 }}>
+                {opState === "unknown" ? "⚠️ Unknown Outcome:" : "✕ Pull Request Dispatch Failed:"}
+              </span>
+              <span
+                style={{
+                  fontSize: "0.72rem",
+                  fontFamily: "monospace",
+                  padding: "0.15rem 0.4rem",
+                  borderRadius: "3px",
+                  backgroundColor: "rgba(0, 0, 0, 0.3)",
+                  color: opState === "unknown" ? "#fef08a" : "#fca5a5",
+                }}
+              >
+                [{structuredError.code}]
+              </span>
+            </div>
+
+            {/* Safe retry action: displayed only for transient retryable errors */}
+            {structuredError.isRetryable && (
+              <button
+                type="button"
+                onClick={handleCreateDraftPR}
+                disabled={isSubmitting}
+                style={{
+                  padding: "0.3rem 0.75rem",
+                  fontSize: "0.78rem",
+                  fontWeight: 600,
+                  cursor: isSubmitting ? "not-allowed" : "pointer",
+                  borderRadius: "4px",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  background: "rgba(239, 68, 68, 0.2)",
+                  color: "#fecaca",
+                }}
+              >
+                ↻ Retry Draft PR
+              </button>
+            )}
+          </div>
+
+          <div style={{ color: "#f87171", marginBottom: "0.5rem", lineHeight: 1.4 }}>
+            {structuredError.message}
+          </div>
+
+          {/* Actionable Next Steps */}
+          {structuredError.help && (
+            <div
+              style={{
+                fontSize: "0.78rem",
+                color: "var(--color-text-secondary, #9ca3af)",
+                backgroundColor: "rgba(0, 0, 0, 0.2)",
+                padding: "0.4rem 0.6rem",
+                borderRadius: "4px",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.4rem",
+              }}
+            >
+              <span>💡</span>
+              <span><strong>Next step:</strong> {structuredError.help}</span>
+            </div>
+          )}
         </div>
       )}
     </div>

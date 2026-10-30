@@ -1,7 +1,7 @@
 # OmniSight — P4 GitHub Integration Service Architecture
 
 **Author:** Person 4 (GitHub Integration & QA Dashboard — Sahil)  
-**Status:** Draft Pull Request Creation Implemented (Days 13–16)  
+**Status:** Hardened Error Handling & Safe Retries Implemented (Days 13–17)  
 **Module:** `src/services/github/` & `src/api/services/githubService.ts`
 
 ---
@@ -159,5 +159,35 @@ OmniSight supports two server-side authentication models:
    - Prevents duplicate inflight submissions.
    - Displays confirmed PR details (PR link, number, source/base branches, draft status, and safety badges).
    - Handles API errors and missing backend dependencies transparently.
+
+---
+
+## 8. Day 17: GitHub Workflow Error Handling, Retries & Safety Architecture
+
+### 1. Centralized Structured Error Classification (`errors.ts`):
+- All failures produce a normalized `StructuredGitHubError` with stable codes (`code`), readable sanitized messages, and actionable guidance (`help`).
+- **Codes:** `AUTH_FAILED`, `PERMISSION_DENIED`, `RESOURCE_NOT_FOUND`, `VALIDATION_FAILED`, `RATE_LIMITED`, `SERVICE_UNAVAILABLE`, `TIMEOUT`, `CONFLICT`, `UNSAFE_PATH`, `EMPTY_DIFF`, `MISSING_COMMIT`, `BRANCH_MISMATCH`, `REPO_NOT_ALLOWED`, `REPO_ARCHIVED`, `OUTCOME_UNKNOWN`.
+
+### 2. Strict Retry Policy:
+| Failure Type | Status | Error Code | Retry Policy | Behavior |
+| :--- | :--- | :--- | :--- | :--- |
+| **Authentication** | 401 | `AUTH_FAILED` | **Never** (`isRetryable: false`) | Rejects immediately; prompts for valid token in server `.env` |
+| **Permission Denied** | 403 | `PERMISSION_DENIED` | **Never** (`isRetryable: false`) | Rejects immediately; prompts for write/push scopes |
+| **Validation Gate** | 400 | `VALIDATION_FAILED` | **Never** (`isRetryable: false`) | Rejects immediately; requires test regression resolution |
+| **Protected Branch** | 403 | `PROTECTED_BRANCH` | **Never** (`isRetryable: false`) | Rejects direct writes to `main`/`master` |
+| **Rate Limit** | 429 | `RATE_LIMITED` | **Transient** (`isRetryable: true`) | Parses `x-ratelimit-reset`; supplies `retryAfterMs` |
+| **Service Unavailable** | 502/503 | `SERVICE_UNAVAILABLE` | **Transient** (`isRetryable: true`) | Safe idempotent reads retry up to 2 times with exponential backoff |
+| **Timeout (Read)** | 504 | `TIMEOUT` | **Transient** (`isRetryable: true`) | Retries read after timeout |
+| **Timeout (Write)** | 504 | `OUTCOME_UNKNOWN` | **State-Checked** (`isRetryable: false`) | **Never blindly repeats write!** Checks GitHub state (`getBranch` or `findOpenPullRequest`). If confirmed, recovers resource; otherwise throws `OUTCOME_UNKNOWN` |
+
+### 3. Secret Redaction:
+- `sanitizeMessage()` and `sanitizeDetails()` scrub GitHub Personal Access Tokens (`ghp_*`, `gho_*`, `ghu_*`, `github_pat_*`), `Bearer` tokens, passwords, and authorization headers from error messages, serialized objects, and UI logs.
+
+### 4. Dashboard Feedback Integration:
+- `RepairBranchWorkflowAction.tsx` and `DraftPullRequestAction.tsx` track operation states (`idle`, `running`, `succeeded`, `failed`, `unknown`).
+- Transient errors render a safe **"Retry"** button.
+- Permanent errors display clear remediation steps without a retry action.
+- Unknown outcomes render an amber notice directing users to check GitHub before re-submitting.
+
 
 

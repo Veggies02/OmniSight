@@ -253,4 +253,8 @@ export interface GitHubServiceConfig {
   allowedRepositories?: string[]; // Target repository allowlist (e.g. ["Veggies02/OmniSight"])
   defaultRepo?: string; // Default target repository in owner/repo format
   timeoutMs?: number;
+  maxRetries?: number; // Maximum transient retries for idempotent read operations (default: 2)
+  retryDelayMs?: number; // Base exponential backoff delay (default: 500ms)
 }
+
+export type { GitHubErrorCode, StructuredGitHubError } from "./errors.ts";

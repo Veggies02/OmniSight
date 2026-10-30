@@ -35,6 +35,10 @@ import {
   GitHubNotFoundError,
   GitHubRateLimitError,
   GitHubAuthenticationError,
+  GitHubTimeoutError,
+  GitHubServiceUnavailableError,
+  GitHubUnknownOutcomeError,
+  GitHubConflictError,
   RepositoryNotAllowedError,
   sanitizeDetails,
 } from "./errors.ts";
@@ -58,11 +62,15 @@ export class GitHubIntegrationService {
   private readonly allowedRepositories?: readonly string[];
   private readonly defaultRepo?: string;
   private readonly timeoutMs: number;
+  private readonly maxRetries: number;
+  private readonly retryDelayMs: number;
 
   constructor(config: GitHubServiceConfig = {}) {
     this.baseUrl = (config.baseUrl || "https://api.github.com").replace(/\/$/, "");
     this.defaultBaseBranch = config.defaultBaseBranch || "main";
     this.timeoutMs = config.timeoutMs || 15000;
+    this.maxRetries = config.maxRetries ?? 2;
+    this.retryDelayMs = config.retryDelayMs ?? 500;
 
     // Securely resolve token and environment config: configuration object or server-side process environment
     let resolvedToken = config.token;
@@ -96,9 +104,49 @@ export class GitHubIntegrationService {
   }
 
   /**
-   * Internal HTTP request helper returning data, response headers, and status code.
+   * Internal HTTP request helper with bounded retries for transient read failures.
    */
   private async requestWithHeaders<T>(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<{ data: T; headers: Headers; status: number }> {
+    const isIdempotentRead = !options.method || options.method === "GET" || options.method === "HEAD";
+    const maxAttempts = isIdempotentRead ? this.maxRetries + 1 : 1;
+
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await this.executeSingleRequest<T>(endpoint, options);
+      } catch (err: unknown) {
+        lastError = err;
+
+        // Bounded retries: only retry transient failures on idempotent read operations
+        const canRetry =
+          isIdempotentRead &&
+          attempt < maxAttempts &&
+          err instanceof GitHubIntegrationError &&
+          err.isRetryable;
+
+        if (canRetry) {
+          const delay =
+            (err as GitHubIntegrationError).retryAfterMs ||
+            this.retryDelayMs * Math.pow(2, attempt - 1);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+
+        throw err;
+      }
+    }
+
+    throw lastError;
+  }
+
+  /**
+   * Executes a single HTTP request with timeout cancellation and strict error classification.
+   */
+  private async executeSingleRequest<T>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<{ data: T; headers: Headers; status: number }> {
@@ -128,7 +176,12 @@ export class GitHubIntegrationService {
       // Check rate limit headers
       const remaining = response.headers.get("x-ratelimit-remaining");
       const reset = response.headers.get("x-ratelimit-reset");
-      if (response.status === 403 && remaining === "0") {
+      if ((response.status === 403 || response.status === 429) && remaining === "0") {
+        const resetTimestamp = reset ? parseInt(reset, 10) : undefined;
+        throw new GitHubRateLimitError(resetTimestamp, cleanEndpoint);
+      }
+
+      if (response.status === 429) {
         const resetTimestamp = reset ? parseInt(reset, 10) : undefined;
         throw new GitHubRateLimitError(resetTimestamp, cleanEndpoint);
       }
@@ -141,6 +194,32 @@ export class GitHubIntegrationService {
         throw new GitHubAuthenticationError(
           "GitHub API rejected credentials (HTTP 401 Unauthorized)."
         );
+      }
+
+      if (response.status === 409) {
+        let errBody: unknown;
+        try {
+          errBody = await response.json();
+        } catch {
+          errBody = await response.text();
+        }
+        throw new GitHubConflictError(
+          `Conflict on resource "${cleanEndpoint}" (HTTP 409).`,
+          errBody,
+          cleanEndpoint
+        );
+      }
+
+      if (response.status === 502 || response.status === 503) {
+        throw new GitHubServiceUnavailableError(
+          response.status,
+          `GitHub service temporarily unavailable (HTTP ${response.status}).`,
+          cleanEndpoint
+        );
+      }
+
+      if (response.status === 504) {
+        throw new GitHubTimeoutError(cleanEndpoint, this.timeoutMs);
       }
 
       if (!response.ok) {
@@ -173,11 +252,7 @@ export class GitHubIntegrationService {
       }
 
       if (err instanceof Error && err.name === "AbortError") {
-        throw new GitHubIntegrationError({
-          message: `GitHub API request timed out after ${this.timeoutMs}ms`,
-          kind: "NETWORK_ERROR",
-          endpoint: cleanEndpoint,
-        });
+        throw new GitHubTimeoutError(cleanEndpoint, this.timeoutMs);
       }
 
       const msg = err instanceof Error ? err.message : "Network failure communicating with GitHub";
@@ -622,22 +697,61 @@ export class GitHubIntegrationService {
     }
 
     // 8. Create git reference for repair branch: POST /repos/{owner}/{repo}/git/refs
-    const refData = await this.request<any>(`repos/${params.owner}/${params.repo}/git/refs`, {
-      method: "POST",
-      body: JSON.stringify({
-        ref: `refs/heads/${branchName}`,
-        sha: baseBranchInfo.commitSha,
-      }),
-    });
+    try {
+      const refData = await this.request<any>(`repos/${params.owner}/${params.repo}/git/refs`, {
+        method: "POST",
+        body: JSON.stringify({
+          ref: `refs/heads/${branchName}`,
+          sha: baseBranchInfo.commitSha,
+        }),
+      });
 
-    return {
-      branchName,
-      baseBranch,
-      baseCommitSha: baseBranchInfo.commitSha,
-      created: true,
-      exists: true,
-      htmlUrl: refData.object?.url,
-    };
+      return {
+        branchName,
+        baseBranch,
+        baseCommitSha: baseBranchInfo.commitSha,
+        created: true,
+        exists: true,
+        htmlUrl: refData.object?.url,
+      };
+    } catch (writeErr: unknown) {
+      // If write timed out or encountered transient network error, verify if the branch was actually created
+      if (
+        writeErr instanceof GitHubTimeoutError ||
+        (writeErr instanceof GitHubIntegrationError &&
+          (writeErr.kind === "TIMEOUT" || writeErr.kind === "NETWORK_ERROR"))
+      ) {
+        try {
+          const verifiedBranch = await this.getBranch(params.owner, params.repo, branchName);
+          if (verifiedBranch && verifiedBranch.commitSha) {
+            return {
+              branchName,
+              baseBranch,
+              baseCommitSha: baseBranchInfo.commitSha,
+              created: true,
+              exists: true,
+              htmlUrl: verifiedBranch.htmlUrl,
+            };
+          }
+          throw new GitHubUnknownOutcomeError(
+            `Create branch "${branchName}"`,
+            `Branch creation request timed out and branch status could not be verified on GitHub. Check repository before re-attempting.`,
+            `repos/${params.owner}/${params.repo}/git/refs`
+          );
+        } catch (verifyErr: unknown) {
+          if (verifyErr instanceof GitHubUnknownOutcomeError) {
+            throw verifyErr;
+          }
+          throw new GitHubUnknownOutcomeError(
+            `Create branch "${branchName}"`,
+            `Branch creation request timed out and verification failed. Check repository before re-attempting.`,
+            `repos/${params.owner}/${params.repo}/git/refs`
+          );
+        }
+      }
+
+      throw writeErr;
+    }
   }
 
   /**
@@ -1030,8 +1144,50 @@ export class GitHubIntegrationService {
         author: prData.user?.login || accessReport.identity?.login || "unknown",
       };
     } catch (err: unknown) {
-      // If GitHub rejects with 422 because PR already exists (race condition), safely recover existing PR
-      if (err instanceof GitHubIntegrationError && err.status === 422) {
+      // If PR creation timed out or encountered transient network error, verify if PR was created
+      if (
+        err instanceof GitHubTimeoutError ||
+        (err instanceof GitHubIntegrationError &&
+          (err.kind === "TIMEOUT" || err.kind === "NETWORK_ERROR"))
+      ) {
+        try {
+          const recoveredPr = await this.findOpenPullRequest(owner, repo, params.headBranch, baseBranch);
+          if (recoveredPr) {
+            return {
+              prNumber: recoveredPr.number,
+              prUrl: recoveredPr.htmlUrl,
+              title: recoveredPr.title,
+              sourceBranch: params.headBranch,
+              baseBranch,
+              headCommitSha: recoveredPr.headSha || confirmedSha,
+              status: "draft",
+              isDraft: true,
+              merged: false,
+              createdAt: recoveredPr.createdAt,
+              repository: targetRepo,
+              existing: true,
+              author: recoveredPr.author,
+            };
+          }
+          throw new GitHubUnknownOutcomeError(
+            `Create draft pull request for #${params.jobId}`,
+            `Draft pull request creation request timed out and PR could not be confirmed on GitHub. Check repository before re-attempting.`,
+            `repos/${owner}/${repo}/pulls`
+          );
+        } catch (recoveryErr: unknown) {
+          if (recoveryErr instanceof GitHubUnknownOutcomeError) {
+            throw recoveryErr;
+          }
+          throw new GitHubUnknownOutcomeError(
+            `Create draft pull request for #${params.jobId}`,
+            `Draft pull request creation request timed out and verification failed. Check repository before re-attempting.`,
+            `repos/${owner}/${repo}/pulls`
+          );
+        }
+      }
+
+      // If GitHub rejects with 422/409 because PR already exists (race condition), safely recover existing PR
+      if (err instanceof GitHubIntegrationError && (err.status === 422 || err.code === "CONFLICT")) {
         const raceExistingPr = await this.findOpenPullRequest(owner, repo, params.headBranch, baseBranch);
         if (raceExistingPr) {
           return {

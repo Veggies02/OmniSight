@@ -46,7 +46,13 @@ import {
   GitHubNotFoundError,
   GitHubRateLimitError,
   GitHubAuthenticationError,
+  GitHubTimeoutError,
+  GitHubServiceUnavailableError,
+  GitHubUnknownOutcomeError,
+  GitHubConflictError,
+  sanitizeMessage,
   sanitizeDetails,
+  toStructuredGitHubError,
 } from "../src/services/github/index.ts";
 
 describe("Validation Gate & Branch Safety Rules", () => {
@@ -1739,6 +1745,447 @@ describe("GitHub Draft Pull Request Creation Workflow", () => {
     assert.equal(result.isDraft, true);
     assert.equal(result.merged, false);
     assert.equal(mergeCalled, false);
+  });
+});
+
+describe("Hardened GitHub Workflow Error Handling, Retries & Safety", () => {
+  let originalFetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("structured error classification and secret redaction for PATs, tokens, and headers", () => {
+    // 1. Auth error classification
+    const authErr = new GitHubAuthenticationError();
+    const structAuth = authErr.toStructuredError();
+    assert.equal(structAuth.code, "AUTH_FAILED");
+    assert.equal(structAuth.status, 401);
+    assert.equal(structAuth.isRetryable, false);
+    assert.equal(structAuth.outcome, "failed");
+
+    // 2. Permission error classification
+    const permErr = new InsufficientPermissionsError("Veggies02/OmniSight", "write");
+    const structPerm = permErr.toStructuredError();
+    assert.equal(structPerm.code, "PERMISSION_DENIED");
+    assert.equal(structPerm.status, 403);
+    assert.equal(structPerm.isRetryable, false);
+
+    // 3. Validation gate error classification
+    const valErr = new ValidationGateError("Validation failed with 2 errors");
+    const structVal = valErr.toStructuredError();
+    assert.equal(structVal.code, "VALIDATION_FAILED");
+    assert.equal(structVal.status, 400);
+    assert.equal(structVal.isRetryable, false);
+
+    // 4. Rate limit error classification
+    const rateErr = new GitHubRateLimitError(1700000000, "repos/foo/bar");
+    const structRate = rateErr.toStructuredError();
+    assert.equal(structRate.code, "RATE_LIMITED");
+    assert.equal(structRate.status, 429);
+    assert.equal(structRate.isRetryable, true);
+
+    // 5. Timeout and service unavailable classification
+    const timeoutErr = new GitHubTimeoutError("repos/foo/bar", 5000);
+    const structTimeout = timeoutErr.toStructuredError();
+    assert.equal(structTimeout.code, "TIMEOUT");
+    assert.equal(structTimeout.status, 504);
+    assert.equal(structTimeout.isRetryable, true);
+
+    const serviceErr = new GitHubServiceUnavailableError(503, "High load");
+    const structService = serviceErr.toStructuredError();
+    assert.equal(structService.code, "SERVICE_UNAVAILABLE");
+    assert.equal(structService.status, 503);
+    assert.equal(structService.isRetryable, true);
+
+    // 6. Unknown outcome error classification
+    const unknownErr = new GitHubUnknownOutcomeError("Create branch");
+    const structUnknown = unknownErr.toStructuredError();
+    assert.equal(structUnknown.code, "OUTCOME_UNKNOWN");
+    assert.equal(structUnknown.status, 504);
+    assert.equal(structUnknown.isRetryable, false);
+    assert.equal(structUnknown.outcome, "unknown");
+
+    // 7. Conflict error classification
+    const conflictErr = new GitHubConflictError("Branch conflict");
+    const structConflict = conflictErr.toStructuredError();
+    assert.equal(structConflict.code, "CONFLICT");
+    assert.equal(structConflict.status, 409);
+    assert.equal(structConflict.isRetryable, false);
+
+    // 8. Secret redaction in messages
+    const rawMsg = "Error connecting with ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456 and Bearer gho_mysecret123456";
+    const cleanedMsg = sanitizeMessage(rawMsg);
+    assert.ok(!cleanedMsg.includes("ghp_ABC"));
+    assert.ok(!cleanedMsg.includes("gho_mysecret"));
+    assert.ok(cleanedMsg.includes("[REDACTED_GITHUB_TOKEN]"));
+    assert.ok(cleanedMsg.includes("Bearer [REDACTED]"));
+
+    // 8. Secret redaction in details
+    const rawDetails = {
+      token: "ghp_1234567890abcdef1234567890abcdef",
+      headers: {
+        Authorization: "Bearer gho_9876543210fedcba9876543210fedcba",
+      },
+    };
+    const cleanedDetails = sanitizeDetails(rawDetails);
+    assert.ok(!JSON.stringify(cleanedDetails).includes("ghp_1234"));
+    assert.ok(!JSON.stringify(cleanedDetails).includes("gho_9876"));
+
+    // 9. Generic unknown error normalization
+    const genericErr = toStructuredGitHubError(new Error("Database connection dropped"));
+    assert.equal(genericErr.code, "UNKNOWN_ERROR");
+    assert.equal(genericErr.status, 500);
+    assert.equal(genericErr.isRetryable, false);
+  });
+
+  test("transient failure retry with bounded attempts on read operations (502/503)", async () => {
+    let callCount = 0;
+
+    globalThis.fetch = async (url) => {
+      callCount++;
+      const urlStr = String(url);
+
+      if (urlStr.includes("/branches/main")) {
+        // Fail twice with transient 503, succeed on 3rd attempt
+        if (callCount < 3) {
+          return {
+            ok: false,
+            status: 503,
+            headers: new Headers(),
+            json: async () => ({ message: "Service Unavailable" }),
+          };
+        }
+
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            name: "main",
+            commit: { sha: "abc1234" },
+            protected: true,
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({
+      token: "test_token",
+      maxRetries: 2,
+      retryDelayMs: 5, // Fast retry for tests
+    });
+
+    const branch = await service.getBranch("Veggies02", "OmniSight", "main");
+    assert.equal(branch.name, "main");
+    assert.equal(branch.commitSha, "abc1234");
+    assert.equal(callCount, 3); // 1 initial + 2 retries
+  });
+
+  test("transient retry limit is bounded and permanent errors (401, 403, 404) are never retried", async () => {
+    let callCount = 0;
+
+    // 1. Transient 503 exhausts all bounded retries
+    globalThis.fetch = async () => {
+      callCount++;
+      return {
+        ok: false,
+        status: 503,
+        headers: new Headers(),
+        json: async () => ({ message: "Temporary failure" }),
+      };
+    };
+
+    const service = new GitHubIntegrationService({
+      token: "test_token",
+      maxRetries: 2,
+      retryDelayMs: 5,
+    });
+
+    await assert.rejects(
+      async () => service.getBranch("Veggies02", "OmniSight", "main"),
+      (err) => err instanceof GitHubServiceUnavailableError && err.status === 503
+    );
+    assert.equal(callCount, 3); // Exhausted maxRetries
+
+    // 2. Permanent 401 error is never retried (exits on attempt 1)
+    callCount = 0;
+    globalThis.fetch = async () => {
+      callCount++;
+      return {
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        json: async () => ({ message: "Bad credentials" }),
+      };
+    };
+
+    await assert.rejects(
+      async () => service.getBranch("Veggies02", "OmniSight", "main"),
+      (err) => err instanceof GitHubAuthenticationError && err.status === 401
+    );
+    assert.equal(callCount, 1); // Exactly 1 attempt
+
+    // 3. Permanent 404 error is never retried (exits on attempt 1)
+    callCount = 0;
+    globalThis.fetch = async () => {
+      callCount++;
+      return {
+        ok: false,
+        status: 404,
+        headers: new Headers(),
+        json: async () => ({ message: "Not found" }),
+      };
+    };
+
+    await assert.rejects(
+      async () => service.getBranch("Veggies02", "OmniSight", "missing-branch"),
+      (err) => err instanceof GitHubNotFoundError && err.status === 404
+    );
+    assert.equal(callCount, 1); // Exactly 1 attempt
+  });
+
+  test("write operation timeout verifies GitHub branch state before blindly repeating", async () => {
+    let branchExistsOnGitHub = false;
+
+    globalThis.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+
+      if (urlStr.endsWith("/repos/Veggies02/OmniSight")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 1,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            default_branch: "main",
+            archived: false,
+            permissions: { push: true, pull: true },
+          }),
+        };
+      }
+
+      if (urlStr.includes("/branches/main")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ name: "main", commit: { sha: "base_commit_123" } }),
+        };
+      }
+
+      // Check repair branch
+      if (urlStr.includes("/branches/omnisight%2Frepair-job-999-fnd-1")) {
+        if (!branchExistsOnGitHub) {
+          return { ok: false, status: 404, headers: new Headers(), json: async () => ({ message: "Not found" }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            name: "omnisight/repair-job-999-fnd-1",
+            commit: { sha: "base_commit_123" },
+            _links: { html: "https://github.com/Veggies02/OmniSight/tree/omnisight/repair-job-999-fnd-1" },
+          }),
+        };
+      }
+
+      // POST create git ref times out on network socket, but GitHub created the ref!
+      if (urlStr.endsWith("/git/refs") && options.method === "POST") {
+        branchExistsOnGitHub = true;
+        const abortErr = new Error("The operation was aborted");
+        abortErr.name = "AbortError";
+        throw abortErr;
+      }
+
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    const result = await service.prepareRepairBranch({
+      owner: "Veggies02",
+      repo: "OmniSight",
+      jobId: "JOB-999",
+      findingId: "FND-1",
+      validation: { status: "passed", totalChecks: 1, passedChecks: 1, failedChecks: 0 },
+    });
+
+    // Successfully recovered without blind duplicate write
+    assert.equal(result.branchName, "omnisight/repair-job-999-fnd-1");
+    assert.equal(result.created, true);
+    assert.equal(result.exists, true);
+  });
+
+  test("write operation timeout verifies GitHub draft PR state before blindly repeating", async () => {
+    let prExistsOnGitHub = false;
+
+    globalThis.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+
+      if (urlStr.endsWith("/repos/Veggies02/OmniSight")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 1,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            default_branch: "main",
+            archived: false,
+            permissions: { push: true, pull: true },
+          }),
+        };
+      }
+
+      if (urlStr.endsWith("/user")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ login: "bot", id: 101 }),
+        };
+      }
+
+      if (urlStr.includes("/branches/omnisight%2Frepair-job-999")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ name: "omnisight/repair-job-999", commit: { sha: "commit_abc1234" } }),
+        };
+      }
+
+      if (urlStr.includes("/pulls?state=open")) {
+        if (!prExistsOnGitHub) {
+          return { ok: true, status: 200, headers: new Headers(), json: async () => [] };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => [
+            {
+              number: 77,
+              html_url: "https://github.com/Veggies02/OmniSight/pull/77",
+              title: "[OmniSight Self-Healing] Recovered PR",
+              state: "open",
+              draft: true,
+              merged: false,
+              created_at: "2026-10-30T10:00:00Z",
+              head: { ref: "omnisight/repair-job-999", sha: "commit_abc1234" },
+              base: { ref: "main", sha: "base_sha" },
+              user: { login: "omnisight-bot" },
+            },
+          ],
+        };
+      }
+
+      // POST /pulls times out, but PR was created on GitHub!
+      if (urlStr.endsWith("/pulls") && options.method === "POST") {
+        prExistsOnGitHub = true;
+        const abortErr = new Error("The operation was aborted");
+        abortErr.name = "AbortError";
+        throw abortErr;
+      }
+
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    const result = await service.createDraftPullRequest({
+      jobId: "JOB-999",
+      headBranch: "omnisight/repair-job-999",
+      headCommitSha: "commit_abc1234",
+      baseBranch: "main",
+      validation: { status: "passed", totalChecks: 1, passedChecks: 1, failedChecks: 0 },
+    });
+
+    // Successfully recovered existing PR on timeout without duplicate submission
+    assert.equal(result.prNumber, 77);
+    assert.equal(result.existing, true);
+    assert.equal(result.isDraft, true);
+    assert.equal(result.merged, false);
+  });
+
+  test("write operation timeout with unconfirmable outcome throws GitHubUnknownOutcomeError with outcome='unknown'", async () => {
+    globalThis.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+
+      if (urlStr.endsWith("/repos/Veggies02/OmniSight")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 1,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            default_branch: "main",
+            archived: false,
+            permissions: { push: true, pull: true },
+          }),
+        };
+      }
+
+      if (urlStr.endsWith("/user")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ login: "bot", id: 101 }),
+        };
+      }
+
+      if (urlStr.includes("/branches/omnisight%2Frepair-job-999")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ name: "omnisight/repair-job-999", commit: { sha: "commit_abc1234" } }),
+        };
+      }
+
+      // Initial check before write shows no PR
+      if (urlStr.includes("/pulls?state=open") && !options.method) {
+        return { ok: true, status: 200, headers: new Headers(), json: async () => [] };
+      }
+
+      // POST /pulls times out
+      if (urlStr.endsWith("/pulls") && options.method === "POST") {
+        const abortErr = new Error("The operation was aborted");
+        abortErr.name = "AbortError";
+        throw abortErr;
+      }
+
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-999",
+          headBranch: "omnisight/repair-job-999",
+          headCommitSha: "commit_abc1234",
+          baseBranch: "main",
+          validation: { status: "passed", totalChecks: 1, passedChecks: 1, failedChecks: 0 },
+        }),
+      (err) =>
+        err instanceof GitHubUnknownOutcomeError &&
+        err.outcome === "unknown" &&
+        err.isRetryable === false &&
+        err.code === "OUTCOME_UNKNOWN"
+    );
   });
 });
 
