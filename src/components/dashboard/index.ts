@@ -11,3 +11,4 @@ export * from "./DefectFindingsReview";
 export * from "./VisualEvidenceViewer";
 export * from "./ValidationResults";
 export * from "./RepairBranchWorkflowAction";
+export * from "./DraftPullRequestAction";

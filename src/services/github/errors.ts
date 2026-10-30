@@ -13,6 +13,9 @@ export type GitHubErrorKind =
   | "REPO_ARCHIVED"
   | "UNSAFE_FILE_PATH"
   | "EMPTY_REPAIR_DIFF"
+  | "MISSING_REPAIR_COMMIT"
+  | "BRANCH_MISMATCH"
+  | "DUPLICATE_PULL_REQUEST"
   | "RATE_LIMIT_EXCEEDED"
   | "NETWORK_ERROR"
   | "API_ERROR";
@@ -138,6 +141,64 @@ export class EmptyRepairDiffError extends GitHubIntegrationError {
       status: 400,
     });
     this.name = "EmptyRepairDiffError";
+  }
+}
+
+export class MissingRepairCommitError extends GitHubIntegrationError {
+  constructor(
+    message = "Draft pull request rejected: A confirmed repair branch commit SHA is required before opening a pull request."
+  ) {
+    super({
+      message,
+      kind: "MISSING_REPAIR_COMMIT",
+      status: 400,
+    });
+    this.name = "MissingRepairCommitError";
+  }
+}
+
+export class BranchMismatchError extends GitHubIntegrationError {
+  public readonly headBranch: string;
+  public readonly baseBranch: string;
+
+  constructor(
+    headBranch: string,
+    baseBranch: string,
+    message?: string
+  ) {
+    super({
+      message:
+        message ||
+        `Draft pull request rejected: Source repair branch "${headBranch}" cannot be identical to base branch "${baseBranch}".`,
+      kind: "BRANCH_MISMATCH",
+      status: 400,
+      details: { headBranch, baseBranch },
+    });
+    this.name = "BranchMismatchError";
+    this.headBranch = headBranch;
+    this.baseBranch = baseBranch;
+  }
+}
+
+export class DuplicatePullRequestError extends GitHubIntegrationError {
+  public readonly existingPrNumber?: number;
+  public readonly existingPrUrl?: string;
+
+  constructor(
+    headBranch: string,
+    baseBranch: string,
+    existingPrNumber?: number,
+    existingPrUrl?: string
+  ) {
+    super({
+      message: `A pull request from "${headBranch}" into "${baseBranch}" already exists${existingPrNumber ? ` (#${existingPrNumber})` : ""}.`,
+      kind: "DUPLICATE_PULL_REQUEST",
+      status: 409,
+      details: { headBranch, baseBranch, existingPrNumber, existingPrUrl },
+    });
+    this.name = "DuplicatePullRequestError";
+    this.existingPrNumber = existingPrNumber;
+    this.existingPrUrl = existingPrUrl;
   }
 }
 

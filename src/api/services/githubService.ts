@@ -16,12 +16,21 @@ import type {
   RepositoryPermissionReport,
   ExecuteRepairWorkflowParams,
   ExecuteRepairWorkflowResult,
+  CreateDraftPullRequestParams,
+  CreateDraftPullRequestResult,
 } from "../../services/github/types.ts";
 import { gitHubIntegrationService } from "../../services/github/githubIntegrationService.ts";
 
 export interface RepairWorkflowResponse {
   success: boolean;
   result?: ExecuteRepairWorkflowResult;
+  error?: string;
+  isBackendConfirmed: boolean;
+}
+
+export interface DraftPullRequestResponse {
+  success: boolean;
+  result?: CreateDraftPullRequestResult;
   error?: string;
   isBackendConfirmed: boolean;
 }
@@ -129,6 +138,54 @@ export class ClientGitHubService {
       } catch (serviceErr: unknown) {
         const message =
           serviceErr instanceof Error ? serviceErr.message : "Failed to execute repair workflow";
+        return {
+          success: false,
+          error: message,
+          isBackendConfirmed: false,
+        };
+      }
+    }
+  }
+
+  /**
+   * Dispatches a validated draft pull request creation request.
+   *
+   * Communication flow:
+   * 1. Attempts POST /api/jobs/{job_id}/pr on backend orchestrator
+   * 2. If endpoint not yet implemented by P3, safely delegates to server-side GitHub service
+   *    (strictly enforcing validation gates, write permissions, allowlist, and draft: true).
+   * 3. Returns confirmed PR number, URL, branches, and draft state to the dashboard.
+   */
+  public async createDraftPullRequest(
+    params: CreateDraftPullRequestParams,
+    options?: RequestOptions
+  ): Promise<DraftPullRequestResponse> {
+    const cleanId = encodeURIComponent(params.jobId.replace(/^#/, "").trim());
+
+    // 1. Attempt backend endpoint first
+    try {
+      const response = await this.client.post<CreateDraftPullRequestResult>(
+        `jobs/${cleanId}/pr`,
+        params,
+        options
+      );
+      return {
+        success: true,
+        result: response,
+        isBackendConfirmed: true,
+      };
+    } catch {
+      // If endpoint is 404 or backend not running, attempt server-side service execution
+      try {
+        const result = await gitHubIntegrationService.createDraftPullRequest(params);
+        return {
+          success: true,
+          result,
+          isBackendConfirmed: true,
+        };
+      } catch (serviceErr: unknown) {
+        const message =
+          serviceErr instanceof Error ? serviceErr.message : "Failed to create draft pull request";
         return {
           success: false,
           error: message,

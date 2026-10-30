@@ -1,7 +1,7 @@
 # OmniSight — P4 GitHub Integration Service Architecture
 
 **Author:** Person 4 (GitHub Integration & QA Dashboard — Sahil)  
-**Status:** Repair Branch & Commit Workflow Implemented (Days 13–15)  
+**Status:** Draft Pull Request Creation Implemented (Days 13–16)  
 **Module:** `src/services/github/` & `src/api/services/githubService.ts`
 
 ---
@@ -61,6 +61,8 @@ GitHub REST API v3 (`https://api.github.com`)
 | **Prepare Repair Commit** | `prepareRepairCommit(params)` | **Implemented** | Git tree/commit data API; requires non-empty diff; validates safe paths |
 | **Execute Repair Workflow** | `executeRepairWorkflow(params)` | **Implemented (Day 15)** | End-to-end orchestration: validation gate -> permissions -> idempotent branch -> safe commit |
 | **Build Draft Pull Request** | `buildDraftPullRequestPayload(params)` | **Implemented** | `draft: true` invariant; embeds job telemetry & assertion checklist |
+| **Find Open Pull Request** | `findOpenPullRequest(owner, repo, head, base)` | **Implemented (Day 16)** | Idempotency guard: queries existing open PR by branches |
+| **Create Draft Pull Request** | `createDraftPullRequest(params)` | **Implemented (Day 16)** | Strict `draft: true` invariant; zero automated merges; retry & duplicate reuse |
 | **Automated PR Dispatch / Publishing** | `publishPullRequest()` | **Prepared for Day 18** | Awaits UI review confirmation dialog in QA Dashboard |
 
 ---
@@ -132,4 +134,30 @@ OmniSight supports two server-side authentication models:
    - Rendered within `DashboardJobDetails.tsx` (Section 5b).
    - Blocks trigger button when validation has not explicitly succeeded.
    - Displays real-time staging progress and renders confirmed results (branch name, base branch, commit SHA, files modified) or actionable error banners.
+
+---
+
+## 7. Day 16: GitHub Draft Pull Request Creation
+
+### Workflow Pipeline (`createDraftPullRequest`):
+1. **Pre-requisite Gate Enforcement:**
+   - **Validation Gate:** Asserts `status === "passed"`, `failedChecks === 0`, `totalChecks >= 1`.
+   - **Confirmed Commit SHA:** Asserts repair commit was confirmed (`assertConfirmedRepairCommit`).
+   - **Source Branch Safety:** Asserts `headBranch` is not protected (`assertNotProtectedBranch`) and differs from target base branch (`assertDifferentBranches`).
+   - **Write Permission Verification:** Asserts repository allowlist, unarchived state, and `push: true`.
+   - **Branch Existence:** Verifies the repair branch actually exists in `{owner}/{repo}` on GitHub.
+2. **Idempotency & Retry Safety:**
+   - Queries `findOpenPullRequest` for matching head and base branches.
+   - If an open PR already exists, reuses its details (`existing: true`) instead of submitting a duplicate request.
+   - Catches HTTP 422 concurrent creation race conditions and automatically recovers the existing PR.
+3. **Draft-Only Safeguards & Human-in-the-Loop Review:**
+   - Unconditionally submits `draft: true` to the GitHub API.
+   - Embeds defect summaries, 100% pass verification logs, visual evidence references, and review notices.
+   - Zero automated merges: guarantees `merged: false` and forbids automatic merge execution.
+4. **Dashboard UI Integration (`DraftPullRequestAction.tsx`):**
+   - Displays real-time PR creation controls only when prerequisites (passed validation + confirmed branch/commit) are met.
+   - Prevents duplicate inflight submissions.
+   - Displays confirmed PR details (PR link, number, source/base branches, draft status, and safety badges).
+   - Handles API errors and missing backend dependencies transparently.
+
 

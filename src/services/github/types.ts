@@ -202,6 +202,50 @@ export interface DraftPullRequestPayload {
   draft: true; // Safety invariant: automated PRs must always be draft!
 }
 
+/**
+ * Parameters for creating a confirmed GitHub draft pull request.
+ */
+export interface CreateDraftPullRequestParams {
+  jobId: string;
+  headBranch: string;
+  headCommitSha?: string;
+  findingId?: string;
+  owner?: string;
+  repo?: string;
+  targetRepository?: string; // e.g. "Veggies02/OmniSight"
+  baseBranch?: string; // Default: "main"
+  validation: ValidationGateStatus;
+  title?: string;
+  defectCategory?: string;
+  defectTitle?: string;
+  defectDescription?: string;
+  repairedComponent?: string;
+  evidenceUris?: {
+    baselineUri?: string;
+    defectiveUri?: string;
+  };
+  customBody?: string;
+}
+
+/**
+ * Confirmed result returned from the GitHub draft pull request workflow.
+ */
+export interface CreateDraftPullRequestResult {
+  prNumber: number;
+  prUrl: string;
+  title: string;
+  sourceBranch: string;
+  baseBranch: string;
+  headCommitSha?: string;
+  status: "draft";
+  isDraft: true; // Safety invariant
+  merged: false; // Safety invariant: automated PRs are never merged
+  createdAt: string;
+  repository: string;
+  existing: boolean; // True if an existing open PR was safely reused
+  author: string;
+}
+
 export interface GitHubServiceConfig {
   token?: string; // Server-side GITHUB_TOKEN or OMNISIGHT_GITHUB_TOKEN
   baseUrl?: string; // Default: https://api.github.com

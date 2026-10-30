@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { InspectionJob } from "../../types/dashboard.ts";
 import type { ExecuteRepairWorkflowResult, ValidationGateStatus } from "../../services/github/types.ts";
 import { clientGitHubService } from "../../api/services/githubService.ts";
+import { DraftPullRequestAction } from "./DraftPullRequestAction.tsx";
 
 export interface RepairBranchWorkflowActionProps {
   job: InspectionJob;
@@ -258,9 +259,18 @@ export function RepairBranchWorkflowAction({ job, onSuccess }: RepairBranchWorkf
           </div>
 
           <div style={{ marginTop: "0.75rem", fontSize: "0.8rem", color: "var(--color-text-secondary, #9ca3af)" }}>
-            Changes safely isolated outside of <code>main</code>. Ready for Day 18 Draft Pull Request creation.
+            Changes safely isolated outside of <code>main</code>. Proceed below to create the Draft Pull Request.
           </div>
         </div>
+      )}
+
+      {/* Embedded Draft Pull Request Action: active once branch & commit are confirmed or if already staged */}
+      {(result || Boolean(job.commitSha && isValidationPassed)) && (
+        <DraftPullRequestAction
+          job={job}
+          repairBranch={result?.branch}
+          headCommitSha={result?.commitSha || job.commitSha}
+        />
       )}
 
       {/* Actionable error banner */}

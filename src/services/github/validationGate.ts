@@ -19,6 +19,8 @@ import {
   ArchivedRepositoryError,
   UnsafeFilePathError,
   EmptyRepairDiffError,
+  BranchMismatchError,
+  MissingRepairCommitError,
 } from "./errors.ts";
 
 /**
@@ -63,6 +65,29 @@ export function assertNotProtectedBranch(branch: string): void {
     throw new ProtectedBranchError(
       branch,
       `Safety violation: Automated repairs may not write directly to protected branch "${branch}". Must create an isolated repair branch.`
+    );
+  }
+}
+
+/**
+ * Asserts that the source (head) repair branch differs from the target base branch.
+ */
+export function assertDifferentBranches(headBranch: string, baseBranch: string): void {
+  if (!headBranch || typeof headBranch !== "string") {
+    throw new BranchMismatchError(String(headBranch), baseBranch, "Source repair branch must be a non-empty string.");
+  }
+  if (!baseBranch || typeof baseBranch !== "string") {
+    throw new BranchMismatchError(headBranch, String(baseBranch), "Base branch must be a non-empty string.");
+  }
+
+  const cleanHead = headBranch.trim().replace(/^refs\/heads\//, "").toLowerCase();
+  const cleanBase = baseBranch.trim().replace(/^refs\/heads\//, "").toLowerCase();
+
+  if (cleanHead === cleanBase) {
+    throw new BranchMismatchError(
+      headBranch,
+      baseBranch,
+      `Draft pull request rejected: Source repair branch "${headBranch}" cannot be identical to base branch "${baseBranch}".`
     );
   }
 }
@@ -141,6 +166,33 @@ export function assertValidationPassed(validation: ValidationGateStatus | undefi
       validation
     );
   }
+}
+
+/**
+ * Asserts that a valid repair commit SHA was confirmed by the branch & commit workflow.
+ */
+export function assertConfirmedRepairCommit(headCommitSha?: string): string {
+  if (!headCommitSha || typeof headCommitSha !== "string") {
+    throw new MissingRepairCommitError(
+      "Draft pull request rejected: A confirmed repair branch commit SHA is required before opening a pull request."
+    );
+  }
+
+  const cleanSha = headCommitSha.trim();
+  if (cleanSha.length < 7) {
+    throw new MissingRepairCommitError(
+      `Draft pull request rejected: "${headCommitSha}" is too short to be a valid commit SHA.`
+    );
+  }
+
+  // Accepts standard hexadecimal SHAs as well as valid repository commit identifiers (alphanumeric, underscores, hyphens)
+  if (!/^[0-9a-zA-Z_-]{7,64}$/.test(cleanSha)) {
+    throw new MissingRepairCommitError(
+      `Draft pull request rejected: "${headCommitSha}" is not a valid git commit SHA.`
+    );
+  }
+
+  return cleanSha;
 }
 
 /**

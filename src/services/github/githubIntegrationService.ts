@@ -26,6 +26,8 @@ import type {
   ExecuteRepairWorkflowResult,
   BuildDraftPRParams,
   DraftPullRequestPayload,
+  CreateDraftPullRequestParams,
+  CreateDraftPullRequestResult,
   GitHubServiceConfig,
 } from "./types.ts";
 import {
@@ -39,6 +41,8 @@ import {
 import {
   assertValidationPassed,
   assertNotProtectedBranch,
+  assertDifferentBranches,
+  assertConfirmedRepairCommit,
   assertTargetRepoAllowed,
   assertRepoNotArchived,
   assertWritePermission,
@@ -484,6 +488,74 @@ export class GitHubIntegrationService {
   }
 
   /**
+   * Searches for an existing open pull request matching the head and base branch.
+   * GET /repos/{owner}/{repo}/pulls?state=open&head={owner}:{head}&base={base}
+   *
+   * Used as an idempotency and retry safeguard to prevent duplicate PR creation.
+   */
+  public async findOpenPullRequest(
+    owner: string,
+    repo: string,
+    headBranch: string,
+    baseBranch: string
+  ): Promise<GitHubPullRequestMetadata | null> {
+    const cleanHead = headBranch.replace(/^refs\/heads\//, "").trim();
+    const cleanBase = baseBranch.replace(/^refs\/heads\//, "").trim();
+
+    try {
+      // Query GitHub API with head filter (owner:head or head)
+      const data = await this.request<any[]>(
+        `repos/${owner}/${repo}/pulls?state=open&head=${encodeURIComponent(owner + ":" + cleanHead)}&base=${encodeURIComponent(cleanBase)}`
+      );
+
+      if (Array.isArray(data) && data.length > 0) {
+        const match = data[0];
+        return {
+          number: match.number,
+          title: match.title,
+          state: match.state === "open" ? "open" : "closed",
+          isDraft: Boolean(match.draft),
+          htmlUrl: match.html_url,
+          headBranch: match.head?.ref || cleanHead,
+          headSha: match.head?.sha || "",
+          baseBranch: match.base?.ref || cleanBase,
+          merged: Boolean(match.merged),
+          createdAt: match.created_at,
+          updatedAt: match.updated_at,
+          author: match.user?.login || "unknown",
+        };
+      }
+
+      // Fallback query without owner prefix in case head was stored as simple branch name
+      const fallbackData = await this.request<any[]>(
+        `repos/${owner}/${repo}/pulls?state=open&head=${encodeURIComponent(cleanHead)}&base=${encodeURIComponent(cleanBase)}`
+      );
+
+      if (Array.isArray(fallbackData) && fallbackData.length > 0) {
+        const match = fallbackData[0];
+        return {
+          number: match.number,
+          title: match.title,
+          state: match.state === "open" ? "open" : "closed",
+          isDraft: Boolean(match.draft),
+          htmlUrl: match.html_url,
+          headBranch: match.head?.ref || cleanHead,
+          headSha: match.head?.sha || "",
+          baseBranch: match.base?.ref || cleanBase,
+          merged: Boolean(match.merged),
+          createdAt: match.created_at,
+          updatedAt: match.updated_at,
+          author: match.user?.login || "unknown",
+        };
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Prepares a repair branch from an approved base branch.
    *
    * SAFETY GATES ENFORCED:
@@ -807,6 +879,180 @@ export class GitHubIntegrationService {
       base: params.baseBranch,
       draft: true, // Strict safety invariant
     };
+  }
+
+  /**
+   * Creates a confirmed GitHub Draft Pull Request for a validated repair.
+   *
+   * SAFETY GATES ENFORCED:
+   * 1. Requires explicit validation gate passage (status === "passed", failedChecks === 0, totalChecks >= 1).
+   * 2. Confirms repository access and write permissions on target repository.
+   * 3. Verifies repository is within configured allowlist and is not archived.
+   * 4. Verifies repair branch and confirmed repair commit exist.
+   * 5. Asserts head branch is not protected and differs from base branch.
+   * 6. Checks for existing open pull request matching head & base (idempotent retry).
+   * 7. Sets draft: true unconditionally (human-in-the-loop requirement; automated merge is strictly prohibited).
+   * 8. Returns confirmed PR number, URL, title, branch refs, and draft status.
+   */
+  public async createDraftPullRequest(
+    params: CreateDraftPullRequestParams
+  ): Promise<CreateDraftPullRequestResult> {
+    const targetRepo =
+      params.targetRepository ||
+      (params.owner && params.repo ? `${params.owner}/${params.repo}` : this.defaultRepo || "Veggies02/OmniSight");
+
+    const parts = targetRepo.split("/");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new GitHubIntegrationError({
+        message: `Invalid target repository format "${targetRepo}". Must be "owner/repo".`,
+        kind: "API_ERROR",
+      });
+    }
+    const [owner, repo] = parts;
+    const baseBranch = params.baseBranch || this.defaultBaseBranch;
+
+    // 1. Enforce repository allowlist
+    assertTargetRepoAllowed(targetRepo, this.allowedRepositories);
+
+    // 2. Enforce validation gate (100% passed, 0 failures, >= 1 check)
+    assertValidationPassed(params.validation);
+
+    // 3. Enforce confirmed commit SHA
+    const confirmedSha = assertConfirmedRepairCommit(params.headCommitSha);
+
+    // 4. Enforce branch safety (cannot be protected base branch)
+    assertNotProtectedBranch(params.headBranch);
+
+    // 5. Enforce head branch differs from base branch
+    assertDifferentBranches(params.headBranch, baseBranch);
+
+    // 6. Enforce write permissions & non-archived status
+    const accessReport = await this.verifyRepositoryAccess(owner, repo);
+    if (!accessReport.permissions.hasRequiredPermissions) {
+      if (accessReport.error) {
+        throw new GitHubIntegrationError({
+          message: accessReport.error.message,
+          kind:
+            accessReport.error.code === "INSUFFICIENT_PERMISSIONS"
+              ? "INSUFFICIENT_PERMISSIONS"
+              : accessReport.error.code === "REPO_ARCHIVED"
+              ? "REPO_ARCHIVED"
+              : accessReport.error.code === "REPO_NOT_ALLOWED"
+              ? "REPO_NOT_ALLOWED"
+              : "PERMISSION_DENIED",
+          status: 403,
+          details: accessReport.error,
+        });
+      }
+      throw new GitHubIntegrationError({
+        message: `Write permissions required on "${targetRepo}" to open draft pull requests.`,
+        kind: "INSUFFICIENT_PERMISSIONS",
+        status: 403,
+      });
+    }
+
+    // 7. Verify source repair branch actually exists in target repository
+    const branchInfo = await this.getBranch(owner, repo, params.headBranch);
+    if (!branchInfo || !branchInfo.commitSha) {
+      throw new GitHubNotFoundError(
+        `Branch "${params.headBranch}" in "${targetRepo}"`,
+        `repos/${owner}/${repo}/branches/${encodeURIComponent(params.headBranch)}`
+      );
+    }
+
+    // 8. Idempotency & Retry Check: verify if an open PR already exists
+    const existingPr = await this.findOpenPullRequest(owner, repo, params.headBranch, baseBranch);
+    if (existingPr) {
+      return {
+        prNumber: existingPr.number,
+        prUrl: existingPr.htmlUrl,
+        title: existingPr.title,
+        sourceBranch: params.headBranch,
+        baseBranch,
+        headCommitSha: existingPr.headSha || confirmedSha,
+        status: "draft",
+        isDraft: true,
+        merged: false,
+        createdAt: existingPr.createdAt,
+        repository: targetRepo,
+        existing: true,
+        author: existingPr.author,
+      };
+    }
+
+    // 9. Build draft pull request payload
+    const draftPayload = this.buildDraftPullRequestPayload({
+      jobId: params.jobId,
+      findingId: params.findingId || "FND-001",
+      defectCategory: params.defectCategory || "UI Defect",
+      defectTitle: params.defectTitle || `Resolved UI issue for Job #${params.jobId}`,
+      defectDescription: params.defectDescription,
+      repairedComponent: params.repairedComponent,
+      headBranch: params.headBranch,
+      baseBranch,
+      validation: params.validation,
+      evidenceUris: params.evidenceUris,
+    });
+
+    if (params.title) {
+      draftPayload.title = params.title;
+    }
+    if (params.customBody) {
+      draftPayload.body = params.customBody;
+    }
+
+    // 10. Create Draft Pull Request via GitHub REST API: POST /repos/{owner}/{repo}/pulls
+    try {
+      const prData = await this.request<any>(`repos/${owner}/${repo}/pulls`, {
+        method: "POST",
+        body: JSON.stringify({
+          title: draftPayload.title,
+          body: draftPayload.body,
+          head: draftPayload.head,
+          base: draftPayload.base,
+          draft: true, // Strict safety invariant: automated PRs must always be draft!
+        }),
+      });
+
+      return {
+        prNumber: prData.number,
+        prUrl: prData.html_url,
+        title: prData.title,
+        sourceBranch: params.headBranch,
+        baseBranch,
+        headCommitSha: prData.head?.sha || confirmedSha,
+        status: "draft",
+        isDraft: true, // Never ready-for-review automatically
+        merged: false, // Strict safety guarantee: never merged automatically
+        createdAt: prData.created_at || new Date().toISOString(),
+        repository: targetRepo,
+        existing: false,
+        author: prData.user?.login || accessReport.identity?.login || "unknown",
+      };
+    } catch (err: unknown) {
+      // If GitHub rejects with 422 because PR already exists (race condition), safely recover existing PR
+      if (err instanceof GitHubIntegrationError && err.status === 422) {
+        const raceExistingPr = await this.findOpenPullRequest(owner, repo, params.headBranch, baseBranch);
+        if (raceExistingPr) {
+          return {
+            prNumber: raceExistingPr.number,
+            prUrl: raceExistingPr.htmlUrl,
+            title: raceExistingPr.title,
+            sourceBranch: params.headBranch,
+            baseBranch,
+            headCommitSha: raceExistingPr.headSha || confirmedSha,
+            status: "draft",
+            isDraft: true,
+            merged: false,
+            createdAt: raceExistingPr.createdAt,
+            repository: targetRepo,
+            existing: true,
+            author: raceExistingPr.author,
+          };
+        }
+      }
+      throw err;
+    }
   }
 }
 

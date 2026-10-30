@@ -25,6 +25,8 @@ import {
   assertTargetRepoAllowed,
   assertRepoNotArchived,
   assertWritePermission,
+  assertDifferentBranches,
+  assertConfirmedRepairCommit,
   sanitizeRefSlug,
   validateBranchName,
   buildRepairBranchName,
@@ -38,6 +40,9 @@ import {
   ArchivedRepositoryError,
   UnsafeFilePathError,
   EmptyRepairDiffError,
+  BranchMismatchError,
+  MissingRepairCommitError,
+  DuplicatePullRequestError,
   GitHubNotFoundError,
   GitHubRateLimitError,
   GitHubAuthenticationError,
@@ -1101,6 +1106,639 @@ describe("Repair Branch & Commit Workflow Orchestration", () => {
     assert.equal(result.changedPaths[0], "src/pages/Cart.tsx");
     assert.equal(branchCreated, true);
     assert.equal(commitCreated, true);
+  });
+});
+
+describe("GitHub Draft Pull Request Creation Workflow", () => {
+  let originalFetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("assertDifferentBranches and assertConfirmedRepairCommit enforce PR preconditions", () => {
+    // assertDifferentBranches
+    assert.doesNotThrow(() => assertDifferentBranches("omnisight/repair-1", "main"));
+    assert.throws(
+      () => assertDifferentBranches("main", "main"),
+      (err) => err instanceof BranchMismatchError
+    );
+    assert.throws(
+      () => assertDifferentBranches("refs/heads/main", "main"),
+      (err) => err instanceof BranchMismatchError
+    );
+    assert.throws(
+      () => assertDifferentBranches("", "main"),
+      (err) => err instanceof BranchMismatchError
+    );
+
+    // assertConfirmedRepairCommit
+    assert.equal(assertConfirmedRepairCommit("commit_sha_1234567"), "commit_sha_1234567");
+    assert.equal(assertConfirmedRepairCommit("abcdef0"), "abcdef0");
+    assert.throws(
+      () => assertConfirmedRepairCommit(""),
+      (err) => err instanceof MissingRepairCommitError
+    );
+    assert.throws(
+      () => assertConfirmedRepairCommit(undefined),
+      (err) => err instanceof MissingRepairCommitError
+    );
+    assert.throws(
+      () => assertConfirmedRepairCommit("not-a-sha!@#"),
+      (err) => err instanceof MissingRepairCommitError
+    );
+
+    // DuplicatePullRequestError
+    const dupErr = new DuplicatePullRequestError("omnisight/repair-1", "main", 42, "https://github.com/pr/42");
+    assert.equal(dupErr.existingPrNumber, 42);
+    assert.equal(dupErr.existingPrUrl, "https://github.com/pr/42");
+    assert.equal(dupErr.status, 409);
+  });
+
+  test("successfully creates a draft pull request with verified validation and human-review gates", async () => {
+    let prPostedBody = null;
+
+    globalThis.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+
+      // Verify repo access
+      if (urlStr.endsWith("/repos/Veggies02/OmniSight")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 1234,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            default_branch: "main",
+            archived: false,
+            private: false,
+            permissions: { admin: false, push: true, pull: true },
+          }),
+        };
+      }
+
+      // Identity check
+      if (urlStr.endsWith("/user")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "x-oauth-scopes": "repo" }),
+          json: async () => ({ login: "omnisight-bot", id: 999, type: "User" }),
+        };
+      }
+
+      // Check repair branch exists
+      if (urlStr.includes("/branches/omnisight%2Frepair-job-1083-def-188")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            name: "omnisight/repair-job-1083-def-188",
+            commit: { sha: "commit_sha_def456" },
+          }),
+        };
+      }
+
+      // Check existing open PRs (returns empty array = none found)
+      if (urlStr.includes("/pulls?state=open")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => [],
+        };
+      }
+
+      // POST create PR
+      if (urlStr.endsWith("/pulls") && options.method === "POST") {
+        prPostedBody = JSON.parse(options.body);
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers(),
+          json: async () => ({
+            number: 42,
+            html_url: "https://github.com/Veggies02/OmniSight/pull/42",
+            title: prPostedBody.title,
+            state: "open",
+            draft: true,
+            merged: false,
+            created_at: "2026-10-30T10:00:00Z",
+            head: { ref: "omnisight/repair-job-1083-def-188", sha: "commit_sha_def456" },
+            base: { ref: "main", sha: "base_sha_abc123" },
+            user: { login: "omnisight-bot" },
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected fetch URL in test: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    const result = await service.createDraftPullRequest({
+      jobId: "JOB-1083",
+      findingId: "DEF-188",
+      headBranch: "omnisight/repair-job-1083-def-188",
+      headCommitSha: "commit_sha_def456",
+      baseBranch: "main",
+      targetRepository: "Veggies02/OmniSight",
+      defectCategory: "Contrast",
+      defectTitle: "Fix checkout CTA contrast",
+      validation: {
+        status: "passed",
+        totalChecks: 3,
+        passedChecks: 3,
+        failedChecks: 0,
+        verifiedAt: "2026-10-30T09:55:00Z",
+      },
+    });
+
+    assert.equal(result.prNumber, 42);
+    assert.equal(result.prUrl, "https://github.com/Veggies02/OmniSight/pull/42");
+    assert.equal(result.sourceBranch, "omnisight/repair-job-1083-def-188");
+    assert.equal(result.baseBranch, "main");
+    assert.equal(result.status, "draft");
+    assert.equal(result.isDraft, true);
+    assert.equal(result.merged, false);
+    assert.equal(result.existing, false);
+    assert.equal(result.author, "omnisight-bot");
+
+    // Invariant check on API request payload:
+    assert.ok(prPostedBody);
+    assert.equal(prPostedBody.draft, true); // Strict requirement: must always be draft
+    assert.equal(prPostedBody.head, "omnisight/repair-job-1083-def-188");
+    assert.equal(prPostedBody.base, "main");
+    assert.ok(prPostedBody.title.includes("[OmniSight Self-Healing]"));
+    assert.ok(prPostedBody.body.includes("OmniSight Automated UI Repair"));
+    assert.ok(prPostedBody.body.includes("PASSED"));
+    assert.ok(prPostedBody.body.includes("⚠️ **OmniSight Review Gate:**"));
+  });
+
+  test("halts immediately if validation failed, pending, missing, or has test regressions", async () => {
+    const service = new GitHubIntegrationService({ token: "test_token" });
+
+    // Missing validation
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-1083",
+          headBranch: "omnisight/repair-job-1083",
+          headCommitSha: "commit_sha_def456",
+          validation: null,
+        }),
+      (err) => err instanceof ValidationGateError
+    );
+
+    // Failed validation
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-1083",
+          headBranch: "omnisight/repair-job-1083",
+          headCommitSha: "commit_sha_def456",
+          validation: { status: "failed", totalChecks: 3, passedChecks: 2, failedChecks: 1 },
+        }),
+      (err) => err instanceof ValidationGateError
+    );
+
+    // Pending validation
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-1083",
+          headBranch: "omnisight/repair-job-1083",
+          headCommitSha: "commit_sha_def456",
+          validation: { status: "pending", totalChecks: 3, passedChecks: 0, failedChecks: 0 },
+        }),
+      (err) => err instanceof ValidationGateError
+    );
+
+    // Zero checks executed
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-1083",
+          headBranch: "omnisight/repair-job-1083",
+          headCommitSha: "commit_sha_def456",
+          validation: { status: "passed", totalChecks: 0, passedChecks: 0, failedChecks: 0 },
+        }),
+      (err) => err instanceof ValidationGateError
+    );
+  });
+
+  test("rejects missing commit information, empty branch, or source branch identical to base", async () => {
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    const passedValidation = { status: "passed", totalChecks: 2, passedChecks: 2, failedChecks: 0 };
+
+    // Missing headCommitSha
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-1083",
+          headBranch: "omnisight/repair-1",
+          headCommitSha: "",
+          validation: passedValidation,
+        }),
+      (err) => err instanceof MissingRepairCommitError
+    );
+
+    // Protected branch as source
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-1083",
+          headBranch: "main",
+          headCommitSha: "commit_sha_def456",
+          baseBranch: "main",
+          validation: passedValidation,
+        }),
+      (err) => err instanceof ProtectedBranchError
+    );
+
+    // Head branch equals base branch
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-1083",
+          headBranch: "feature/cart-repair",
+          baseBranch: "feature/cart-repair",
+          headCommitSha: "commit_sha_def456",
+          validation: passedValidation,
+        }),
+      (err) => err instanceof BranchMismatchError
+    );
+  });
+
+  test("rejects PR creation when GitHub permissions are insufficient or repository is archived", async () => {
+    // Insufficient permissions
+    globalThis.fetch = async (url) => {
+      const urlStr = String(url);
+      if (urlStr.endsWith("/repos/Veggies02/OmniSight")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 1234,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            default_branch: "main",
+            archived: false,
+            permissions: { push: false, pull: true }, // Read-only
+          }),
+        };
+      }
+      if (urlStr.endsWith("/user")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ login: "read-only-user", id: 101 }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-1083",
+          headBranch: "omnisight/repair-job-1083",
+          headCommitSha: "commit_sha_def456",
+          validation: { status: "passed", totalChecks: 2, passedChecks: 2, failedChecks: 0 },
+        }),
+      (err) => err instanceof InsufficientPermissionsError || err.kind === "INSUFFICIENT_PERMISSIONS"
+    );
+
+    // Archived repository
+    globalThis.fetch = async (url) => {
+      const urlStr = String(url);
+      if (urlStr.endsWith("/repos/Veggies02/OmniSight")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 1234,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            default_branch: "main",
+            archived: true, // Archived repo
+            permissions: { push: true, pull: true },
+          }),
+        };
+      }
+      if (urlStr.endsWith("/user")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ login: "bot", id: 101 }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    await assert.rejects(
+      async () =>
+        service.createDraftPullRequest({
+          jobId: "JOB-1083",
+          headBranch: "omnisight/repair-job-1083",
+          headCommitSha: "commit_sha_def456",
+          validation: { status: "passed", totalChecks: 2, passedChecks: 2, failedChecks: 0 },
+        }),
+      (err) => err instanceof ArchivedRepositoryError || err.kind === "REPO_ARCHIVED"
+    );
+  });
+
+  test("detects existing open PR and reuses details safely without duplicate submission (idempotent retry)", async () => {
+    let postCallAttempted = false;
+
+    globalThis.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+
+      if (urlStr.endsWith("/repos/Veggies02/OmniSight")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 1234,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            default_branch: "main",
+            archived: false,
+            permissions: { push: true, pull: true },
+          }),
+        };
+      }
+
+      if (urlStr.endsWith("/user")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ login: "bot", id: 101 }),
+        };
+      }
+
+      if (urlStr.includes("/branches/omnisight%2Frepair-job-1083")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            name: "omnisight/repair-job-1083",
+            commit: { sha: "commit_sha_def456" },
+          }),
+        };
+      }
+
+      // Existing open PR found!
+      if (urlStr.includes("/pulls?state=open")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => [
+            {
+              number: 88,
+              html_url: "https://github.com/Veggies02/OmniSight/pull/88",
+              title: "[OmniSight Self-Healing] Fix Cart Contrast",
+              state: "open",
+              draft: true,
+              merged: false,
+              created_at: "2026-10-29T12:00:00Z",
+              head: { ref: "omnisight/repair-job-1083", sha: "commit_sha_def456" },
+              base: { ref: "main", sha: "base_sha_abc123" },
+              user: { login: "omnisight-bot" },
+            },
+          ],
+        };
+      }
+
+      if (urlStr.endsWith("/pulls") && options.method === "POST") {
+        postCallAttempted = true;
+        throw new Error("POST /pulls should NOT be called when existing PR is found!");
+      }
+
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    const result = await service.createDraftPullRequest({
+      jobId: "JOB-1083",
+      headBranch: "omnisight/repair-job-1083",
+      headCommitSha: "commit_sha_def456",
+      baseBranch: "main",
+      validation: { status: "passed", totalChecks: 2, passedChecks: 2, failedChecks: 0 },
+    });
+
+    assert.equal(result.prNumber, 88);
+    assert.equal(result.existing, true); // Reused!
+    assert.equal(result.isDraft, true);
+    assert.equal(result.merged, false);
+    assert.equal(postCallAttempted, false); // No duplicate POST request sent
+  });
+
+  test("recovers gracefully when GitHub API returns 422 duplicate PR race condition", async () => {
+    let checkCount = 0;
+
+    globalThis.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+
+      if (urlStr.endsWith("/repos/Veggies02/OmniSight")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 1234,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            default_branch: "main",
+            archived: false,
+            permissions: { push: true, pull: true },
+          }),
+        };
+      }
+
+      if (urlStr.endsWith("/user")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ login: "bot", id: 101 }),
+        };
+      }
+
+      if (urlStr.includes("/branches/omnisight%2Frepair-job-1083")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            name: "omnisight/repair-job-1083",
+            commit: { sha: "commit_sha_def456" },
+          }),
+        };
+      }
+
+      // Initial check returns empty array; second check (after 422) returns existing PR
+      if (urlStr.includes("/pulls?state=open")) {
+        checkCount++;
+        if (checkCount === 1) {
+          return { ok: true, status: 200, headers: new Headers(), json: async () => [] };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => [
+            {
+              number: 95,
+              html_url: "https://github.com/Veggies02/OmniSight/pull/95",
+              title: "[OmniSight Self-Healing] Concurrent PR",
+              state: "open",
+              draft: true,
+              merged: false,
+              created_at: "2026-10-30T11:00:00Z",
+              head: { ref: "omnisight/repair-job-1083", sha: "commit_sha_def456" },
+              base: { ref: "main", sha: "base_sha_abc123" },
+              user: { login: "omnisight-bot" },
+            },
+          ],
+        };
+      }
+
+      // POST /pulls fails with HTTP 422 Validation Failed (duplicate PR)
+      if (urlStr.endsWith("/pulls") && options.method === "POST") {
+        return {
+          ok: false,
+          status: 422,
+          headers: new Headers(),
+          json: async () => ({
+            message: "Validation Failed",
+            errors: [{ message: "A pull request already exists for Veggies02:omnisight/repair-job-1083." }],
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    const result = await service.createDraftPullRequest({
+      jobId: "JOB-1083",
+      headBranch: "omnisight/repair-job-1083",
+      headCommitSha: "commit_sha_def456",
+      baseBranch: "main",
+      validation: { status: "passed", totalChecks: 2, passedChecks: 2, failedChecks: 0 },
+    });
+
+    assert.equal(result.prNumber, 95);
+    assert.equal(result.existing, true);
+    assert.equal(result.isDraft, true);
+    assert.equal(result.merged, false);
+  });
+
+  test("strictly guarantees draft PR invariant and ensures workflow never merges automatically", async () => {
+    let mergeCalled = false;
+
+    globalThis.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+
+      if (urlStr.includes("/merge")) {
+        mergeCalled = true;
+        throw new Error("AUTOMATED MERGE VIOLATION: Merge endpoint was invoked!");
+      }
+
+      if (urlStr.endsWith("/repos/Veggies02/OmniSight")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 1234,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            default_branch: "main",
+            archived: false,
+            permissions: { push: true, pull: true },
+          }),
+        };
+      }
+
+      if (urlStr.endsWith("/user")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ login: "bot", id: 101 }),
+        };
+      }
+
+      if (urlStr.includes("/branches/omnisight%2Frepair-job-1083")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            name: "omnisight/repair-job-1083",
+            commit: { sha: "commit_sha_def456" },
+          }),
+        };
+      }
+
+      if (urlStr.includes("/pulls?state=open")) {
+        return { ok: true, status: 200, headers: new Headers(), json: async () => [] };
+      }
+
+      if (urlStr.endsWith("/pulls") && options.method === "POST") {
+        const body = JSON.parse(options.body);
+        assert.equal(body.draft, true); // Verified draft: true
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers(),
+          json: async () => ({
+            number: 104,
+            html_url: "https://github.com/Veggies02/OmniSight/pull/104",
+            title: body.title,
+            state: "open",
+            draft: true,
+            merged: false,
+            created_at: "2026-10-30T11:00:00Z",
+            head: { ref: "omnisight/repair-job-1083", sha: "commit_sha_def456" },
+            base: { ref: "main", sha: "base_sha_abc123" },
+            user: { login: "omnisight-bot" },
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    const result = await service.createDraftPullRequest({
+      jobId: "JOB-1083",
+      headBranch: "omnisight/repair-job-1083",
+      headCommitSha: "commit_sha_def456",
+      baseBranch: "main",
+      validation: { status: "passed", totalChecks: 2, passedChecks: 2, failedChecks: 0 },
+    });
+
+    assert.equal(result.isDraft, true);
+    assert.equal(result.merged, false);
+    assert.equal(mergeCalled, false);
   });
 });
 
