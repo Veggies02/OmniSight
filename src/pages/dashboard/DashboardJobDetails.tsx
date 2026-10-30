@@ -10,6 +10,7 @@ import {
   DefectFindingsReview,
   VisualEvidenceViewer,
   ValidationResults,
+  RepairBranchWorkflowAction,
   type BadgeStatus,
 } from "../../components/dashboard";
 import { useInspectionJobDetails } from "../../api";
@@ -384,6 +385,11 @@ export function DashboardJobDetails() {
           jobId={job.id}
           onSelectEvidence={setSelectedEvidenceId}
         />
+      </section>
+
+      {/* 5b. Automated Repair Branch & Commit Workflow Section */}
+      <section style={{ marginBottom: "2rem" }} aria-label="Repair Workflow">
+        <RepairBranchWorkflowAction job={job} />
       </section>
 
       {/* 6. Defect Findings Section */}

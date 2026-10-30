@@ -11,6 +11,8 @@ export type GitHubErrorKind =
   | "INSUFFICIENT_PERMISSIONS"
   | "REPO_NOT_ALLOWED"
   | "REPO_ARCHIVED"
+  | "UNSAFE_FILE_PATH"
+  | "EMPTY_REPAIR_DIFF"
   | "RATE_LIMIT_EXCEEDED"
   | "NETWORK_ERROR"
   | "API_ERROR";
@@ -108,6 +110,34 @@ export class ArchivedRepositoryError extends GitHubIntegrationError {
     });
     this.name = "ArchivedRepositoryError";
     this.repository = repository;
+  }
+}
+
+export class UnsafeFilePathError extends GitHubIntegrationError {
+  public readonly filePath: string;
+  public readonly reason: string;
+
+  constructor(filePath: string, reason: string) {
+    super({
+      message: `Unsafe file change path rejected: "${filePath}". ${reason}`,
+      kind: "UNSAFE_FILE_PATH",
+      status: 400,
+      details: { filePath, reason },
+    });
+    this.name = "UnsafeFilePathError";
+    this.filePath = filePath;
+    this.reason = reason;
+  }
+}
+
+export class EmptyRepairDiffError extends GitHubIntegrationError {
+  constructor(message = "Repair workflow rejected: No approved file changes provided.") {
+    super({
+      message,
+      kind: "EMPTY_REPAIR_DIFF",
+      status: 400,
+    });
+    this.name = "EmptyRepairDiffError";
   }
 }
 

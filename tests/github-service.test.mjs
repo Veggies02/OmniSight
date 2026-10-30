@@ -29,11 +29,15 @@ import {
   validateBranchName,
   buildRepairBranchName,
   validateCommitMessage,
+  validateRepairFilePath,
+  validateRepairFileChanges,
   ValidationGateError,
   ProtectedBranchError,
   InsufficientPermissionsError,
   RepositoryNotAllowedError,
   ArchivedRepositoryError,
+  UnsafeFilePathError,
+  EmptyRepairDiffError,
   GitHubNotFoundError,
   GitHubRateLimitError,
   GitHubAuthenticationError,
@@ -865,4 +869,239 @@ describe("Authentication & Repository Permission Auditing", () => {
     );
   });
 });
+
+describe("Repair Branch & Commit Workflow Orchestration", () => {
+  let originalFetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("validateRepairFilePath permits safe paths and blocks path traversal and forbidden dirs", () => {
+    // Permitted paths
+    assert.equal(validateRepairFilePath("src/pages/Cart.tsx"), "src/pages/Cart.tsx");
+    assert.equal(validateRepairFilePath("src/components/Button.css"), "src/components/Button.css");
+    assert.equal(validateRepairFilePath("package.json"), "package.json");
+
+    // Path traversal
+    assert.throws(
+      () => validateRepairFilePath("../secret/passwords.ts"),
+      (err) => err instanceof UnsafeFilePathError && err.reason.includes("Path traversal")
+    );
+    assert.throws(
+      () => validateRepairFilePath("src/../../etc/passwd.ts"),
+      UnsafeFilePathError
+    );
+
+    // Forbidden directories
+    assert.throws(
+      () => validateRepairFilePath(".git/config.json"),
+      (err) => err instanceof UnsafeFilePathError && err.reason.includes("protected directory")
+    );
+    assert.throws(
+      () => validateRepairFilePath("node_modules/react/index.js"),
+      UnsafeFilePathError
+    );
+
+    // Disallowed extensions (e.g. binaries, images)
+    assert.throws(
+      () => validateRepairFilePath("src/assets/hero.png"),
+      (err) => err instanceof UnsafeFilePathError && err.reason.includes("File extension not permitted")
+    );
+    assert.throws(
+      () => validateRepairFilePath("bin/script.exe"),
+      UnsafeFilePathError
+    );
+  });
+
+  test("validateRepairFileChanges rejects empty diff or duplicate paths", () => {
+    assert.throws(() => validateRepairFileChanges([]), EmptyRepairDiffError);
+
+    assert.throws(
+      () =>
+        validateRepairFileChanges([
+          { path: "src/style.css", content: "body { margin: 0; }" },
+          { path: "src/style.css", content: "body { margin: 8px; }" },
+        ]),
+      (err) => err instanceof UnsafeFilePathError && err.reason.includes("Duplicate file path")
+    );
+  });
+
+  test("executeRepairWorkflow halts immediately if validation status is not passed", async () => {
+    const service = new GitHubIntegrationService({ token: "test_token" });
+
+    await assert.rejects(
+      async () =>
+        service.executeRepairWorkflow({
+          jobId: "JOB-1084",
+          findingId: "DEF-201",
+          targetRepository: "Veggies02/OmniSight",
+          validation: {
+            status: "failed",
+            totalChecks: 3,
+            passedChecks: 1,
+            failedChecks: 2,
+          },
+          changes: [{ path: "src/pages/Checkout.tsx", content: "// fix" }],
+        }),
+      (err) => err instanceof ValidationGateError
+    );
+  });
+
+  test("executeRepairWorkflow successfully orchestrates branch, commit, and verification", async () => {
+    let branchCreated = false;
+    let commitCreated = false;
+
+    globalThis.fetch = async (url, options) => {
+      const urlStr = url.toString();
+
+      // Check current user identity
+      if (urlStr.endsWith("/user")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "x-oauth-scopes": "repo" }),
+          json: async () => ({ login: "omnisight-bot", id: 100, type: "Bot" }),
+        };
+      }
+
+      // Check repo metadata & permissions
+      if (urlStr.includes("/repos/Veggies02/OmniSight") && !urlStr.includes("/branches") && !urlStr.includes("/git")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            id: 12345,
+            name: "OmniSight",
+            full_name: "Veggies02/OmniSight",
+            owner: { login: "Veggies02" },
+            default_branch: "main",
+            archived: false,
+            permissions: { admin: true, push: true, pull: true },
+          }),
+        };
+      }
+
+      // Check main base branch
+      if (urlStr.endsWith("/branches/main")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            name: "main",
+            commit: { sha: "base_sha_abc123" },
+            protected: true,
+          }),
+        };
+      }
+
+      // Check repair branch (first check returns 404, triggers create)
+      if (urlStr.includes("/branches/omnisight%2Frepair-job-1083-def-188")) {
+        if (!branchCreated) {
+          return {
+            ok: false,
+            status: 404,
+            headers: new Headers(),
+            json: async () => ({ message: "Branch not found" }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({
+            name: "omnisight/repair-job-1083-def-188",
+            commit: { sha: "base_sha_abc123" },
+          }),
+        };
+      }
+
+      // Create branch git ref
+      if (urlStr.endsWith("/git/refs") && options.method === "POST") {
+        branchCreated = true;
+        const body = JSON.parse(options.body);
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers(),
+          json: async () => ({
+            ref: body.ref,
+            object: { sha: "base_sha_abc123", url: "https://api.github.com/refs/1" },
+          }),
+        };
+      }
+
+      // Create tree
+      if (urlStr.endsWith("/git/trees") && options.method === "POST") {
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers(),
+          json: async () => ({ sha: "tree_sha_xyz" }),
+        };
+      }
+
+      // Create commit
+      if (urlStr.endsWith("/git/commits") && options.method === "POST") {
+        commitCreated = true;
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers(),
+          json: async () => ({
+            sha: "commit_sha_def456",
+            html_url: "https://github.com/Veggies02/OmniSight/commit/def456",
+          }),
+        };
+      }
+
+      // Update branch ref
+      if (urlStr.includes("/git/refs/heads/omnisight/repair-job-1083-def-188") && options.method === "PATCH") {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ object: { sha: "commit_sha_def456" } }),
+        };
+      }
+
+      throw new Error(`Unexpected fetch URL in test: ${urlStr}`);
+    };
+
+    const service = new GitHubIntegrationService({ token: "test_token" });
+    const result = await service.executeRepairWorkflow({
+      jobId: "JOB-1083",
+      findingId: "DEF-188",
+      targetRepository: "Veggies02/OmniSight",
+      baseBranch: "main",
+      validation: {
+        status: "passed",
+        totalChecks: 3,
+        passedChecks: 3,
+        failedChecks: 0,
+      },
+      changes: [
+        {
+          path: "src/pages/Cart.tsx",
+          content: "// Repaired contrast ratio for checkout CTA",
+        },
+      ],
+    });
+
+    assert.equal(result.status, "success");
+    assert.equal(result.branch, "omnisight/repair-job-1083-def-188");
+    assert.equal(result.commitSha, "commit_sha_def456");
+    assert.equal(result.changedFilesCount, 1);
+    assert.equal(result.changedPaths[0], "src/pages/Cart.tsx");
+    assert.equal(branchCreated, true);
+    assert.equal(commitCreated, true);
+  });
+});
+
 

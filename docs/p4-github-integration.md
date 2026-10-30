@@ -1,7 +1,7 @@
 # OmniSight — P4 GitHub Integration Service Architecture
 
 **Author:** Person 4 (GitHub Integration & QA Dashboard — Sahil)  
-**Status:** Foundation & Secure Permissions Implemented (Days 13–14)  
+**Status:** Repair Branch & Commit Workflow Implemented (Days 13–15)  
 **Module:** `src/services/github/` & `src/api/services/githubService.ts`
 
 ---
@@ -58,7 +58,8 @@ GitHub REST API v3 (`https://api.github.com`)
 | **Check Branch Information** | `getBranch(owner, repo, branch)` | **Implemented** | Confirms commit SHA and branch protection |
 | **Retrieve Pull Request Metadata** | `getPullRequest(owner, repo, num)` | **Implemented** | Extracts review status, author, draft and merge state |
 | **Prepare Repair Branch** | `prepareRepairBranch(params)` | **Implemented** | Requires 100% test pass; blocks protected branches; checks write permissions |
-| **Prepare Repair Commit** | `prepareRepairCommit(params)` | **Implemented** | Git tree/commit data API; requires non-empty diff; rejects protected |
+| **Prepare Repair Commit** | `prepareRepairCommit(params)` | **Implemented** | Git tree/commit data API; requires non-empty diff; validates safe paths |
+| **Execute Repair Workflow** | `executeRepairWorkflow(params)` | **Implemented (Day 15)** | End-to-end orchestration: validation gate -> permissions -> idempotent branch -> safe commit |
 | **Build Draft Pull Request** | `buildDraftPullRequestPayload(params)` | **Implemented** | `draft: true` invariant; embeds job telemetry & assertion checklist |
 | **Automated PR Dispatch / Publishing** | `publishPullRequest()` | **Prepared for Day 18** | Awaits UI review confirmation dialog in QA Dashboard |
 
@@ -105,3 +106,30 @@ OmniSight supports two server-side authentication models:
 5. **Draft-Only PRs:**
    - Automated pull requests are always created with `draft: true`.
    - Automated merging is completely prohibited. Human-in-the-loop engineering review is mandatory.
+
+---
+
+## 6. Day 15: Repair Branch and Commit Workflow Orchestration
+
+### Workflow Pipeline (`executeRepairWorkflow`):
+1. **Pre-Flight Validation Gate (`assertValidationPassed`):**
+   - Asserts job validation has explicitly succeeded (`status: "passed"`), with 0 failed checks and at least 1 executed check.
+2. **Permission & Security Verification (`assertWritePermission`):**
+   - Asserts target repository is allowlisted, not archived, and the authenticated identity possesses `push: true` permissions.
+3. **Safe File Path and Artifact Validation (`validateRepairFileChanges`):**
+   - Requires non-empty file changes (`EmptyRepairDiffError` thrown if empty).
+   - Blocks path traversal (`..`), absolute paths, Windows drive letters, null bytes, and control characters via `UnsafeFilePathError`.
+   - Blocks sensitive system directories: `.git`, `node_modules`, `dist`, `build`, `.env`, `.github/workflows`.
+   - Restricts file modifications to allowed source extensions (`.ts`, `.tsx`, `.js`, `.jsx`, `.css`, `.json`, `.py`, etc.).
+4. **Idempotent Dedicated Repair Branch Creation (`getBranch` + `createBranch`):**
+   - Canonical branch format: `omnisight/repair-{jobId}-{findingId}`.
+   - If branch already exists, reuses its tip commit as parent; otherwise, branches off the validated base branch tip (`main`).
+5. **Atomic Commit Construction (`prepareRepairCommit`):**
+   - Stages Git tree blobs and creates a new Git commit referencing the repair branch parent.
+   - Validates that the commit message includes the job ID, finding summary, and verification tag.
+   - Updates the repair branch ref to the new commit SHA.
+6. **Dashboard UI Integration (`RepairBranchWorkflowAction.tsx`):**
+   - Rendered within `DashboardJobDetails.tsx` (Section 5b).
+   - Blocks trigger button when validation has not explicitly succeeded.
+   - Displays real-time staging progress and renders confirmed results (branch name, base branch, commit SHA, files modified) or actionable error banners.
+

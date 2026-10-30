@@ -22,6 +22,8 @@ import type {
   PrepareRepairBranchResult,
   PrepareRepairCommitParams,
   PrepareRepairCommitResult,
+  ExecuteRepairWorkflowParams,
+  ExecuteRepairWorkflowResult,
   BuildDraftPRParams,
   DraftPullRequestPayload,
   GitHubServiceConfig,
@@ -42,6 +44,7 @@ import {
   assertWritePermission,
   buildRepairBranchName,
   validateCommitMessage,
+  validateRepairFileChanges,
 } from "./validationGate.ts";
 
 export class GitHubIntegrationService {
@@ -590,14 +593,9 @@ export class GitHubIntegrationService {
     // 3. Refuse direct commit to protected branch
     assertNotProtectedBranch(params.branch);
 
-    // 4. Validate commit message and changes
+    // 4. Validate commit message and file changes (paths, extensions, traversal)
     const validatedMessage = validateCommitMessage(params.commitMessage);
-    if (!Array.isArray(params.changes) || params.changes.length === 0) {
-      throw new GitHubIntegrationError({
-        message: "Cannot create repair commit with empty file changes list.",
-        kind: "API_ERROR",
-      });
-    }
+    const validatedChanges = validateRepairFileChanges(params.changes);
 
     // 5. Verify write permissions & retrieve current HEAD of target repair branch
     const [branchInfo, repoMeta] = await Promise.all([
@@ -613,7 +611,7 @@ export class GitHubIntegrationService {
     // 6. Create Git tree with the updated file changes: POST /repos/{owner}/{repo}/git/trees
     const treePayload = {
       base_tree: parentSha,
-      tree: params.changes.map((file) => ({
+      tree: validatedChanges.map((file) => ({
         path: file.path.replace(/^\/+/, ""),
         mode: file.mode || "100644",
         type: "blob",
@@ -653,9 +651,111 @@ export class GitHubIntegrationService {
       branch: params.branch,
       parentSha,
       treeSha: treeData.sha,
-      changedFilesCount: params.changes.length,
+      changedFilesCount: validatedChanges.length,
       committedAt: commitData.author?.date || new Date().toISOString(),
       htmlUrl: commitData.html_url,
+    };
+  }
+
+  /**
+   * High-level repair branch and commit workflow orchestration.
+   *
+   * 1. Validates repository, base branch, and target branch
+   * 2. Enforces explicit validation success
+   * 3. Confirms write permissions on the repository
+   * 4. Idempotently creates or reuses the dedicated repair branch
+   * 5. Validates file changes (paths, extensions, traversal checks)
+   * 6. Creates and links the repair commit
+   * 7. Returns structured operation details
+   */
+  public async executeRepairWorkflow(
+    params: ExecuteRepairWorkflowParams
+  ): Promise<ExecuteRepairWorkflowResult> {
+    const targetRepo = params.targetRepository || this.defaultRepo || "Veggies02/OmniSight";
+    const parts = targetRepo.split("/");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new GitHubIntegrationError({
+        message: `Invalid target repository format "${targetRepo}". Must be "owner/repo".`,
+        kind: "API_ERROR",
+      });
+    }
+    const [owner, repo] = parts;
+    const baseBranch = params.baseBranch || this.defaultBaseBranch;
+
+    // 1. Verify validation gate explicitly passed
+    assertValidationPassed(params.validation);
+
+    // 2. Verify write permissions on repository
+    const accessReport = await this.verifyRepositoryAccess(owner, repo);
+    if (!accessReport.permissions.hasRequiredPermissions) {
+      if (accessReport.error) {
+        throw new GitHubIntegrationError({
+          message: accessReport.error.message,
+          kind:
+            accessReport.error.code === "INSUFFICIENT_PERMISSIONS"
+              ? "INSUFFICIENT_PERMISSIONS"
+              : accessReport.error.code === "REPO_ARCHIVED"
+              ? "REPO_ARCHIVED"
+              : accessReport.error.code === "REPO_NOT_ALLOWED"
+              ? "REPO_NOT_ALLOWED"
+              : "PERMISSION_DENIED",
+          status: 403,
+          details: accessReport.error,
+        });
+      }
+      throw new GitHubIntegrationError({
+        message: `Write permissions required on "${targetRepo}".`,
+        kind: "INSUFFICIENT_PERMISSIONS",
+        status: 403,
+      });
+    }
+
+    // 3. Prepare dedicated repair branch
+    const branchResult = await this.prepareRepairBranch({
+      owner,
+      repo,
+      jobId: params.jobId,
+      findingId: params.findingId,
+      baseBranch,
+      validation: params.validation,
+      branchSuffix: params.branchSuffix,
+    });
+
+    // 4. Validate file changes list
+    const validatedChanges = validateRepairFileChanges(params.changes);
+
+    // 5. Default commit message if not provided
+    const commitMsg =
+      params.commitMessage ||
+      `fix(repair): apply self-healing patch for ${params.findingId} on ${params.jobId}`;
+
+    // 6. Create repair commit on the repair branch
+    const commitResult = await this.prepareRepairCommit({
+      owner,
+      repo,
+      branch: branchResult.branchName,
+      jobId: params.jobId,
+      findingId: params.findingId,
+      commitMessage: commitMsg,
+      changes: validatedChanges,
+      validation: params.validation,
+    });
+
+    return {
+      status: "success",
+      repository: targetRepo,
+      branch: branchResult.branchName,
+      baseBranch,
+      baseCommitSha: branchResult.baseCommitSha,
+      commitSha: commitResult.commitSha,
+      changedFilesCount: validatedChanges.length,
+      changedPaths: validatedChanges.map((c) => c.path),
+      committedAt: commitResult.committedAt,
+      htmlUrl: commitResult.htmlUrl,
+      validationGate: {
+        passed: true,
+        totalChecks: params.validation.totalChecks,
+      },
     };
   }
 

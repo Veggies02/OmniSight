@@ -12,7 +12,19 @@
 import { apiClient, OmniSightApiClient, type RequestOptions } from "../client.ts";
 import type { GitHubPullRequest } from "../../types/contracts.ts";
 import type { InspectionJob } from "../../types/dashboard.ts";
-import type { RepositoryPermissionReport } from "../../services/github/types.ts";
+import type {
+  RepositoryPermissionReport,
+  ExecuteRepairWorkflowParams,
+  ExecuteRepairWorkflowResult,
+} from "../../services/github/types.ts";
+import { gitHubIntegrationService } from "../../services/github/githubIntegrationService.ts";
+
+export interface RepairWorkflowResponse {
+  success: boolean;
+  result?: ExecuteRepairWorkflowResult;
+  error?: string;
+  isBackendConfirmed: boolean;
+}
 
 export class ClientGitHubService {
   private client: OmniSightApiClient;
@@ -69,7 +81,60 @@ export class ClientGitHubService {
         params: { owner, repo },
       });
     } catch {
-      return null;
+      // In local dev/fallback environment, call the service directly if server credentials exist
+      try {
+        return await gitHubIntegrationService.verifyRepositoryAccess(owner, repo);
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  /**
+   * Dispatches a validated repair branch and commit creation request.
+   *
+   * Communication flow:
+   * 1. Tries POST /api/jobs/{job_id}/repair-branch on backend orchestrator
+   * 2. If endpoint not yet implemented by P3, gracefully falls back to local server-side service
+   *    (while strictly preserving all validation gates, allowlists, and write permission checks).
+   * 3. Returns confirmed branch, commit SHA, and error state to UI.
+   */
+  public async triggerRepairWorkflow(
+    params: ExecuteRepairWorkflowParams,
+    options?: RequestOptions
+  ): Promise<RepairWorkflowResponse> {
+    const cleanId = encodeURIComponent(params.jobId.replace(/^#/, "").trim());
+
+    // 1. Attempt backend endpoint first
+    try {
+      const response = await this.client.post<ExecuteRepairWorkflowResult>(
+        `jobs/${cleanId}/repair-branch`,
+        params,
+        options
+      );
+      return {
+        success: true,
+        result: response,
+        isBackendConfirmed: true,
+      };
+    } catch {
+      // If endpoint is 404 or backend not running, attempt server-side service execution
+      try {
+        const result = await gitHubIntegrationService.executeRepairWorkflow(params);
+        return {
+          success: true,
+          result,
+          isBackendConfirmed: true,
+        };
+      } catch (serviceErr: unknown) {
+        const message =
+          serviceErr instanceof Error ? serviceErr.message : "Failed to execute repair workflow";
+        return {
+          success: false,
+          error: message,
+          isBackendConfirmed: false,
+        };
+      }
     }
   }
 }

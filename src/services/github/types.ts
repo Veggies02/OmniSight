@@ -2,7 +2,8 @@
  * OmniSight GitHub Integration Service Types & Safety Contracts
  *
  * Defines contracts for server-side GitHub operations, validation gates,
- * pull request metadata, identity verification, and repository permissions.
+ * pull request metadata, identity verification, repository permissions,
+ * and validated repair workflow orchestration.
  */
 
 export interface GitHubRepoMetadata {
@@ -143,6 +144,38 @@ export interface PrepareRepairCommitResult {
   changedFilesCount: number;
   committedAt: string;
   htmlUrl?: string;
+}
+
+/**
+ * High-level orchestration contract for executing a complete repair workflow:
+ * Validates gates -> checks write permissions -> creates/reuses branch -> commits approved changes
+ */
+export interface ExecuteRepairWorkflowParams {
+  jobId: string;
+  findingId: string;
+  targetRepository?: string; // e.g. "Veggies02/OmniSight" (or defaults from config)
+  baseBranch?: string; // e.g. "main"
+  validation: ValidationGateStatus;
+  changes: FileChange[];
+  commitMessage?: string;
+  branchSuffix?: string;
+}
+
+export interface ExecuteRepairWorkflowResult {
+  status: "success" | "skipped_duplicate";
+  repository: string;
+  branch: string;
+  baseBranch: string;
+  baseCommitSha: string;
+  commitSha: string;
+  changedFilesCount: number;
+  changedPaths: string[];
+  committedAt: string;
+  htmlUrl?: string;
+  validationGate: {
+    passed: true;
+    totalChecks: number;
+  };
 }
 
 export interface BuildDraftPRParams {
