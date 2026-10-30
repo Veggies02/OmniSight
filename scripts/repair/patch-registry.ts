@@ -171,7 +171,7 @@ export const REGISTERED_PATCHES: Record<string, RegisteredPatch> = {
   'patch-mobile-nav-overflow-004': {
     patchId: 'patch-mobile-nav-overflow-004',
     defectCategory: 'mobile-nav-overflow',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Constrains mobile navigation width to 100% and resets oversized gaps and link paddings',
     approvedSourceFiles: ['src/index.css'],
     targetFile: 'src/index.css',
@@ -198,13 +198,13 @@ export const REGISTERED_PATCHES: Record<string, RegisteredPatch> = {
   }
 
   .navbar.defect-mobile-nav-overflow .navbar-nav {
-    gap: 1rem;
+    gap: 0.25rem;
     min-width: 0;
   }
 
   .navbar.defect-mobile-nav-overflow .nav-link {
     white-space: normal;
-    padding: 0.5rem 1rem;
+    padding: 0.4rem 0.55rem;
   }
 }`,
     expectedVisualEffect: 'Mobile navbar container width fits within 100% without horizontal scrollbar overflow',
