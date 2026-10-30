@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from defect_analyzer import extract_json_with_status
 from localization import localize_finding
 from patch_scope import DEFAULT_POLICY, ScopePolicy, check_path, validate_changes
+from validation_checklist import build_validation_checklist
 from prompts import MAX_REPAIR_FILES, RepairSource, build_repair_prompt
 from schemas import (
     AIFinding,
@@ -380,7 +381,11 @@ def generate_patch(
             category=finding.defect_category,
             summary=_text(data.get("summary")) or "Proposed fix",
             changes=changes,
-            validation=_build_checklist(data.get("validation"), finding),
+            validation=build_validation_checklist(
+                finding,
+                evidence=evidence,
+                changed_files=[change.file_path for change in changes],
+            ),
             confidence=confidence,
             requires_human_review=True,
         )

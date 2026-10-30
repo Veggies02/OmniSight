@@ -6,7 +6,7 @@ These schemas define the agreed integration contracts with:
 """
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 import uuid
 from pydantic import BaseModel, Field, field_validator
 
@@ -109,6 +109,27 @@ class CodeChange(BaseModel):
         return v
 
 
+class CheckType(str, Enum):
+    """Kinds of automated check the re-run runner can perform."""
+    IN_VIEWPORT = "in_viewport"
+    NO_HORIZONTAL_SCROLL = "no_horizontal_scroll"
+    VISIBLE_AND_CLICKABLE = "visible_and_clickable"
+    NOT_COVERED = "not_covered"
+    SPACING_TO_NEIGHBOURS = "spacing_to_neighbours"
+    REANALYZE_NO_DEFECT = "reanalyze_no_defect"
+    NO_CONSOLE_ERRORS = "no_console_errors"
+
+
+class ValidationCheck(BaseModel):
+    """One machine-checkable assertion for the re-run runner."""
+
+    check_type: CheckType
+    description: str = Field(..., min_length=1)
+    selector: Optional[str] = None
+    viewport: Optional[ViewportConfig] = None
+    params: Dict[str, Union[int, float, str, bool]] = Field(default_factory=dict)
+
+
 class ValidationChecklist(BaseModel):
     """Instructions for re-running the page to confirm a patch fixed the defect."""
 
@@ -116,6 +137,7 @@ class ValidationChecklist(BaseModel):
     expected_outcome: str = Field(..., min_length=1)
     viewports: List[ViewportConfig] = Field(default_factory=list)
     selectors_to_check: List[str] = Field(default_factory=list)
+    checks: List[ValidationCheck] = Field(default_factory=list)
 
     @field_validator("steps")
     @classmethod
