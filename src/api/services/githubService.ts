@@ -74,11 +74,11 @@ export class ClientGitHubService {
    */
   public isEligibleForPullRequest(job: InspectionJob): boolean {
     if (!job) return false;
-    const isPassedStatus = job.status === "passed" || job.status === "needs-review";
+    const isCompletedRun =
+      job.status === "passed" || job.status === "needs-review" || job.status === "failed";
     const isValidationPassed = job.validationStatus === "passed";
-    const noUnresolvedDefects = job.defectsCount === 0 || job.validationStatus === "passed";
 
-    return isPassedStatus && isValidationPassed && noUnresolvedDefects;
+    return isCompletedRun && isValidationPassed;
   }
 
   /**

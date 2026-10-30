@@ -12,7 +12,7 @@ import { DashboardOverview } from "./pages/dashboard/DashboardOverview";
 import { DashboardJobs } from "./pages/dashboard/DashboardJobs";
 import { DashboardJobDetails } from "./pages/dashboard/DashboardJobDetails";
 import { DashboardDefects } from "./pages/dashboard/DashboardDefects";
-import { DashboardPlaceholder } from "./pages/dashboard/DashboardPlaceholder";
+import { DashboardPullRequests } from "./pages/dashboard/DashboardPullRequests";
 
 function StorefrontLayout() {
   return (
@@ -36,16 +36,7 @@ export function App() {
           <Route path="jobs" element={<DashboardJobs />} />
           <Route path="jobs/:id" element={<DashboardJobDetails />} />
           <Route path="defects" element={<DashboardDefects />} />
-          <Route
-            path="pull-requests"
-            element={
-              <DashboardPlaceholder
-                title="GitHub Pull Requests"
-                description="Manage automated fix branches, draft PR creation, commit history, and GitHub review workflows."
-                badge="Planned for Days 18–19"
-              />
-            }
-          />
+          <Route path="pull-requests" element={<DashboardPullRequests />} />
         </Route>
         <Route path="/dashboard" element={<Navigate to="/qa" replace />} />
 

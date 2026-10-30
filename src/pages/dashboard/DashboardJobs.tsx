@@ -90,7 +90,14 @@ export function DashboardJobs() {
 
   return (
     <div className="dashboard-jobs-page">
-      {/* 1. Page Header */}
+      {/* 1. Breadcrumb Navigation */}
+      <nav className="job-breadcrumb" aria-label="Breadcrumb navigation">
+        <Link to="/qa">QA Overview</Link>
+        <span className="job-breadcrumb-sep">/</span>
+        <span className="job-breadcrumb-active">Inspection Jobs</span>
+      </nav>
+
+      {/* 2. Page Header */}
       <PageHeader
         badge={<span className="hero-pill">P4 Workstream • Job History</span>}
         title="Inspection Job History"
@@ -171,6 +178,9 @@ export function DashboardJobs() {
               <span>{loading ? "Refreshing..." : "Refresh"}</span>
             </button>
 
+            <Link to="/qa/pull-requests" className="dash-header-btn">
+              Self-Healing PRs →
+            </Link>
             <Link to="/qa" className="dash-header-btn">
               ← Overview
             </Link>

@@ -156,7 +156,7 @@ export const MOCK_INSPECTION_JOBS: InspectionJob[] = [
       completedAt: "2026-10-16 22:20:58 UTC",
       duration: "33s",
       totalChecks: 3,
-      passedChecks: 1,
+      passedChecks: 2,
       failedChecks: 1,
       failureSummary: "Payment form input row wraps improperly on mobile width (390px). Manual triage required.",
       checks: [

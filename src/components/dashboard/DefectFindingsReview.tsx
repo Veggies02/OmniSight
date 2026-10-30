@@ -545,7 +545,16 @@ export function DefectFindingsReview({
                               <span>Artifact ID: <code>#{attachedEvidence.id}</code></span>
                             </div>
 
-                            <div style={{ marginTop: "0.5rem", display: "flex", justifyContent: "flex-end" }}>
+                            <div style={{ marginTop: "0.5rem", display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap" }}>
+                              {defect.jobId && (
+                                <Link
+                                  to={`/qa/jobs/${defect.jobId}`}
+                                  className="filter-pill-btn"
+                                  style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+                                >
+                                  <span>Open Job #{defect.jobId} →</span>
+                                </Link>
+                              )}
                               <a
                                 href="#visual-evidence-viewer"
                                 className="filter-pill-btn"
@@ -559,18 +568,31 @@ export function DefectFindingsReview({
                             </div>
                           </div>
                         ) : (
-                          <div
-                            style={{
-                              backgroundColor: "var(--color-surface-subtle)",
-                              border: "1px dashed var(--color-border)",
-                              borderRadius: "var(--radius-sm)",
-                              padding: "0.75rem 1rem",
-                              fontSize: "0.8rem",
-                              color: "var(--color-text-muted)",
-                            }}
-                          >
-                            <span aria-hidden="true">📷 </span>
-                            No screenshot or visual artifact attached to this finding.
+                          <div>
+                            <div
+                              style={{
+                                backgroundColor: "var(--color-surface-subtle)",
+                                border: "1px dashed var(--color-border)",
+                                borderRadius: "var(--radius-sm)",
+                                padding: "0.75rem 1rem",
+                                fontSize: "0.8rem",
+                                color: "var(--color-text-muted)",
+                              }}
+                            >
+                              <span aria-hidden="true">📷 </span>
+                              No screenshot or visual artifact attached to this finding.
+                            </div>
+                            {defect.jobId && (
+                              <div style={{ marginTop: "0.5rem" }}>
+                                <Link
+                                  to={`/qa/jobs/${defect.jobId}`}
+                                  className="filter-pill-btn"
+                                  style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+                                >
+                                  <span>View in Job Details (#{defect.jobId}) →</span>
+                                </Link>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

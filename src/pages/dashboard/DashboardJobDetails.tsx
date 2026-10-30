@@ -388,7 +388,7 @@ export function DashboardJobDetails() {
       </section>
 
       {/* 5b. Automated Repair Branch & Commit Workflow Section */}
-      <section style={{ marginBottom: "2rem" }} aria-label="Repair Workflow">
+      <section id="repair-workflow" style={{ marginBottom: "2rem" }} aria-label="Repair Workflow">
         <RepairBranchWorkflowAction job={job} />
       </section>
 
@@ -402,7 +402,7 @@ export function DashboardJobDetails() {
       </section>
 
       {/* 7. Visual Evidence & Comparison Section */}
-      <section className="dash-panel" aria-label="Inspection Evidence">
+      <section className="dash-panel" id="visual-evidence-viewer" aria-label="Inspection Evidence">
         <div className="dash-panel-header">
           <h2 className="dash-panel-title">
             <svg

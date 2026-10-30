@@ -165,6 +165,13 @@ export function DashboardOverview() {
             >
               {simulateEmpty ? "Show Data" : "Simulate Empty"}
             </button>
+
+            <Link to="/qa/defects" className="dash-header-btn">
+              Defect Review
+            </Link>
+            <Link to="/qa/pull-requests" className="dash-header-btn">
+              Self-Healing PRs →
+            </Link>
           </div>
         }
       />
@@ -666,25 +673,40 @@ export function DashboardOverview() {
             </div>
             <div className="roadmap-step">
               <span className="roadmap-indicator done">✓</span>
-              <span>Day 10–11: API Contracts & Centralized Client</span>
+              <span>Day 10–12: API Client & Dashboard Integration</span>
+            </div>
+            <div className="roadmap-step">
+              <span className="roadmap-indicator done">✓</span>
+              <span>Day 13–15: GitHub Auth, Permissions & Repair Workflow</span>
+            </div>
+            <div className="roadmap-step">
+              <span className="roadmap-indicator done">✓</span>
+              <span>Day 16–17: Draft PRs & Safety Hardening</span>
             </div>
             <div className="roadmap-step">
               <span className="roadmap-indicator active">●</span>
-              <span><strong>Day 12: Dashboard Backend Integration</strong></span>
+              <span><strong>Day 18: End-to-End QA Integration Polish</strong></span>
             </div>
             <div className="roadmap-step">
-              <span className="roadmap-indicator pending">13</span>
-              <span>Days 13–15: Live Polling, Triggers & Self-Healing PRs</span>
+              <span className="roadmap-indicator pending">19</span>
+              <span>Days 19–20: Live Polling, E2E Verification & Review</span>
             </div>
           </div>
 
-          <div style={{ marginTop: "1.25rem", paddingTop: "1rem", borderTop: "1px solid var(--dash-card-border)" }}>
+          <div style={{ marginTop: "1.25rem", paddingTop: "1rem", borderTop: "1px solid var(--dash-card-border)", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
             <Link
               to="/qa/jobs"
               className="sidebar-link active"
               style={{ justifyContent: "center", borderRadius: "var(--radius-sm)", borderLeft: "none" }}
             >
               <span>Explore All Inspection Jobs →</span>
+            </Link>
+            <Link
+              to="/qa/pull-requests"
+              className="sidebar-link"
+              style={{ justifyContent: "center", borderRadius: "var(--radius-sm)", borderLeft: "none", color: "var(--color-accent)" }}
+            >
+              <span>Manage Self-Healing PRs →</span>
             </Link>
           </div>
         </div>

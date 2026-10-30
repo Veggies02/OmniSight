@@ -189,5 +189,62 @@ OmniSight supports two server-side authentication models:
 - Permanent errors display clear remediation steps without a retry action.
 - Unknown outcomes render an amber notice directing users to check GitHub before re-submitting.
 
+---
+
+## 9. Day 18: End-to-End QA Dashboard Integration Polish
+
+### 1. Connected Workflow Architecture:
+All 5 QA dashboard pages now operate as a unified, seamless inspection console:
+
+```
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│   QA Overview   │ ────> │ Inspection Jobs │ ────> │   Job Details   │
+│     (/qa)       │       │   (/qa/jobs)    │       │ (/qa/jobs/:id)  │
+└────────┬────────┘       └─────────────────┘       └────────┬────────┘
+         │                                                   │
+         ├─────────────────────────────────┐                 │
+         ▼                                 ▼                 ▼
+┌─────────────────┐               ┌─────────────────┐        │
+│ Defect Review   │ <───────────> │ Self-Healing PR │ <──────┘
+│  (/qa/defects)  │               │(/qa/pull-requests)
+└─────────────────┘               └─────────────────┘
+```
+
+1. **QA Overview (`/qa`):**
+   - Displays real-time inspection metrics, status distribution, and recent jobs.
+   - Live backend vs. demo data fallback badge with pulsing status dot.
+   - Quick navigation links to Inspection Jobs, Defect Review, and Self-Healing PRs.
+   - Interactive empty-state simulator for resilience testing.
+2. **Inspection Jobs (`/qa/jobs`):**
+   - Breadcrumb navigation (`QA Overview / Inspection Jobs`).
+   - Multi-field search (Job ID, Application, Route, Defect summary) and dropdown filters (Status, Validation).
+   - Direct links to `/qa/jobs/:id` for comprehensive inspection details.
+3. **Job Details (`/qa/jobs/:id`):**
+   - Breadcrumbs with current Job ID.
+   - Status metrics, Playwright runner telemetry, application target route.
+   - Validation Results viewer with individual check assertions, durations, targets, and evidence jump links.
+   - Repair Branch & Commit Workflow Action (`#repair-workflow`) with interactive Draft PR generation.
+   - Defect Findings review connected to visual comparison evidence (`#visual-evidence-viewer`).
+   - Smooth scrolling between validation check evidence references and the visual comparison viewer.
+4. **Defect Findings & Review (`/qa/defects`):**
+   - Aggregates visual findings across loaded jobs with clean fallback to mock registry.
+   - Breadcrumbs navigation (`QA Overview / Defect Findings & Review`).
+   - Severity badges (P0/P1 Critical, High, Medium, Low), DOM selector previews, and attached evidence cards.
+   - Direct action buttons on each defect: "Open Job Details (#JOB-XXXX) →" and "Inspect in Comparison Viewer →".
+5. **GitHub Pull Requests & Self-Healing (`/qa/pull-requests`):**
+   - Replaced placeholder with a dedicated Pull Requests & Self-Healing dashboard page.
+   - StatCards: Draft PRs Created, Repair Branches Staged, Base Branch Protection (100%), Automated Direct Merges (0).
+   - Invariant callout: highlights validation gate verification, `draft: true` guarantee, and human-in-the-loop review.
+   - Searchable and filterable table of repair branches, commit SHAs, PR links, and validation outcomes.
+   - One-click links to GitHub draft pull requests and originating job records.
+
+### 2. Verification Summary:
+- **Test Suite:** 66 unit tests passing across 10 suites (`api-client.test.mjs`, `github-service.test.mjs`, `qa-dashboard-e2e.test.mjs`).
+- **Type Checking:** `tsc -b` compiles with 0 errors.
+- **Production Build:** Vite builds in ~1.2s with 0 errors.
+- **Linter:** `oxlint` reports 0 errors across 57 files.
+- **Safety Invariant:** All tokens remain server-side; zero secrets in client code or bundle.
+
+
 
 

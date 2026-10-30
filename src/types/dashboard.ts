@@ -11,6 +11,7 @@ import type {
   ArtifactKind,
   DefectCategoryTaxonomy,
   AIFinding,
+  GitHubPullRequest,
 } from "./contracts.ts";
 
 // ---------------------------------------------------------------------------
@@ -152,6 +153,8 @@ export interface InspectionJob extends InspectionJobSummary {
   backendJobId?: string;
   repository?: string;
   commitSha?: string;
+  repairBranch?: string;
+  pullRequest?: GitHubPullRequest;
 }
 
 // ---------------------------------------------------------------------------
