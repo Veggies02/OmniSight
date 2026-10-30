@@ -69,6 +69,33 @@ export interface BackendArtifactRef {
   created_at: string;
 }
 
+export interface BackendPullRequestResponse {
+  pr_number: number;
+  pr_url: string;
+  title: string;
+  head_branch: string;
+  base_branch: string;
+  head_commit_sha?: string;
+  status: string; // "draft" | "open"
+  is_draft: boolean;
+  merged: boolean;
+  created_at: string;
+  repository: string;
+  existing: boolean;
+  author?: string;
+  job_id?: string;
+}
+
+export interface BackendPullRequestCreateRequest {
+  title?: string;
+  body?: string;
+  base_branch?: string;
+  head_branch?: string;
+  draft?: boolean;
+  repository?: string;
+  labels?: string[];
+}
+
 export interface BackendJobResponse {
   job_id: string;
   website_url: string;
@@ -83,6 +110,7 @@ export interface BackendJobResponse {
   proposal?: Record<string, any>;
   approval?: BackendRepairApproval;
   repair?: BackendRepairResult;
+  pull_request?: BackendPullRequestResponse;
   error?: string;
   artifacts: BackendArtifactRef[];
 }
@@ -255,6 +283,36 @@ export class BackendRepairClient {
       method: "POST",
       requireAuth: true,
     });
+  }
+
+  /**
+   * Request server-side Draft Pull Request creation for an approved, verified repair
+   * POST /jobs/{job_id}/pr
+   */
+  public async createPullRequest(
+    jobId: string,
+    request?: BackendPullRequestCreateRequest
+  ): Promise<BackendPullRequestResponse> {
+    return this.request<BackendPullRequestResponse>(`jobs/${encodeURIComponent(jobId)}/pr`, {
+      method: "POST",
+      body: request ? JSON.stringify(request) : undefined,
+      requireAuth: true,
+    });
+  }
+
+  /**
+   * Fetch created Pull Request metadata for a repair job
+   * GET /jobs/{job_id}/pr
+   */
+  public async getPullRequest(jobId: string): Promise<BackendPullRequestResponse | null> {
+    try {
+      return await this.request<BackendPullRequestResponse>(`jobs/${encodeURIComponent(jobId)}/pr`);
+    } catch (err: unknown) {
+      if (err instanceof BackendRepairError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
   }
 }
 

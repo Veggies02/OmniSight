@@ -4,6 +4,10 @@ import { ReviewSidebar } from "../../components/review/ReviewSidebar";
 import { ReviewDecisionDialog } from "../../components/review/ReviewDecisionDialog";
 import { EvidenceViewer } from "../../components/review/EvidenceViewer";
 import { reviewRepository } from "../../services/reviewRepository";
+import {
+  backendRepairClient,
+  type BackendPullRequestResponse,
+} from "../../services/backendRepairClient";
 import { type ReviewProposalItem } from "../../types/review-types";
 
 export const ProposalDetailPage: React.FC = () => {
@@ -31,6 +35,10 @@ export const ProposalDetailPage: React.FC = () => {
   const [executionProgress, setExecutionProgress] = useState<string | null>(null);
   const [repairJobResult, setRepairJobResult] = useState<import("../../types/review-types").ClientRepairJobResult | null>(null);
 
+  const [pullRequest, setPullRequest] = useState<BackendPullRequestResponse | null>(null);
+  const [creatingPr, setCreatingPr] = useState(false);
+  const [prError, setPrError] = useState<string | null>(null);
+
   const loadProposal = async () => {
     if (!proposalId) return;
     try {
@@ -52,6 +60,17 @@ export const ProposalDetailPage: React.FC = () => {
   useEffect(() => {
     loadProposal();
   }, [proposalId]);
+
+  useEffect(() => {
+    if (repairJobResult?.jobId) {
+      backendRepairClient
+        .getPullRequest(repairJobResult.jobId)
+        .then((pr) => {
+          if (pr) setPullRequest(pr);
+        })
+        .catch(() => {});
+    }
+  }, [repairJobResult?.jobId]);
 
   const handleApprove = async () => {
     if (!proposal) return;
@@ -362,6 +381,140 @@ export const ProposalDetailPage: React.FC = () => {
                     {repairJobResult.failureReason && (
                       <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "4px", color: "#991b1b" }} data-testid="verification-failure-reason">
                         <strong>Failure Reason:</strong> {repairJobResult.failureReason}
+                      </div>
+                    )}
+
+                    {repairJobResult.status === "PASSED" && (
+                      <div
+                        style={{
+                          marginTop: "0.75rem",
+                          padding: "0.75rem",
+                          background: "#f0fdf4",
+                          border: "1px solid #86efac",
+                          borderRadius: "6px",
+                        }}
+                        data-testid="pull-request-section"
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            marginBottom: "0.4rem",
+                          }}
+                        >
+                          <strong style={{ color: "#166534", fontSize: "0.85rem" }}>
+                            GitHub Pull Request Integration
+                          </strong>
+                          {pullRequest && (
+                            <span
+                              className="status-badge"
+                              style={{
+                                backgroundColor: "#dcfce7",
+                                color: "#166534",
+                                fontWeight: 600,
+                                fontSize: "0.75rem",
+                                border: "1px solid #86efac",
+                              }}
+                              data-testid="pr-status-badge"
+                            >
+                              {pullRequest.is_draft ? "DRAFT PR CREATED" : "PR CREATED"}
+                            </span>
+                          )}
+                        </div>
+
+                        {pullRequest ? (
+                          <div data-testid="pr-details" style={{ fontSize: "0.8rem", color: "#166534" }}>
+                            <p style={{ margin: "0.2rem 0" }}>
+                              <strong>PR #{pullRequest.pr_number}:</strong>{" "}
+                              <a
+                                href={pullRequest.pr_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  color: "#0284c7",
+                                  textDecoration: "underline",
+                                  fontWeight: 600,
+                                }}
+                                data-testid="pr-link"
+                              >
+                                {pullRequest.title || `View PR #${pullRequest.pr_number} on GitHub`} ↗
+                              </a>
+                            </p>
+                            <p style={{ margin: "0.2rem 0", color: "#475569", fontSize: "0.75rem" }}>
+                              Target: <code>{pullRequest.head_branch}</code> &rarr;{" "}
+                              <code>{pullRequest.base_branch}</code>
+                            </p>
+                            {pullRequest.existing && (
+                              <p
+                                style={{
+                                  margin: "0.2rem 0",
+                                  color: "#64748b",
+                                  fontSize: "0.72rem",
+                                  fontStyle: "italic",
+                                }}
+                              >
+                                Reused existing pull request on GitHub without duplication.
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <div>
+                            <p
+                              style={{
+                                margin: "0.2rem 0 0.5rem 0",
+                                fontSize: "0.78rem",
+                                color: "#15803d",
+                              }}
+                            >
+                              Verification passed. Stage an automated GitHub Draft PR for human code review.
+                            </p>
+                            {prError && (
+                              <div
+                                style={{
+                                  padding: "0.4rem",
+                                  background: "#fee2e2",
+                                  border: "1px solid #fca5a5",
+                                  borderRadius: "4px",
+                                  color: "#991b1b",
+                                  marginBottom: "0.4rem",
+                                  fontSize: "0.75rem",
+                                }}
+                                data-testid="pr-error-message"
+                              >
+                                {prError}
+                              </div>
+                            )}
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              data-testid="btn-create-pr"
+                              style={{ backgroundColor: "#15803d", borderColor: "#166534" }}
+                              disabled={creatingPr}
+                              onClick={async () => {
+                                if (!repairJobResult?.jobId) return;
+                                try {
+                                  setCreatingPr(true);
+                                  setPrError(null);
+                                  const pr = await backendRepairClient.createPullRequest(
+                                    repairJobResult.jobId
+                                  );
+                                  setPullRequest(pr);
+                                  setNotification({
+                                    type: "success",
+                                    message: `Draft Pull Request #${pr.pr_number} created successfully on GitHub!`,
+                                  });
+                                } catch (err: any) {
+                                  setPrError(err.message || "Failed to create Draft Pull Request.");
+                                } finally {
+                                  setCreatingPr(false);
+                                }
+                              }}
+                            >
+                              {creatingPr ? "Creating Draft PR..." : "🚀 Stage GitHub Draft PR"}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
