@@ -239,11 +239,36 @@ All 5 QA dashboard pages now operate as a unified, seamless inspection console:
    - One-click links to GitHub draft pull requests and originating job records.
 
 ### 2. Verification Summary:
-- **Test Suite:** 66 unit tests passing across 10 suites (`api-client.test.mjs`, `github-service.test.mjs`, `qa-dashboard-e2e.test.mjs`).
+- **Test Suite:** 100 unit & integration tests passing across 18 suites (`api-client.test.mjs`, `github-service.test.mjs`, `qa-dashboard-e2e.test.mjs`, `dashboard-comprehensive.test.mjs`).
 - **Type Checking:** `tsc -b` compiles with 0 errors.
-- **Production Build:** Vite builds in ~1.2s with 0 errors.
-- **Linter:** `oxlint` reports 0 errors across 57 files.
+- **Production Build:** Vite builds in ~0.3s with 0 errors.
+- **Linter:** `oxlint` reports 0 errors across 58 files.
 - **Safety Invariant:** All tokens remain server-side; zero secrets in client code or bundle.
+
+---
+
+## 10. Day 19–20: Safe Mock Testing & Invariant Enforcement
+
+### 1. Mock Testing Invariant (Zero Real GitHub Mutations in Tests)
+All automated unit and integration tests strictly mock the Fetch API or instantiate `GitHubIntegrationService` with simulated HTTP transports:
+- **No real branches, commits, or PRs** are created against `Veggies02/OmniSight` during testing.
+- Tests verify request payloads, URLs, headers, and validation gate halts deterministically in memory.
+- Execution command: `node --experimental-strip-types --test tests/github-service.test.mjs tests/dashboard-comprehensive.test.mjs`
+
+### 2. Prohibited Actions & Non-Negotiable Invariants:
+1. **Base Branch Mutation Strictly Prohibited:**
+   - Any attempt to target `main`, `master`, `release/*`, or `production` as a write head branch is intercepted by `assertNotProtectedBranch()` and immediately rejected with `PROTECTED_BRANCH` (HTTP 403).
+   - Automated repair commits can only be staged onto dedicated branches named via `buildRepairBranchName()` (`omnisight/repair-*`).
+2. **Automated Merging Strictly Prohibited:**
+   - `createDraftPullRequest()` guarantees `merged: false` in all return payloads.
+   - The integration service does not implement or expose any GitHub merge endpoints (`PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge`).
+   - Human review by repository code owners is an immutable design requirement.
+3. **Draft-Only Pull Requests Invariant:**
+   - All PR payloads unconditionally set `draft: true`.
+   - Automated workflows never mark pull requests as ready for review (`draft: false`) without explicit human intervention in GitHub.
+4. **Validation Gate Invariant:**
+   - `assertValidationPassed()` halts workflow execution before any branch or commit request if `status !== "passed"`, `failedChecks > 0`, or `totalChecks === 0`.
+
 
 
 

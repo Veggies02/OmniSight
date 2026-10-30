@@ -211,3 +211,52 @@ To support the rich visual triage features created in Days 4–9, the frontend p
 4. **GitHub PR Creation Webhook/Action:**
    - *Question:* Will P3 or P4 trigger the GitHub PR creation API?
    - *Recommendation:* P3 orchestrator executes Git branch creation and GitHub API interaction; P4 provides the approval/reject UI controls on the dashboard.
+
+---
+
+## 7. Day 20 Final Integration Status & Live vs. Fallback Differentiation
+
+### 7.1 Implemented & Consumed API Endpoints:
+
+| Endpoint | Method | P3 Backend Contract | Frontend Consumer Service | Fallback Behavior |
+| :--- | :--- | :--- | :--- | :--- |
+| `/api/jobs` | `GET` | `JobListResponse` | `JobsService.listJobs()` | Returns `MOCK_INSPECTION_JOBS` (`isLiveBackend: false`) |
+| `/api/jobs/{id}` | `GET` | `JobResponse` | `JobsService.getJob(id)` | Returns `getInspectionJobById(id)` |
+| `/api/jobs/{id}/artifacts` | `GET` | `List[ArtifactRef]` | `JobsService.getJobArtifacts(id)` | Sourced from job evidence array |
+| `/api/jobs/{id}/repair-branch` | `POST` | `ExecuteRepairWorkflowParams` | `ClientGitHubService.triggerRepairWorkflow()` | Falls back to server-side GitHub service |
+| `/api/jobs/{id}/pr` | `POST` | `CreateDraftPullRequestParams` | `ClientGitHubService.createDraftPullRequest()` | Falls back to server-side GitHub service |
+| `/api/jobs/{id}/pr` | `GET` | `GitHubPullRequest` | `ClientGitHubService.getJobPullRequest()` | Returns existing PR or null |
+| `/api/github/permissions` | `GET` | `RepositoryPermissionReport` | `ClientGitHubService.checkRepoPermissions()` | Verifies permissions safely on server |
+
+### 7.2 Distinguishing Live Backend Data from Demo Fallback:
+
+To maintain total transparency and avoid presenting mock data as live production data, the dashboard implements a strict dual-mode indicator:
+
+```tsx
+// Sourced from useInspectionJobs() or useInspectionJobDetails()
+{isLiveBackend ? (
+  <span className="dash-meta-badge" style={{ color: "#16a34a" }}>
+    <span className="status-dot-pulse" style={{ background: "#22c55e" }} />
+    <span>Live Backend API</span>
+  </span>
+) : (
+  <span className="dash-meta-badge" style={{ color: "#d97706" }}>
+    <span className="status-dot-pulse" style={{ background: "#d97706" }} />
+    <span>Demo Data Fallback</span>
+  </span>
+)}
+```
+
+- When the FastAPI backend is running and reachable on `VITE_API_BASE_URL` (`/api`), live data is presented with a green **Live Backend** badge.
+- When the backend is offline, initializing, or returns an error, the dashboard cleanly displays typed demo data with an amber **Demo Data Fallback** badge.
+- When an unknown job ID is requested, the dashboard displays a clear `EmptyState` ("Inspection Job Not Found") rather than inventing fake data.
+
+### 7.3 Unresolved Cross-Team Dependencies:
+
+1. **P3 Live Streaming (SSE / WebSockets):**
+   - The backend currently implements standard REST polling. Server-Sent Events (SSE) or WebSockets for live console log tailing (`stdout_tail`) remain pending from P3.
+2. **P3 Static File Serving for Screenshots:**
+   - Raw binary images on disk (`artifacts/{job_id}/*.png`) require FastAPI static mounting or pre-signed storage URLs to render directly in browser `<img>` tags.
+3. **P2 AI Engine Finding Ingestion:**
+   - AI Engine generates `AIFinding` objects with bounding box coordinates. Ingestion into SQLite is owned by P3; P4's `DefectFindingsReview` is prepared to render bounding boxes via `adaptAIFindingToDefect()`.
+
