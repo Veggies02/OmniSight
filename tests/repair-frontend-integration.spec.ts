@@ -7,7 +7,6 @@ test.describe("Frontend Repair Review to FastAPI Backend Integration Tests", () 
       window.localStorage.clear();
       window.sessionStorage.clear();
     });
-    await page.reload();
   });
 
   test("1. executes repair and displays real-time progress followed by backend passed result", async ({ page }) => {
@@ -31,7 +30,7 @@ test.describe("Frontend Repair Review to FastAPI Backend Integration Tests", () 
     await expect(page.getByTestId("repair-execution-progress")).toBeVisible();
 
     // Verify summary is rendered once completed
-    await expect(page.getByTestId("repair-job-summary")).toBeVisible();
+    await expect(page.getByTestId("repair-job-summary")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("repair-job-summary")).toContainText("PASSED");
     await expect(page.getByTestId("repair-job-summary")).toContainText("Build Verification: ✓ Passed");
     await expect(page.getByTestId("repair-job-summary")).toContainText("Visual Delta Validation: ✓ Passed");
@@ -179,7 +178,7 @@ test.describe("Frontend Repair Review to FastAPI Backend Integration Tests", () 
     await page.getByTestId("btn-confirm-repair-exec").click();
 
     // Verify terminal completed state rendered
-    await expect(page.getByTestId("repair-job-summary")).toBeVisible();
+    await expect(page.getByTestId("repair-job-summary")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("repair-job-summary")).toContainText("PASSED");
     await expect(page.getByTestId("repair-job-summary")).toContainText("Execution Duration: 14.2s");
     await expect(page.getByTestId("repair-job-summary")).toContainText("job-poll-mock-456");

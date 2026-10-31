@@ -11,6 +11,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
+      watch: {
+        ignored: ['**/artifacts/**', '**/test-results/**', '**/public/evidence/**'],
+      },
       proxy: {
         '/jobs': {
           target: backendTarget,

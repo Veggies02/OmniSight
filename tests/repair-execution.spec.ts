@@ -271,11 +271,11 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     // Confirm execution
     const confirmBtn = page.locator('[data-testid="btn-confirm-repair-exec"]');
     await expect(confirmBtn).toBeVisible();
-    await confirmBtn.click({ force: true });
+    await confirmBtn.click();
 
     // Verify summary is rendered
     const summary = page.locator('[data-testid="repair-job-summary"]');
-    await expect(summary).toBeVisible();
+    await expect(summary).toBeVisible({ timeout: 15_000 });
     await expect(summary).toContainText('PASSED');
     await expect(summary).toContainText('omnisight-repair/');
   });
