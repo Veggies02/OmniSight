@@ -33,6 +33,28 @@ export const ReviewSidebar: React.FC = () => {
         </Link>
 
         <Link
+          to="/review/jobs"
+          className={`sidebar-nav-item ${location.pathname.startsWith("/review/jobs") ? "active" : ""}`}
+          data-testid="nav-multi-scenario-jobs"
+        >
+          <span className="nav-item-icon">🗂️</span>
+          <span>Multi-Scenario Jobs</span>
+          <span
+            style={{
+              fontSize: "0.65rem",
+              padding: "0.1rem 0.35rem",
+              borderRadius: "4px",
+              backgroundColor: "#2563eb",
+              color: "white",
+              marginLeft: "auto",
+              fontWeight: 600,
+            }}
+          >
+            NEW
+          </span>
+        </Link>
+
+        <Link
           to="/review/history"
           className={`sidebar-nav-item ${isLinkActive("/review/history") ? "active" : ""}`}
           data-testid="nav-history"

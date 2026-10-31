@@ -13,6 +13,7 @@ import { NotFound } from "./pages/NotFound";
 import { ReviewDashboardPage } from "./pages/review/ReviewDashboardPage";
 import { ProposalDetailPage } from "./pages/review/ProposalDetailPage";
 import { ReviewHistoryPage } from "./pages/review/ReviewHistoryPage";
+import { MultiScenarioJobPage } from "./pages/review/MultiScenarioJobPage";
 
 // OmniSight Platform Dashboard Components
 import { OmniSightShell } from "./components/dashboard/OmniSightShell";
@@ -65,6 +66,8 @@ export function App() {
                 <Route path="/review/proposals" element={<ReviewDashboardPage />} />
                 <Route path="/review/proposals/:proposalId" element={<ProposalDetailPage />} />
                 <Route path="/review/history" element={<ReviewHistoryPage />} />
+                <Route path="/review/jobs" element={<MultiScenarioJobPage />} />
+                <Route path="/review/jobs/:jobId" element={<MultiScenarioJobPage />} />
 
                 <Route path="*" element={<NotFound />} />
               </Route>
