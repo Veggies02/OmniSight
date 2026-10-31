@@ -33,7 +33,6 @@ from schemas import (
     DefectCategory,
     EvidenceContext,
     PatchProposal,
-    ValidationChecklist,
 )
 from vlm_client import VisionModel
 
@@ -45,7 +44,6 @@ STATUS_DECLINED = "model_declined"
 STATUS_REJECTED = "rejected"
 
 _MAX_TEXT = 300
-_MAX_LIST_ITEMS = 10
 _REPAIRED_CONFIDENCE_CAP = 0.5
 
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@")
@@ -206,13 +204,6 @@ def _load_sources(repo_root: str, matches) -> Tuple[Dict[str, str], List[RepairS
     return texts, sources
 
 
-def _clean_list(value) -> List[str]:
-    if not isinstance(value, list):
-        return []
-    items = [_text(item) for item in value if isinstance(item, str)]
-    return [item for item in items if item][:_MAX_LIST_ITEMS]
-
-
 def _clamp_confidence(value) -> float:
     try:
         number = float(value)
@@ -221,23 +212,6 @@ def _clamp_confidence(value) -> float:
     if number != number:  # NaN
         return 0.5
     return max(0.0, min(1.0, number))
-
-
-def _build_checklist(raw, finding: AIFinding) -> ValidationChecklist:
-    """Use the model's validation steps, with safe defaults for anything missing."""
-    raw = raw if isinstance(raw, dict) else {}
-    steps = _clean_list(raw.get("steps")) or [
-        "Re-run the original inspection step and capture a new screenshot"
-    ]
-    expected = _text(raw.get("expected_outcome")) or (
-        f"The {finding.defect_category.value} defect no longer appears"
-    )
-    selectors = _clean_list(raw.get("selectors_to_check"))
-    if not selectors and finding.target_selector:
-        selectors = [_text(finding.target_selector)]
-    return ValidationChecklist(
-        steps=steps, expected_outcome=expected, selectors_to_check=selectors,
-    )
 
 
 def generate_patch(
