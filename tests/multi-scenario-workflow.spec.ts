@@ -41,6 +41,9 @@ test.describe("Multi-Scenario Capture Job & Independent Repair Workflow", () => 
     );
     await expect(card1.getByTestId("scenario-target-file")).toHaveText("src/index.css");
     await expect(card1.getByTestId("scenario-approval-status-badge")).toHaveText("PENDING");
+
+    // Capture visual preview artifact
+    await page.screenshot({ path: "public/evidence/multi-scenario-dashboard.png", fullPage: true });
   });
 
   test("2. approving one scenario updates its state independently without modifying others", async ({
