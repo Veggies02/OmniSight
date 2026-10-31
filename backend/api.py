@@ -19,6 +19,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -313,18 +314,19 @@ def create_app(
 
         req = request or PullRequestCreateRequest()
 
-        target_repo = (
-            req.repository
-            or job.get("repository")
-            or os.getenv("OMNISIGHT_GITHUB_REPO")
-            or "Veggies02/OmniSight"
-        )
-        if "/" not in target_repo:
+        # The target repository is decided by the server, never by the caller or the CI webhook.
+        # OMNISIGHT_GITHUB_REPO may list several allowed repos, comma separated; the first is the default.
+        allowed_repos = [
+            r.strip() for r in (os.getenv("OMNISIGHT_GITHUB_REPO") or "Veggies02/OmniSight").split(",") if r.strip()
+        ]
+        requested_repo = req.repository or job.get("repository") or allowed_repos[0]
+        match = next((r for r in allowed_repos if r.lower() == requested_repo.lower()), None)
+        if match is None:
             raise HTTPException(
                 status_code=422,
-                detail=f"Target repository '{target_repo}' is invalid; must be in 'owner/repo' format.",
+                detail="Target repository is not allowed. Pull requests can only be opened on the server's configured repository.",
             )
-        owner, repo_name = target_repo.split("/", 1)
+        owner, repo_name = match.split("/", 1)
 
         base_branch = req.base_branch or "main"
         proposal = job.get("proposal") or {}
@@ -341,6 +343,11 @@ def create_app(
             or proposal.get("branch")
             or default_branch
         )
+
+        branch_ok = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
+        for label, value in (("head branch", head_branch), ("base branch", base_branch)):
+            if not branch_ok.match(value) or ".." in value or value.startswith(("/", "-")):
+                raise HTTPException(status_code=422, detail=f"Invalid {label} name.")
 
         title = req.title or f"fix(ui): automated visual repair for {scenario_id} [{clean_job_id[:8]}]"
         reviewer = job["approval"].get("reviewed_by", "operator")
