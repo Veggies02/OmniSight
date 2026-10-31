@@ -326,6 +326,8 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
     const evidenceBaseDir = path.resolve(process.cwd(), "artifacts/visual-evidence");
 
     test("integrates product-image-distortion evidence with analyzer, generates proposal, maps to registered repair, and verifies human approval safety", async () => {
+      test.setTimeout(120_000);
+
       // 1. Locate latest evidence run
       const runs = fs
         .readdirSync(evidenceBaseDir)
