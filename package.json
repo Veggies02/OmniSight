@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "capture:evidence": "tsx scripts/capture-visual-evidence.ts",
+    "prepare:evaluation": "tsx scripts/prepare-evaluation-bundle.ts",
     "diagnose:evidence": "tsx scripts/run-diagnosis.ts",
     "evaluate:diagnoses": "tsx scripts/evaluate-diagnoses.ts",
     "repair:proposals": "tsx scripts/generate-repair-proposals.ts",
