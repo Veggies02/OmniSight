@@ -192,9 +192,9 @@ export async function runRepairJob(
       ? `Specified patch '${cliArgs.patchId}' not found in registered patch catalog.`
       : `No registered patch found for defect category: ${proposal.defectCategory}`;
 
-    // Return structured rejection report without executing
+    // Return structured unsupported report without executing
     const service = new RepairExecutionService(repoRoot);
-    const rejectionReport: RepairExecutionReport = {
+    const unsupportedReport: RepairExecutionReport = {
       jobId,
       proposalId: proposal.proposalId,
       defectCategory: proposal.defectCategory,
@@ -204,7 +204,7 @@ export async function runRepairJob(
       patchId: cliArgs.patchId || 'unknown',
       createdAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
-      finalState: 'REJECTED',
+      finalState: 'UNSUPPORTED',
       approvalValidation: {
         approved: proposal.humanReviewStatus === 'approved',
         reviewStatus: proposal.humanReviewStatus,
@@ -215,11 +215,11 @@ export async function runRepairJob(
         targetBaseCommit,
         rejectionReason: errorMsg,
       },
-      cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false },
+      cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false, branchPreserved: false },
       failureReason: errorMsg,
     };
-    const reportPath = service.saveReport(jobId, rejectionReport);
-    return { success: false, report: rejectionReport, reportPath };
+    const reportPath = service.saveReport(jobId, unsupportedReport);
+    return { success: false, report: unsupportedReport, reportPath };
   }
 
   // 2. Strict Pre-flight Human Approval Enforcement
@@ -250,7 +250,7 @@ export async function runRepairJob(
         targetBaseCommit,
         rejectionReason: reason,
       },
-      cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false },
+      cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false, branchPreserved: false },
       failureReason: reason,
     };
     const reportPath = service.saveReport(jobId, rejectionReport);
@@ -296,6 +296,9 @@ async function main() {
       approved: report.approvalValidation?.approved ?? false,
       buildPassed: report.buildExecution?.passed ?? false,
       visualPassed: report.visualValidation?.passed ?? false,
+      branch: report.branch,
+      commit_sha: report.commit_sha || report.commitSha,
+      commitSha: report.commitSha || report.commit_sha,
       reportPath,
       failureReason: report.failureReason,
     }, null, 2));

@@ -98,14 +98,19 @@ export class WorktreeManager {
    * Safely cleans up the repair worktree and branch.
    * Only targets paths inside artifacts/repair-worktrees/ and branches starting with omnisight-repair/.
    * Idempotent: safely handles already-removed worktrees or non-existent branches.
+   * If options.preserveBranch is true, removes the worktree folder and prunes records, but preserves the git branch.
    */
-  public async cleanupWorktree(jobId: string): Promise<{ worktreeRemoved: boolean; branchRemoved: boolean; notes?: string }> {
+  public async cleanupWorktree(
+    jobId: string,
+    options: { preserveBranch?: boolean } = {}
+  ): Promise<{ worktreeRemoved: boolean; branchRemoved: boolean; branchPreserved: boolean; notes?: string }> {
     const cleanJobId = this.sanitizeJobId(jobId);
     const branchName = `omnisight-repair/${cleanJobId}`;
     const worktreePath = path.join(this.worktreeBaseDir, cleanJobId);
 
     let worktreeRemoved = false;
     let branchRemoved = false;
+    let branchPreserved = false;
     const notes: string[] = [];
 
     // Safety guard: ensure worktree path is strictly inside repair-worktrees directory
@@ -156,21 +161,115 @@ export class WorktreeManager {
       // Ignore prune errors
     }
 
-    // 2. Remove the repair branch
-    try {
-      await execFileAsync('git', ['branch', '-D', branchName], {
-        cwd: this.repoRoot,
-      });
-      branchRemoved = true;
-    } catch (branchErr: any) {
-      // Branch might already be deleted or not exist
+    // 2. Branch removal or preservation
+    if (options.preserveBranch) {
+      branchPreserved = true;
       branchRemoved = false;
+    } else {
+      try {
+        await execFileAsync('git', ['branch', '-D', branchName], {
+          cwd: this.repoRoot,
+        });
+        branchRemoved = true;
+      } catch (branchErr: any) {
+        // Branch might already be deleted or not exist
+        branchRemoved = false;
+      }
+      branchPreserved = false;
     }
 
     return {
       worktreeRemoved,
       branchRemoved,
+      branchPreserved,
       notes: notes.length > 0 ? notes.join('; ') : undefined,
     };
+  }
+
+  /**
+   * Stages approved files and creates a Git commit inside the isolated worktree directory.
+   * Configures author and committer metadata securely without modifying global git config.
+   */
+  public async commitChanges(
+    worktreePath: string,
+    message: string,
+    files: string[] = []
+  ): Promise<{ commitSha: string; commitMessage: string; filesCommitted: string[] }> {
+    if (!fs.existsSync(worktreePath)) {
+      throw new Error(`Cannot commit changes: Worktree path does not exist: ${worktreePath}`);
+    }
+
+    // Check status in worktree
+    const statusResult = await execFileAsync('git', ['status', '--porcelain'], {
+      cwd: worktreePath,
+    });
+    const modifiedLines = statusResult.stdout.trim().split('\n').filter(Boolean);
+    if (modifiedLines.length === 0) {
+      throw new Error('Cannot commit changes: Working tree has no unstaged or staged changes.');
+    }
+
+    // Stage files
+    if (files.length > 0) {
+      await execFileAsync('git', ['add', '--', ...files], {
+        cwd: worktreePath,
+      });
+    } else {
+      await execFileAsync('git', ['add', '-A'], {
+        cwd: worktreePath,
+      });
+    }
+
+    // Verify files were staged
+    const stagedCheck = await execFileAsync('git', ['diff', '--cached', '--name-only'], {
+      cwd: worktreePath,
+    });
+    const stagedFiles = stagedCheck.stdout.trim().split('\n').filter(Boolean);
+    if (stagedFiles.length === 0) {
+      throw new Error('Cannot commit changes: No changes were staged.');
+    }
+
+    // Commit using safe argument array and explicit user config
+    const commitArgs = [
+      '-c',
+      'user.name=OmniSight Repair Agent',
+      '-c',
+      'user.email=repair-agent@omnisight.ai',
+      'commit',
+      '-m',
+      message,
+    ];
+
+    await execFileAsync('git', commitArgs, {
+      cwd: worktreePath,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'OmniSight Repair Agent',
+        GIT_AUTHOR_EMAIL: 'repair-agent@omnisight.ai',
+        GIT_COMMITTER_NAME: 'OmniSight Repair Agent',
+        GIT_COMMITTER_EMAIL: 'repair-agent@omnisight.ai',
+      },
+    });
+
+    // Retrieve commit SHA
+    const revParseResult = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: worktreePath,
+    });
+    const commitSha = revParseResult.stdout.trim();
+
+    return {
+      commitSha,
+      commitMessage: message,
+      filesCommitted: stagedFiles,
+    };
+  }
+
+  /**
+   * Resolves the commit SHA of a given branch name.
+   */
+  public async getBranchCommit(branchName: string): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['rev-parse', branchName], {
+      cwd: this.repoRoot,
+    });
+    return stdout.trim();
   }
 }

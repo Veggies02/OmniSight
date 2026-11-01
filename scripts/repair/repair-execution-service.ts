@@ -262,7 +262,42 @@ export class RepairExecutionService {
       fs.mkdirSync(reportArtifactsDir, { recursive: true });
     }
 
-    // 1. Verify Approval & Proposal Schema
+    // 1. Validate Registered Patch
+    const patch = getRegisteredPatch(approvedPatchId);
+    if (!patch) {
+      currentState = this.transitionState(currentState, 'UNSUPPORTED');
+      const unsupportedReport: RepairExecutionReport = {
+        jobId,
+        proposalId: proposal.proposalId,
+        defectCategory: proposal.defectCategory,
+        targetBaseCommit,
+        isolatedWorktreePath: '',
+        isolatedBranch: '',
+        patchId: approvedPatchId,
+        createdAt: contract.createdAt,
+        completedAt: new Date().toISOString(),
+        finalState: currentState,
+        approvalValidation: {
+          approved: proposal.humanReviewStatus === 'approved',
+          reviewStatus: proposal.humanReviewStatus,
+          reviewedBy: (proposal as any).reviewedBy,
+          reviewedAt: (proposal as any).reviewedAt,
+          approvalNotes: (proposal as any).reviewNotes,
+          sourceFreshnessVerified: false,
+          recordedSourceHash: proposal.localization?.fileHash || '',
+          currentSourceHash: '',
+          baseCommitVerified: false,
+          targetBaseCommit,
+          rejectionReason: `No registered patch available for scenario '${proposal.defectCategory}' (patchId: '${approvedPatchId}').`,
+        },
+        cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false, branchPreserved: false },
+        failureReason: `No registered patch available for scenario '${proposal.defectCategory}' (patchId: '${approvedPatchId}').`,
+      };
+      this.saveReport(jobId, unsupportedReport);
+      return unsupportedReport;
+    }
+
+    // 2. Verify Approval & Proposal Schema
     currentState = this.transitionState(currentState, 'VALIDATING_APPROVAL');
 
     const isApproved = proposal.humanReviewStatus === 'approved';
@@ -311,31 +346,8 @@ export class RepairExecutionService {
         completedAt: new Date().toISOString(),
         finalState: currentState,
         approvalValidation,
-        cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false },
+        cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false, branchPreserved: false },
         failureReason: approvalValidation.rejectionReason,
-      };
-      this.saveReport(jobId, rejectionReport);
-      return rejectionReport;
-    }
-
-    // 2. Validate Registered Patch
-    const patch = getRegisteredPatch(approvedPatchId);
-    if (!patch) {
-      currentState = this.transitionState(currentState, 'REJECTED');
-      const rejectionReport: RepairExecutionReport = {
-        jobId,
-        proposalId: proposal.proposalId,
-        defectCategory: proposal.defectCategory,
-        targetBaseCommit,
-        isolatedWorktreePath: '',
-        isolatedBranch: '',
-        patchId: approvedPatchId,
-        createdAt: contract.createdAt,
-        completedAt: new Date().toISOString(),
-        finalState: currentState,
-        approvalValidation,
-        cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false },
-        failureReason: `Registered patch '${approvedPatchId}' not found in registry.`,
       };
       this.saveReport(jobId, rejectionReport);
       return rejectionReport;
@@ -376,6 +388,8 @@ export class RepairExecutionService {
     let testExecution: any = undefined;
     let visualValidation: any = undefined;
     let executionFailureReason: string | undefined = undefined;
+    let committedBranch: string | undefined = undefined;
+    let committedSha: string | undefined = undefined;
 
     // Guaranteed cleanup via try / finally lifecycle
     try {
@@ -496,6 +510,16 @@ export class RepairExecutionService {
       }
 
       // All validations passed!
+      // 7. Commit verified repair changes inside the isolated worktree
+      const commitMessage = `fix(repair): apply verified patch for ${proposal.scenarioId || proposal.defectCategory || patch.defectCategory}\n\nScenario: ${proposal.scenarioId || proposal.defectCategory}\nPatch: ${patch.patchId}\nProposal: ${proposal.proposalId}\nJob: ${jobId}`;
+      const commitResult = await this.worktreeManager.commitChanges(
+        isolatedWorktreePath,
+        commitMessage,
+        patch.approvedSourceFiles
+      );
+      committedBranch = isolatedBranch;
+      committedSha = commitResult.commitSha;
+
       currentState = this.transitionState(currentState, 'PASSED');
     } catch (err: any) {
       if (currentState !== 'PASSED') {
@@ -513,18 +537,23 @@ export class RepairExecutionService {
         };
       }
     } finally {
-      // 7. Guaranteed Worktree Cleanup
-      let cleanupResult: { worktreeRemoved: boolean; branchRemoved: boolean; notes?: string } = {
+      // 8. Guaranteed Worktree Cleanup
+      let cleanupResult: { worktreeRemoved: boolean; branchRemoved: boolean; branchPreserved?: boolean; notes?: string } = {
         worktreeRemoved: false,
         branchRemoved: false,
+        branchPreserved: false,
       };
 
+      const shouldPreserveBranch = currentState === 'PASSED' && Boolean(committedSha);
       try {
-        cleanupResult = await this.worktreeManager.cleanupWorktree(jobId);
+        cleanupResult = await this.worktreeManager.cleanupWorktree(jobId, {
+          preserveBranch: shouldPreserveBranch,
+        });
       } catch (cleanupErr: any) {
         cleanupResult = {
           worktreeRemoved: false,
           branchRemoved: false,
+          branchPreserved: false,
           notes: `Cleanup exception: ${cleanupErr?.message || String(cleanupErr)}`,
         };
       }
@@ -549,9 +578,13 @@ export class RepairExecutionService {
           cleaned: cleanupResult.worktreeRemoved,
           worktreeRemoved: cleanupResult.worktreeRemoved,
           branchRemoved: cleanupResult.branchRemoved,
+          branchPreserved: cleanupResult.branchPreserved ?? (shouldPreserveBranch && !cleanupResult.branchRemoved),
           notes: cleanupResult.notes,
         },
         failureReason: executionFailureReason,
+        branch: shouldPreserveBranch ? committedBranch : undefined,
+        commitSha: shouldPreserveBranch ? committedSha : undefined,
+        commit_sha: shouldPreserveBranch ? committedSha : undefined,
       };
 
       this.saveReport(jobId, report);
