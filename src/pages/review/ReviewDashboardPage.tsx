@@ -103,6 +103,60 @@ export const ReviewDashboardPage: React.FC = () => {
           </div>
         </header>
 
+        {/* Multi-Scenario Prototype Announcement Banner */}
+        <div
+          data-testid="multi-scenario-banner"
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "0.75rem 1.25rem",
+            backgroundColor: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            borderRadius: "8px",
+            marginBottom: "1.25rem",
+            flexWrap: "wrap",
+            gap: "0.75rem",
+          }}
+        >
+          <div>
+            <span
+              style={{
+                fontSize: "0.75rem",
+                fontWeight: 700,
+                color: "#1e40af",
+                backgroundColor: "#dbeafe",
+                padding: "0.15rem 0.4rem",
+                borderRadius: "4px",
+                marginRight: "0.5rem",
+              }}
+            >
+              DAY 14 PROTOTYPE
+            </span>
+            <span style={{ fontSize: "0.875rem", color: "#1e3a8a", fontWeight: 600 }}>
+              Multi-Scenario Capture Job Architecture:
+            </span>{" "}
+            <span style={{ fontSize: "0.85rem", color: "#2563eb" }}>
+              Inspect multiple defects per capture job with independent approvals & repairs.
+            </span>
+          </div>
+          <Link
+            to="/review/jobs"
+            data-testid="link-to-multi-scenario"
+            className="btn btn-primary btn-sm"
+            style={{
+              backgroundColor: "#2563eb",
+              borderColor: "#2563eb",
+              fontSize: "0.8rem",
+              padding: "0.35rem 0.8rem",
+              fontWeight: 600,
+              textDecoration: "none",
+            }}
+          >
+            Explore Multi-Scenario Job #1024 ➔
+          </Link>
+        </div>
+
         <ReviewSummaryCards stats={stats} />
 
         <section className="proposals-content-section">
