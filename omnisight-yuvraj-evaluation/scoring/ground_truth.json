@@ -1,0 +1,58 @@
+[
+  {
+    "case_id": "case_01",
+    "scenario_id": "product-image-distortion",
+    "expected_category": "visual-distortion",
+    "canonical_category": "image_distortion",
+    "expected_symptom": "The product image aspect ratio is distorted with extreme height skew and unnatural object stretch.",
+    "target_component": "ProductCard",
+    "target_route": "/products",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "is_mobile": false
+  },
+  {
+    "case_id": "case_02",
+    "scenario_id": "product-card-layout-break",
+    "expected_category": "layout-shift",
+    "canonical_category": "layout_breakage",
+    "expected_symptom": "Card body items overlap vertically and action buttons overflow out of the card boundaries.",
+    "target_component": "ProductCard",
+    "target_route": "/products",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "is_mobile": false
+  },
+  {
+    "case_id": "case_03",
+    "scenario_id": "low-contrast-text",
+    "expected_category": "color-contrast",
+    "canonical_category": "low_contrast",
+    "expected_symptom": "Product description text and prices have contrast ratios well below 3:1 on light backgrounds.",
+    "target_component": "ProductCard",
+    "target_route": "/products",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "is_mobile": false
+  },
+  {
+    "case_id": "case_04",
+    "scenario_id": "mobile-nav-overflow",
+    "expected_category": "responsive-overflow",
+    "canonical_category": "responsive_overflow",
+    "expected_symptom": "document.documentElement.scrollWidth exceeds clientWidth at 390px mobile viewport.",
+    "target_component": "Navbar",
+    "target_route": "/*",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "is_mobile": true
+  }
+]

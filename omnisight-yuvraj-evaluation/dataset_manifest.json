@@ -1,0 +1,163 @@
+{
+  "dataset_name": "omnisight-yuvraj-evaluation",
+  "version": "1.0.0",
+  "source_run_id": "run-2026-10-13T17-36-08-002Z",
+  "created_at": "2026-11-01T18:54:42.513Z",
+  "total_cases": 8,
+  "defective_cases_count": 4,
+  "baseline_cases_count": 4,
+  "cases": [
+    {
+      "case_id": "case_01",
+      "designation": "defective",
+      "route": "/products",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "is_mobile": false,
+      "screenshot_path": "model_inputs/defective/case_01/screenshot.png",
+      "screenshot_dimensions": {
+        "width": 1440,
+        "height": 900
+      },
+      "screenshot_format": "PNG",
+      "capture_mode": "viewport",
+      "evidence_json_path": "model_inputs/defective/case_01/evidence.json",
+      "dom_path": "model_inputs/defective/case_01/dom.html"
+    },
+    {
+      "case_id": "case_01",
+      "designation": "baseline",
+      "route": "/products",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "is_mobile": false,
+      "screenshot_path": "model_inputs/baseline/case_01/screenshot.png",
+      "screenshot_dimensions": {
+        "width": 1440,
+        "height": 900
+      },
+      "screenshot_format": "PNG",
+      "capture_mode": "viewport",
+      "evidence_json_path": "model_inputs/baseline/case_01/evidence.json",
+      "dom_path": "model_inputs/baseline/case_01/dom.html"
+    },
+    {
+      "case_id": "case_02",
+      "designation": "defective",
+      "route": "/products",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "is_mobile": false,
+      "screenshot_path": "model_inputs/defective/case_02/screenshot.png",
+      "screenshot_dimensions": {
+        "width": 1440,
+        "height": 900
+      },
+      "screenshot_format": "PNG",
+      "capture_mode": "viewport",
+      "evidence_json_path": "model_inputs/defective/case_02/evidence.json",
+      "dom_path": "model_inputs/defective/case_02/dom.html"
+    },
+    {
+      "case_id": "case_02",
+      "designation": "baseline",
+      "route": "/products",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "is_mobile": false,
+      "screenshot_path": "model_inputs/baseline/case_02/screenshot.png",
+      "screenshot_dimensions": {
+        "width": 1440,
+        "height": 900
+      },
+      "screenshot_format": "PNG",
+      "capture_mode": "viewport",
+      "evidence_json_path": "model_inputs/baseline/case_02/evidence.json",
+      "dom_path": "model_inputs/baseline/case_02/dom.html"
+    },
+    {
+      "case_id": "case_03",
+      "designation": "defective",
+      "route": "/products",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "is_mobile": false,
+      "screenshot_path": "model_inputs/defective/case_03/screenshot.png",
+      "screenshot_dimensions": {
+        "width": 1440,
+        "height": 900
+      },
+      "screenshot_format": "PNG",
+      "capture_mode": "viewport",
+      "evidence_json_path": "model_inputs/defective/case_03/evidence.json",
+      "dom_path": "model_inputs/defective/case_03/dom.html"
+    },
+    {
+      "case_id": "case_03",
+      "designation": "baseline",
+      "route": "/products",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "is_mobile": false,
+      "screenshot_path": "model_inputs/baseline/case_03/screenshot.png",
+      "screenshot_dimensions": {
+        "width": 1440,
+        "height": 900
+      },
+      "screenshot_format": "PNG",
+      "capture_mode": "viewport",
+      "evidence_json_path": "model_inputs/baseline/case_03/evidence.json",
+      "dom_path": "model_inputs/baseline/case_03/dom.html"
+    },
+    {
+      "case_id": "case_04",
+      "designation": "defective",
+      "route": "/products",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "is_mobile": true,
+      "screenshot_path": "model_inputs/defective/case_04/screenshot.png",
+      "screenshot_dimensions": {
+        "width": 390,
+        "height": 844
+      },
+      "screenshot_format": "PNG",
+      "capture_mode": "viewport",
+      "evidence_json_path": "model_inputs/defective/case_04/evidence.json",
+      "dom_path": "model_inputs/defective/case_04/dom.html"
+    },
+    {
+      "case_id": "case_04",
+      "designation": "baseline",
+      "route": "/products",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "is_mobile": true,
+      "screenshot_path": "model_inputs/baseline/case_04/screenshot.png",
+      "screenshot_dimensions": {
+        "width": 390,
+        "height": 844
+      },
+      "screenshot_format": "PNG",
+      "capture_mode": "viewport",
+      "evidence_json_path": "model_inputs/baseline/case_04/evidence.json",
+      "dom_path": "model_inputs/baseline/case_04/dom.html"
+    }
+  ]
+}
