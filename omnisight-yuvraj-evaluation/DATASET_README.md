@@ -1,9 +1,10 @@
-# OmniSight Multimodal UI Defect Evaluation Dataset
+# OmniSight Multimodal UI Defect Evaluation Dataset (v2.0)
+
 **Target Consumer:** Yuvraj (AI / VLM Diagnosis Engine — `feature/yuvaraj-ai-engine`)  
 **Curated By:** Ajay (QA Automation & Integration Engineer — `feature/ajay-defect-injection`)  
 **Run Origin:** `artifacts/visual-evidence/run-2026-10-13T17-36-08-002Z/`  
-**Dataset Version:** 1.0.0  
-**Generated Date:** 2026-11-01  
+**Dataset Version:** 2.0.0  
+**Updated Date:** 2026-11-02  
 
 ---
 
@@ -19,50 +20,39 @@ Strict ground-truth isolation is enforced. Model inputs contain **zero defect la
 
 ---
 
-## 2. Directory Structure
+## 2. Directory Structure & Packaged Distributions
 
+### Directory Layout
 ```
 omnisight-yuvraj-evaluation/
 ├── model_inputs/
 │   ├── defective/
-│   │   ├── case_01/
-│   │   │   ├── screenshot.png      # 1440x900 viewport capture
-│   │   │   ├── evidence.json       # Viewport, DOM metrics, element bounding boxes, computed styles
-│   │   │   └── dom.html            # Sanitized DOM structure
-│   │   ├── case_02/
-│   │   │   ├── screenshot.png      # 1440x900 viewport capture
-│   │   │   ├── evidence.json
-│   │   │   └── dom.html
-│   │   ├── case_03/
-│   │   │   ├── screenshot.png      # 1440x900 viewport capture
-│   │   │   ├── evidence.json
-│   │   │   └── dom.html
-│   │   └── case_04/
-│   │       ├── screenshot.png      # 390x844 mobile viewport capture
-│   │       ├── evidence.json
-│   │       └── dom.html
+│   │   ├── case_01/ (screenshot.png, dom.html, evidence.json)
+│   │   ├── case_02/ (screenshot.png, dom.html, evidence.json)
+│   │   ├── case_03/ (screenshot.png, dom.html, evidence.json)
+│   │   └── case_04/ (screenshot.png, dom.html, evidence.json)
 │   └── baseline/
-│       ├── case_01/
-│       │   ├── screenshot.png      # Clean 1440x900 baseline
-│       │   ├── evidence.json
-│       │   └── dom.html
-│       ├── case_02/
-│       │   ├── screenshot.png      # Clean 1440x900 baseline
-│       │   ├── evidence.json
-│       │   └── dom.html
-│       ├── case_03/
-│       │   ├── screenshot.png      # Clean 1440x900 baseline
-│       │   ├── evidence.json
-│       │   └── dom.html
-│       └── case_04/
-│           ├── screenshot.png      # Clean 390x844 mobile baseline
-│           ├── evidence.json
-│           └── dom.html
+│       ├── case_01/ (screenshot.png, dom.html, evidence.json)
+│       ├── case_02/ (screenshot.png, dom.html, evidence.json)
+│       ├── case_03/ (screenshot.png, dom.html, evidence.json)
+│       └── case_04/ (screenshot.png, dom.html, evidence.json)
 ├── scoring/
 │   └── ground_truth.json           # Isolated ground truth for automated evaluation scoring
 ├── dataset_manifest.json           # Full index of all cases, dimensions, and paths
 └── DATASET_README.md               # Dataset documentation and guide
 ```
+
+### Packaged Distributions (Two Separate Archives)
+To prevent accidental ground-truth exposure during evaluation, two distinct packages are produced:
+
+1. **Model-Only Package (`omnisight-yuvraj-model-inputs-v2.zip`):**
+   * Contains **ONLY** the `model_inputs/` folder (baseline and defective cases).
+   * Contains **NO** `scoring/`, `ground_truth.json`, `dataset_manifest.json`, `DATASET_README.md`, or defect labels.
+   * Safe to unpack directly into AI/VLM inference pipelines.
+
+2. **Evaluator Metadata Package (`omnisight-yuvraj-evaluation-metadata-v2.zip`):**
+   * Contains **ONLY** `scoring/ground_truth.json`, `dataset_manifest.json`, and `DATASET_README.md`.
+   * Used strictly by evaluation scoring harnesses and test runners to benchmark model outputs.
 
 ---
 
@@ -81,7 +71,7 @@ omnisight-yuvraj-evaluation/
 
 * **Engine:** Playwright Chromium headless browser.
 * **Capture Mode:** Viewport screenshot (`fullPage: false`).
-* **Format:** 24-bit PNG with RGB / RGBA color profile.
+* **Format:** 24-bit PNG with standard sRGB color profile.
 * **Pixel Dimensions:**
   * `case_01` (Baseline & Defective): **1440 × 900 px**
   * `case_02` (Baseline & Defective): **1440 × 900 px**
@@ -98,6 +88,7 @@ Each case in `model_inputs/{defective,baseline}/case_XX/` contains an `evidence.
 ```json
 {
   "case_id": "case_01",
+  "step_name": "not_recorded",
   "screenshot_path": "screenshot.png",
   "dom_path": "dom.html",
   "page_title": "OmniShop — Modern Curated Essentials",
@@ -133,8 +124,9 @@ Each case in `model_inputs/{defective,baseline}/case_XX/` contains an `evidence.
 
 ### Key Field Descriptions:
 * `case_id`: Opaque neutral identifier (`case_01` to `case_04`).
+* `step_name`: Explicit journey step status (`"not_recorded"` since static route capture was used; not fabricated).
 * `screenshot_path`: Relative path to the rendered screenshot (`screenshot.png`).
-* `dom_path`: Relative path to the cleaned DOM snapshot (`dom.html`).
+* `dom_path`: Relative path to the sanitized DOM snapshot (`dom.html`).
 * `viewport`: Device viewport configuration used during capture (`width`, `height`).
 * `document_metrics`: Live document layout metrics (`clientWidth`, `scrollWidth`, `clientHeight`, `scrollHeight`).
 * `element_bounding_boxes`: Bounding boxes (`x`, `y`, `width`, `height`) of target UI elements.
@@ -143,29 +135,32 @@ Each case in `model_inputs/{defective,baseline}/case_XX/` contains an `evidence.
 
 ---
 
-## 6. Ground-Truth Separation & Anti-Leakage Protocol
+## 6. Ground-Truth Isolation & Anti-Leakage Protocol
 
-To ensure rigorous evaluation:
-1. **Separation:** Ground truth is located exclusively in `scoring/ground_truth.json`.
-2. **Sanitization:** All scenario names (`product-image-distortion`, `mobile-nav-overflow`, etc.), defect IDs, expected categories, and diagnostic symptoms have been scrubbed from `model_inputs/`.
-3. **Neutral Aliases:** The VLM should be prompted with neutral identifiers (`scenario_01` or `case_01`) rather than defect names.
-4. **Validation:** Automated test `assertNoGroundTruthLeakage` runs across all files in `model_inputs/` to guarantee zero forbidden tokens exist in the model-facing payload.
+All model-facing DOM snapshots (`dom.html`) are thoroughly sanitized by `sanitizeDomSnapshot`:
+1. **Comment Elimination:** All CSS comments (`/* Defect 1: ... */`, `/* Controlled UI ... */`, `/* Stretches and distorts ... */`) are stripped.
+2. **Metadata Removal:** `omnisight-defect-metadata` divs and `data-defect-*` attributes are removed.
+3. **Environment Scrubbing:** Development paths (`/Users/...`) and Vite attributes (`data-vite-dev-id`) are removed.
+4. **Script Stripping:** Vite client and React refresh scripts are omitted.
+5. **Preservation Guarantee:** Actual diagnostic CSS declarations (`object-fit: fill`, `height: 380px`, `margin-top: -40px`, `bottom: -45px`, `color: #cbd5e1 !important`, `width: 650px`) and DOM element structure are 100% preserved.
 
 ---
 
-## 7. How to Use This Dataset for VLM Evaluation
+## 7. How to Regenerate the Dataset & Run Validation Tests
 
-### Step A: Feed Inputs to VLM Provider
-For each `case_XX` in `model_inputs/defective/`:
-1. Provide `screenshot.png` alongside the baseline counterpart `model_inputs/baseline/case_XX/screenshot.png`.
-2. Provide `evidence.json` (viewport, document metrics, computed styles) and `dom.html`.
-3. Invoke your VLM prompt (e.g. Gemini 1.5 Flash / Pro or Mock Provider) using `DiagnosisService`.
+### Regenerate Dataset and Archives
+```bash
+npm run prepare:evaluation
+```
+This script reads source artifacts, sanitizes all DOM snapshots, generates `evidence.json`, indexes `dataset_manifest.json`, isolates `scoring/ground_truth.json`, and packages both `omnisight-yuvraj-model-inputs-v2.zip` and `omnisight-yuvraj-evaluation-metadata-v2.zip`.
 
-### Step B: Score Output against Ground Truth
-1. Load `scoring/ground_truth.json`.
-2. Match your predicted `category` against either `canonical_category` (e.g. `image_distortion`, `layout_breakage`, `low_contrast`, `responsive_overflow`) or `expected_category` (e.g. `visual-distortion`, `layout-shift`, `color-contrast`, `responsive-overflow`).
-3. Compute metrics:
-   * **Category Accuracy:** % of cases where predicted category matches ground truth.
-   * **Localization Accuracy:** Did the model correctly identify the target selector/component?
-   * **False Positive Rate:** Test baseline cases in `model_inputs/baseline/` to confirm status is `no_defect_detected`.
-
+### Run Automated Integrity & Anti-Leakage Tests
+```bash
+npx playwright test tests/evaluation-dataset.spec.ts
+```
+The test suite validates:
+* 8 total cases (4 baseline, 4 defective).
+* Evidence schema completeness (`step_name: "not_recorded"`, bounding boxes, computed styles).
+* Zero leakage across all JSON and HTML files.
+* Diagnostic CSS preservation in all defective DOM files.
+* ZIP archive integrity and model-only isolation.

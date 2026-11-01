@@ -1,5 +1,6 @@
 {
   "case_id": "case_03",
+  "step_name": "not_recorded",
   "screenshot_path": "screenshot.png",
   "dom_path": "dom.html",
   "page_title": "OmniShop — Modern Curated Essentials",

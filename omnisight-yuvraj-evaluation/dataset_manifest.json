@@ -1,8 +1,8 @@
 {
   "dataset_name": "omnisight-yuvraj-evaluation",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "source_run_id": "run-2026-10-13T17-36-08-002Z",
-  "created_at": "2026-11-01T18:54:42.513Z",
+  "created_at": "2026-11-01T20:11:00.125Z",
   "total_cases": 8,
   "defective_cases_count": 4,
   "baseline_cases_count": 4,
@@ -10,6 +10,7 @@
     {
       "case_id": "case_01",
       "designation": "defective",
+      "step_name": "not_recorded",
       "route": "/products",
       "viewport": {
         "width": 1440,
@@ -29,6 +30,7 @@
     {
       "case_id": "case_01",
       "designation": "baseline",
+      "step_name": "not_recorded",
       "route": "/products",
       "viewport": {
         "width": 1440,
@@ -48,6 +50,7 @@
     {
       "case_id": "case_02",
       "designation": "defective",
+      "step_name": "not_recorded",
       "route": "/products",
       "viewport": {
         "width": 1440,
@@ -67,6 +70,7 @@
     {
       "case_id": "case_02",
       "designation": "baseline",
+      "step_name": "not_recorded",
       "route": "/products",
       "viewport": {
         "width": 1440,
@@ -86,6 +90,7 @@
     {
       "case_id": "case_03",
       "designation": "defective",
+      "step_name": "not_recorded",
       "route": "/products",
       "viewport": {
         "width": 1440,
@@ -105,6 +110,7 @@
     {
       "case_id": "case_03",
       "designation": "baseline",
+      "step_name": "not_recorded",
       "route": "/products",
       "viewport": {
         "width": 1440,
@@ -124,6 +130,7 @@
     {
       "case_id": "case_04",
       "designation": "defective",
+      "step_name": "not_recorded",
       "route": "/products",
       "viewport": {
         "width": 390,
@@ -143,6 +150,7 @@
     {
       "case_id": "case_04",
       "designation": "baseline",
+      "step_name": "not_recorded",
       "route": "/products",
       "viewport": {
         "width": 390,

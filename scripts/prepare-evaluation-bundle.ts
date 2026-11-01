@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
-import { assertNoGroundTruthLeakage } from "./vlm/evidence-sanitizer";
+import { execSync } from "child_process";
+import { assertNoGroundTruthLeakage, sanitizeDomSnapshot } from "./vlm/evidence-sanitizer";
 
 export interface EvaluationScenarioMapping {
   caseId: string;
@@ -65,15 +66,48 @@ export interface PrepareOptions {
   sourceRunDir?: string;
   outputDir?: string;
   copyImages?: boolean;
+  createArchives?: boolean;
 }
 
-export function prepareEvaluationBundle(options: PrepareOptions = {}): {
+export interface PrepareResult {
   success: boolean;
   totalCases: number;
   defectiveCases: number;
   baselineCases: number;
   outputDir: string;
-} {
+  modelOnlyZipPath?: string;
+  metadataZipPath?: string;
+}
+
+/**
+ * Creates two isolated ZIP archives:
+ * 1. omnisight-yuvraj-model-inputs-v2.zip (Contains ONLY model_inputs/ with screenshots, evidence.json, and sanitized dom.html)
+ * 2. omnisight-yuvraj-evaluation-metadata-v2.zip (Contains scoring/ground_truth.json, dataset_manifest.json, and DATASET_README.md)
+ */
+export function createEvaluationZipArchives(
+  bundleDir: string = path.join(process.cwd(), "omnisight-yuvraj-evaluation"),
+  targetDir: string = process.cwd()
+): { modelOnlyZipPath: string; metadataZipPath: string } {
+  const modelOnlyZipPath = path.join(targetDir, "omnisight-yuvraj-model-inputs-v2.zip");
+  const metadataZipPath = path.join(targetDir, "omnisight-yuvraj-evaluation-metadata-v2.zip");
+
+  // Remove existing archives if present
+  if (fs.existsSync(modelOnlyZipPath)) fs.unlinkSync(modelOnlyZipPath);
+  if (fs.existsSync(metadataZipPath)) fs.unlinkSync(metadataZipPath);
+
+  // Archive A: Model-only package (Strictly model_inputs/ ONLY)
+  execSync(`cd "${bundleDir}" && zip -r "${modelOnlyZipPath}" model_inputs/`, { stdio: "pipe" });
+
+  // Archive B: Evaluator metadata package (Ground truth, manifest, documentation ONLY)
+  execSync(
+    `cd "${bundleDir}" && zip -r "${metadataZipPath}" scoring/ground_truth.json dataset_manifest.json DATASET_README.md`,
+    { stdio: "pipe" }
+  );
+
+  return { modelOnlyZipPath, metadataZipPath };
+}
+
+export function prepareEvaluationBundle(options: PrepareOptions = {}): PrepareResult {
   const baseDir = process.cwd();
   const sourceRunDir =
     options.sourceRunDir ||
@@ -81,6 +115,7 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): {
   const outputDir =
     options.outputDir || path.join(baseDir, "omnisight-yuvraj-evaluation");
   const copyImages = options.copyImages ?? true;
+  const createArchives = options.createArchives ?? true;
 
   if (!fs.existsSync(sourceRunDir)) {
     throw new Error(`Source evidence run directory does not exist: ${sourceRunDir}`);
@@ -110,9 +145,13 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): {
       }
     }
 
+    // Read and sanitize defective DOM snapshot before writing
     const srcDefDom = path.join(scDir, "dom-defective.html");
     if (fs.existsSync(srcDefDom)) {
-      fs.copyFileSync(srcDefDom, path.join(defCaseDir, "dom.html"));
+      const rawDefDom = fs.readFileSync(srcDefDom, "utf8");
+      const sanitizedDefDom = sanitizeDomSnapshot(rawDefDom);
+      assertNoGroundTruthLeakage(sanitizedDefDom);
+      fs.writeFileSync(path.join(defCaseDir, "dom.html"), sanitizedDefDom, "utf8");
     }
 
     const mDefPath = path.join(scDir, "measurements-defective.json");
@@ -120,6 +159,7 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): {
 
     const defEvidence = {
       case_id: sc.caseId,
+      step_name: "not_recorded",
       screenshot_path: "screenshot.png",
       dom_path: "dom.html",
       page_title: "OmniShop — Modern Curated Essentials",
@@ -142,6 +182,7 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): {
     manifestCases.push({
       case_id: sc.caseId,
       designation: "defective",
+      step_name: "not_recorded",
       route: defEvidence.route,
       viewport: sc.viewport,
       is_mobile: sc.isMobile,
@@ -164,9 +205,13 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): {
       }
     }
 
+    // Read and sanitize baseline DOM snapshot before writing
     const srcBaseDom = path.join(scDir, "dom-baseline.html");
     if (fs.existsSync(srcBaseDom)) {
-      fs.copyFileSync(srcBaseDom, path.join(baseCaseDir, "dom.html"));
+      const rawBaseDom = fs.readFileSync(srcBaseDom, "utf8");
+      const sanitizedBaseDom = sanitizeDomSnapshot(rawBaseDom);
+      assertNoGroundTruthLeakage(sanitizedBaseDom);
+      fs.writeFileSync(path.join(baseCaseDir, "dom.html"), sanitizedBaseDom, "utf8");
     }
 
     const mBasePath = path.join(scDir, "measurements-baseline.json");
@@ -174,6 +219,7 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): {
 
     const baseEvidence = {
       case_id: sc.caseId,
+      step_name: "not_recorded",
       screenshot_path: "screenshot.png",
       dom_path: "dom.html",
       page_title: "OmniShop — Modern Curated Essentials",
@@ -196,6 +242,7 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): {
     manifestCases.push({
       case_id: sc.caseId,
       designation: "baseline",
+      step_name: "not_recorded",
       route: baseEvidence.route,
       viewport: sc.viewport,
       is_mobile: sc.isMobile,
@@ -229,7 +276,7 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): {
   // 4. Dataset Manifest
   const manifestData = {
     dataset_name: "omnisight-yuvraj-evaluation",
-    version: "1.0.0",
+    version: "2.0.0",
     source_run_id: path.basename(sourceRunDir),
     created_at: new Date().toISOString(),
     total_cases: manifestCases.length,
@@ -243,12 +290,23 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): {
     "utf8"
   );
 
+  let modelOnlyZipPath: string | undefined;
+  let metadataZipPath: string | undefined;
+
+  if (createArchives) {
+    const archives = createEvaluationZipArchives(outputDir, baseDir);
+    modelOnlyZipPath = archives.modelOnlyZipPath;
+    metadataZipPath = archives.metadataZipPath;
+  }
+
   return {
     success: true,
     totalCases: manifestCases.length,
     defectiveCases: 4,
     baselineCases: 4,
     outputDir,
+    modelOnlyZipPath,
+    metadataZipPath,
   };
 }
 
@@ -261,4 +319,8 @@ const isDirectCall =
 if (isDirectCall) {
   const result = prepareEvaluationBundle();
   console.log(`Successfully prepared evaluation bundle with ${result.totalCases} cases at: ${result.outputDir}`);
+  if (result.modelOnlyZipPath && result.metadataZipPath) {
+    console.log(`Created model-only package: ${result.modelOnlyZipPath}`);
+    console.log(`Created evaluator package:  ${result.metadataZipPath}`);
+  }
 }
