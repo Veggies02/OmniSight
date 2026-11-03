@@ -22,14 +22,91 @@ export class WorktreeManager {
 
   /**
    * Validates git identifier format (job-id, branch name, commit sha)
-   * to strictly prevent shell injection or illegal git ref syntax.
+   * with strict validation to prevent shell injection, path traversal,
+   * or illegal git ref syntax.
+   *
+   * Enforces:
+   * - Must be a non-empty string.
+   * - Length between 1 and 128 characters.
+   * - First character must be alphanumeric ([a-zA-Z0-9]).
+   * - Remaining characters must be alphanumeric, hyphen, or underscore ([a-zA-Z0-9_-]).
+   * - Rejects path traversal (..), slashes (/ or \), and whitespace.
+   */
+  public validateJobId(jobId: any): string {
+    if (typeof jobId !== 'string') {
+      throw new Error(`Invalid jobId: must be a non-empty string, received ${typeof jobId}.`);
+    }
+    if (!jobId || jobId.length === 0) {
+      throw new Error('Invalid jobId: cannot be empty.');
+    }
+    if (jobId.length > 128) {
+      throw new Error(`Invalid jobId: exceeds maximum allowed length of 128 characters (length: ${jobId.length}).`);
+    }
+    if (/\s/.test(jobId)) {
+      throw new Error(`Invalid jobId: "${jobId}". Whitespace characters are not permitted.`);
+    }
+    if (jobId.includes('/') || jobId.includes('\\') || jobId.includes('..')) {
+      throw new Error(`Invalid jobId: "${jobId}". Path traversal characters and slashes are strictly prohibited.`);
+    }
+    const JOB_ID_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
+    if (!JOB_ID_REGEX.test(jobId)) {
+      throw new Error(
+        `Invalid jobId: "${jobId}". Must start with an alphanumeric character and contain only alphanumeric characters, dashes, and underscores (1-128 chars).`
+      );
+    }
+    return jobId;
+  }
+
+  /**
+   * Backward-compatible alias for validateJobId.
    */
   public sanitizeJobId(jobId: string): string {
-    const sanitized = jobId.replace(/[^a-zA-Z0-9_-]/g, '');
-    if (!sanitized || sanitized.length === 0) {
-      throw new Error(`Invalid jobId: "${jobId}". Must contain only alphanumeric, dash, or underscore.`);
+    return this.validateJobId(jobId);
+  }
+
+  /**
+   * Checks whether a local Git branch exists using git show-ref --verify.
+   */
+  public async checkBranchExists(branchName: string): Promise<boolean> {
+    try {
+      await execFileAsync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`], {
+        cwd: this.repoRoot,
+      });
+      return true;
+    } catch {
+      return false;
     }
-    return sanitized;
+  }
+
+  /**
+   * Checks whether a worktree directory already exists on the filesystem.
+   */
+  public checkWorktreeDirectoryExists(worktreePath: string): boolean {
+    return fs.existsSync(worktreePath);
+  }
+
+  /**
+   * Checks whether a worktree path is already registered with git.
+   */
+  public async checkWorktreeRegistered(worktreePath: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], {
+        cwd: this.repoRoot,
+      });
+      const resolvedTarget = path.resolve(worktreePath);
+      const lines = stdout.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('worktree ')) {
+          const registeredPath = path.resolve(line.slice(9).trim());
+          if (registeredPath === resolvedTarget) {
+            return true;
+          }
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -58,11 +135,32 @@ export class WorktreeManager {
 
   /**
    * Creates an isolated worktree for the given job.
+   * Strictly validates job ID and verifies no conflicting branch, directory,
+   * or git worktree registration exists before creating.
    */
   public async createWorktree(jobId: string, baseCommit?: string): Promise<WorktreeInfo> {
-    const cleanJobId = this.sanitizeJobId(jobId);
+    const cleanJobId = this.validateJobId(jobId);
     const branchName = `omnisight-repair/${cleanJobId}`;
     const worktreePath = path.join(this.worktreeBaseDir, cleanJobId);
+
+    // Pre-flight check: ensure no duplicate branch, worktree directory, or git registration exists
+    const conflicts: string[] = [];
+    if (await this.checkBranchExists(branchName)) {
+      conflicts.push(`branch "refs/heads/${branchName}" already exists`);
+    }
+    if (this.checkWorktreeDirectoryExists(worktreePath)) {
+      conflicts.push(`worktree directory already exists on disk at "${worktreePath}"`);
+    }
+    if (await this.checkWorktreeRegistered(worktreePath)) {
+      conflicts.push(`worktree is already registered in git at "${worktreePath}"`);
+    }
+    if (conflicts.length > 0) {
+      throw new Error(
+        `Cannot create repair worktree: resource conflict detected for job ID "${cleanJobId}". ${conflicts.join(
+          '; '
+        )}. Existing repair resources will not be overwritten or deleted.`
+      );
+    }
 
     // Ensure the base directory exists
     if (!fs.existsSync(this.worktreeBaseDir)) {
@@ -74,9 +172,6 @@ export class WorktreeManager {
     if (!commitValid) {
       throw new Error(`Base commit ref "${commitToUse}" could not be verified in git repository.`);
     }
-
-    // Check if worktree or branch already exists and clean if necessary
-    await this.cleanupWorktree(cleanJobId).catch(() => {});
 
     // Create the isolated worktree with git worktree add -b <branch> <path> <commit>
     try {

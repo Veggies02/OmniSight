@@ -995,3 +995,189 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     expect(await worktreeManager.verifyCommitExists(branchName)).toBe(false);
   });
 });
+
+test.describe('WorktreeManager Safety & Job ID Validation Regression Tests', () => {
+  const repoRoot = process.cwd();
+  const worktreeBaseDir = path.join(repoRoot, 'artifacts', 'repair-worktrees');
+
+  test('Job ID Validation: rejects invalid job IDs (slashes, path traversal, whitespace, empty, special chars, too long)', async () => {
+    const wm = new WorktreeManager(repoRoot);
+
+    const invalidJobIds = [
+      '', // empty
+      '   ', // whitespace only
+      'job id with spaces',
+      'job/with/slashes',
+      'job\\with\\backslashes',
+      '../traversal-job',
+      'job-..-traversal',
+      '..',
+      '-starts-with-hyphen',
+      '_starts-with-underscore',
+      'job@symbol',
+      'job$dollar',
+      'job!bang',
+      'job#hash',
+      'job%percent',
+      'a'.repeat(129), // exceeds 128 chars
+      null as any,
+      undefined as any,
+      12345 as any,
+      {} as any,
+    ];
+
+    for (const invalidId of invalidJobIds) {
+      expect(() => wm.validateJobId(invalidId)).toThrow(/Invalid jobId/);
+      await expect(wm.createWorktree(invalidId)).rejects.toThrow(/Invalid jobId/);
+    }
+  });
+
+  test('Job ID Validation: accepts valid job IDs and returns string unmodified', () => {
+    const wm = new WorktreeManager(repoRoot);
+
+    const validJobIds = [
+      'job123',
+      'job-456',
+      'job_789',
+      'repair-job-v2_run-01',
+      'A123-Z987_test',
+      'a'.repeat(128), // maximum 128 characters
+    ];
+
+    for (const validId of validJobIds) {
+      expect(wm.validateJobId(validId)).toBe(validId);
+    }
+  });
+
+  test('Resource Conflict: rejects duplicate job ID when local git branch already exists', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `dup-branch-test-${Date.now()}`;
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    // 1. Create worktree and branch
+    const info = await wm.createWorktree(testJobId);
+    expect(await wm.checkBranchExists(branchName)).toBe(true);
+
+    // 2. Remove the worktree folder but PRESERVE the branch
+    await wm.cleanupWorktree(testJobId, { preserveBranch: true });
+    expect(await wm.checkBranchExists(branchName)).toBe(true);
+    expect(wm.checkWorktreeDirectoryExists(info.worktreePath)).toBe(false);
+
+    try {
+      // 3. Attempting to create a worktree with the same jobId must reject with conflict error
+      await expect(wm.createWorktree(testJobId)).rejects.toThrow(
+        /Cannot create repair worktree: resource conflict detected/
+      );
+      // Verify branch is still preserved and untouched
+      expect(await wm.checkBranchExists(branchName)).toBe(true);
+    } finally {
+      // Cleanup the preserved branch
+      await wm.cleanupWorktree(testJobId);
+      expect(await wm.checkBranchExists(branchName)).toBe(false);
+    }
+  });
+
+  test('Resource Conflict: rejects duplicate job ID when worktree directory already exists on disk', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `dup-dir-test-${Date.now()}`;
+    const targetDir = path.join(worktreeBaseDir, testJobId);
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    // Ensure targetDir exists on disk, but branch does not exist
+    if (!fs.existsSync(worktreeBaseDir)) {
+      fs.mkdirSync(worktreeBaseDir, { recursive: true });
+    }
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(path.join(targetDir, 'dummy.txt'), 'pre-existing content');
+
+    expect(wm.checkWorktreeDirectoryExists(targetDir)).toBe(true);
+    expect(await wm.checkBranchExists(branchName)).toBe(false);
+
+    try {
+      // Attempting to create worktree must reject without overwriting directory
+      await expect(wm.createWorktree(testJobId)).rejects.toThrow(
+        /Cannot create repair worktree: resource conflict detected.*worktree directory already exists on disk/
+      );
+      // Verify directory was not deleted
+      expect(fs.existsSync(targetDir)).toBe(true);
+    } finally {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
+
+  test('Resource Conflict: rejects duplicate job ID when worktree is already registered in git', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `dup-reg-test-${Date.now()}`;
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    const info = await wm.createWorktree(testJobId);
+    expect(await wm.checkWorktreeRegistered(info.worktreePath)).toBe(true);
+
+    try {
+      // Attempting to create again while active worktree is registered must reject
+      await expect(wm.createWorktree(testJobId)).rejects.toThrow(
+        /Cannot create repair worktree: resource conflict detected/
+      );
+    } finally {
+      await wm.cleanupWorktree(testJobId);
+      expect(await wm.checkBranchExists(branchName)).toBe(false);
+      expect(await wm.checkWorktreeRegistered(info.worktreePath)).toBe(false);
+    }
+  });
+
+  test('Resource Conflict: preserves previously committed repair branch and prevents overwrite', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `dup-commit-test-${Date.now()}`;
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    // 1. Create worktree
+    const info = await wm.createWorktree(testJobId);
+
+    // 2. Make a change and commit in the isolated worktree
+    const testFilePath = path.join(info.worktreePath, 'repair-marker.txt');
+    fs.writeFileSync(testFilePath, `Repair executed for ${testJobId}`);
+    const commitResult = await wm.commitChanges(info.worktreePath, `feat: repair patch for ${testJobId}`);
+    expect(commitResult.commitSha).toBeDefined();
+
+    // 3. Remove worktree folder, preserving branch
+    await wm.cleanupWorktree(testJobId, { preserveBranch: true });
+    expect(await wm.checkBranchExists(branchName)).toBe(true);
+
+    const preservedCommit = await wm.getBranchCommit(branchName);
+    expect(preservedCommit).toBe(commitResult.commitSha);
+
+    try {
+      // 4. Attempt to create worktree again with same jobId - must reject and protect branch & commit
+      await expect(wm.createWorktree(testJobId)).rejects.toThrow(
+        /Cannot create repair worktree: resource conflict detected/
+      );
+
+      // Verify branch and commit are intact
+      const stillPreservedCommit = await wm.getBranchCommit(branchName);
+      expect(stillPreservedCommit).toBe(commitResult.commitSha);
+    } finally {
+      await wm.cleanupWorktree(testJobId);
+      expect(await wm.checkBranchExists(branchName)).toBe(false);
+    }
+  });
+
+  test('Worktree Lifecycle: creates fresh unique worktree and cleans up successfully', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `fresh-job-test-${Date.now()}`;
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    expect(await wm.checkBranchExists(branchName)).toBe(false);
+
+    const info = await wm.createWorktree(testJobId);
+    expect(info.branchName).toBe(branchName);
+    expect(fs.existsSync(info.worktreePath)).toBe(true);
+    expect(await wm.checkBranchExists(branchName)).toBe(true);
+    expect(await wm.checkWorktreeRegistered(info.worktreePath)).toBe(true);
+
+    const cleanup = await wm.cleanupWorktree(testJobId);
+    expect(cleanup.worktreeRemoved).toBe(true);
+    expect(cleanup.branchRemoved).toBe(true);
+    expect(fs.existsSync(info.worktreePath)).toBe(false);
+    expect(await wm.checkBranchExists(branchName)).toBe(false);
+  });
+});
