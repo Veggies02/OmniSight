@@ -2,6 +2,7 @@ import { chromium, type Browser, type Page } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 import { DEFECT_REGISTRY } from "../src/data/defects";
+import { assertNoGroundTruthLeakage, createNeutralScenarioAlias, sanitizeUrlOrRoute } from "./vlm/evidence-sanitizer";
 import {
   calculateContrastRatio,
   resolveEffectiveColor,
@@ -462,14 +463,14 @@ export class VisualEvidenceHarness {
         const scenarioEvidence: ScenarioEvidence = {
           scenarioId: scenario.id,
           defectId: scenario.defectId,
-          route: scenario.route,
+          route: sanitizeUrlOrRoute(scenario.route),
           viewport: scenario.viewport,
           baseline: {
             screenshotPath: rel(baselineScreenshotPath),
             domPath: rel(baselineDomPath),
             measurementsPath: rel(baselineMeasurementsPath),
             title: baselineTitle,
-            url: baselineUrl,
+            url: sanitizeUrlOrRoute(baselineUrl),
             consoleErrors: baselineErrors,
           },
           defective: {
@@ -477,7 +478,7 @@ export class VisualEvidenceHarness {
             domPath: rel(defectiveDomPath),
             measurementsPath: rel(defectiveMeasurementsPath),
             title: defectiveTitle,
-            url: defectiveUrl,
+            url: sanitizeUrlOrRoute(defectiveUrl),
             consoleErrors: defectiveErrors,
           },
         };
@@ -485,15 +486,47 @@ export class VisualEvidenceHarness {
         manifest.scenarios[scenario.id] = scenarioEvidence;
         manifest.scenariosCaptured++;
 
-        // Append to Model-Facing Evidence (NO GROUND-TRUTH DEFECT LABELS)
+        // Append to Model-Facing Evidence with neutral aliases and neutral case paths (SEC-CAL-01)
+        const scenarioIndex = SCENARIO_DEFINITIONS.indexOf(scenario);
+        const neutralAlias = createNeutralScenarioAlias(scenarioIndex);
+        const caseId = `case_${String(scenarioIndex + 1).padStart(2, "0")}`;
+
+        // Ensure neutral case directories exist and link to scenario directory for downstream consumers
+        for (const alias of [caseId, neutralAlias]) {
+          const aliasDirPath = path.join(runDir, alias);
+          if (!fs.existsSync(aliasDirPath)) {
+            try {
+              fs.symlinkSync(scenario.id, aliasDirPath, "junction");
+            } catch {
+              try {
+                fs.symlinkSync(scenario.id, aliasDirPath, "dir");
+              } catch {
+                fs.mkdirSync(aliasDirPath, { recursive: true });
+                for (const f of [
+                  "baseline.png",
+                  "defective.png",
+                  "dom-baseline.html",
+                  "dom-defective.html",
+                  "measurements.json",
+                  "measurements-baseline.json",
+                  "measurements-defective.json",
+                ]) {
+                  const srcF = path.join(scenarioDir, f);
+                  if (fs.existsSync(srcF)) fs.copyFileSync(srcF, path.join(aliasDirPath, f));
+                }
+              }
+            }
+          }
+        }
+
         modelFacingEvidence.scenarios.push({
-          scenarioId: scenario.id,
-          route: scenario.route,
+          scenarioId: neutralAlias,
+          route: sanitizeUrlOrRoute(scenario.route),
           viewport: scenario.viewport,
-          baselineScreenshot: rel(baselineScreenshotPath),
-          defectiveScreenshot: rel(defectiveScreenshotPath),
-          baselineDom: rel(baselineDomPath),
-          defectiveDom: rel(defectiveDomPath),
+          baselineScreenshot: `${caseId}/baseline.png`,
+          defectiveScreenshot: `${caseId}/defective.png`,
+          baselineDom: `${caseId}/dom-baseline.html`,
+          defectiveDom: `${caseId}/dom-defective.html`,
           pageTitle: baselineTitle,
           consoleErrors: {
             baseline: baselineErrors,
@@ -501,7 +534,7 @@ export class VisualEvidenceHarness {
           },
         });
 
-        // Append to Ground-Truth Evaluation Record
+        // Append to Ground-Truth Evaluation Record (Internal Orchestration)
         const defectDef = DEFECT_REGISTRY[scenario.defectId];
         groundTruthRecord.scenarios[scenario.id] = {
           defectId: scenario.defectId,
@@ -524,9 +557,12 @@ export class VisualEvidenceHarness {
       fs.writeFileSync(path.join(runDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
 
       // Save separate model_facing_evidence.json and ground_truth_eval.json
+      // Verify zero leakage before persisting model-facing evidence
+      const modelEvidenceStr = JSON.stringify(modelFacingEvidence, null, 2);
+      assertNoGroundTruthLeakage(modelEvidenceStr);
       fs.writeFileSync(
         path.join(runDir, "model_facing_evidence.json"),
-        JSON.stringify(modelFacingEvidence, null, 2),
+        modelEvidenceStr,
         "utf8"
       );
       fs.writeFileSync(

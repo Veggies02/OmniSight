@@ -8,6 +8,7 @@ import {
   assertNoGroundTruthLeakage,
   createNeutralScenarioAlias,
   sanitizeDomForVlm,
+  sanitizeUrlOrRoute,
 } from "./evidence-sanitizer";
 import {
   createVlmProvider,
@@ -83,7 +84,10 @@ export class DiagnosisService {
 
     // 4. Also inspect sanitized layout delta from measurements if available (neutralized)
     let layoutHints = "";
-    const measurementsPath = path.join(runDir, scenarioId, "measurements.json");
+    let measurementsPath = path.join(runDir, scenarioId, "measurements.json");
+    if (!fs.existsSync(measurementsPath) && scenarioEntry.baselineScreenshot) {
+      measurementsPath = path.join(runDir, path.dirname(scenarioEntry.baselineScreenshot), "measurements.json");
+    }
     if (fs.existsSync(measurementsPath)) {
       try {
         const rawM = JSON.parse(fs.readFileSync(measurementsPath, "utf8"));
@@ -103,13 +107,15 @@ export class DiagnosisService {
       }
     }
 
+    const cleanRoute = sanitizeUrlOrRoute(scenarioEntry.route);
+
     // 5. Build neutral model prompt
     const neutralPrompt = `
 ${STANDARD_VLM_PROMPT}
 
 EVIDENCE METADATA:
 - Inspection Scenario Alias: ${neutralAlias}
-- Target Route: ${scenarioEntry.route}
+- Target Route: ${cleanRoute}
 - Viewport: ${scenarioEntry.viewport.width} x ${scenarioEntry.viewport.height}
 - Page Title: ${scenarioEntry.pageTitle}
 - Client Console Errors: Baseline [${scenarioEntry.consoleErrors.baseline.length}], Test [${scenarioEntry.consoleErrors.defective.length}]
@@ -124,8 +130,12 @@ DIAGNOSIS INSTRUCTIONS:
 Carefully compare the baseline and test images provided, correlate with the layout metrics and DOM excerpt, and output the structured JSON diagnosis.
 `;
 
-    // 6. Strict Leakage Verification
-    assertNoGroundTruthLeakage(neutralPrompt);
+    // 6. Strict Leakage Verification across evidence components (including pageTitle)
+    assertNoGroundTruthLeakage(defectiveDomExcerpt);
+    if (baselineDomExcerpt) assertNoGroundTruthLeakage(baselineDomExcerpt);
+    if (layoutHints) assertNoGroundTruthLeakage(layoutHints);
+    assertNoGroundTruthLeakage(cleanRoute);
+    if (scenarioEntry.pageTitle) assertNoGroundTruthLeakage(scenarioEntry.pageTitle);
 
     // 7. Call VLM Provider
     let diagnosis: StructuredDiagnosis;
@@ -203,6 +213,13 @@ Carefully compare the baseline and test images provided, correlate with the layo
     const outputDir = options.outputDirectory || path.join(targetRunDir, "diagnoses");
     fs.mkdirSync(outputDir, { recursive: true });
 
+    // Read internal orchestration manifest if present to maintain correlation for evaluation
+    const internalManifestPath = path.join(targetRunDir, "manifest.json");
+    const internalManifest = fs.existsSync(internalManifestPath)
+      ? JSON.parse(fs.readFileSync(internalManifestPath, "utf8"))
+      : null;
+    const internalScenarioIds = internalManifest?.scenarios ? Object.keys(internalManifest.scenarios) : [];
+
     const manifest: DiagnosisRunManifest = {
       runId: modelEvidence.runId,
       timestamp: new Date().toISOString(),
@@ -221,8 +238,15 @@ Carefully compare the baseline and test images provided, correlate with the layo
       }
 
       console.log(`Diagnosing scenario '${scenario.scenarioId}' using ${this.provider.name} (${this.provider.model})...`);
-      const result = await this.diagnoseScenario(targetRunDir, scenario, scenarioIndex++);
+      const currentIdx = scenarioIndex++;
+      const result = await this.diagnoseScenario(targetRunDir, scenario, currentIdx);
       manifest.results[scenario.scenarioId] = result;
+
+      // Correlate with internal scenario ID if available
+      const internalId = internalScenarioIds[currentIdx];
+      if (internalId && internalId !== scenario.scenarioId) {
+        manifest.results[internalId] = result;
+      }
       manifest.scenariosDiagnosed++;
 
       // Save individual scenario diagnosis artifact

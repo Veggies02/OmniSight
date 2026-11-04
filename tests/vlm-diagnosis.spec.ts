@@ -343,7 +343,7 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
       const modelEvidence = JSON.parse(fs.readFileSync(modelEvidencePath, "utf8"));
 
       const imageDistortionScenario = modelEvidence.scenarios.find(
-        (s: any) => s.scenarioId === "product-image-distortion"
+        (s: any) => s.scenarioId === "scenario_01" || s.scenarioId === "product-image-distortion"
       );
       expect(imageDistortionScenario).toBeDefined();
 
@@ -372,7 +372,7 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
       const proposal = proposalService.generateProposal(diagnosisResult);
 
       expect(proposal.schemaVersion).toBe("1.0");
-      expect(proposal.scenarioId).toBe("product-image-distortion");
+      expect(proposal.scenarioId).toBe(imageDistortionScenario.scenarioId);
       expect(proposal.defectCategory).toBe("image_distortion");
       expect(proposal.localization.status).toBe("localized");
       expect(proposal.localization.filePath).toBe("src/index.css");

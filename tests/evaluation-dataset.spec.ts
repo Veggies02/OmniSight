@@ -5,7 +5,10 @@ import { execFileSync } from "child_process";
 import {
   assertNoGroundTruthLeakage,
   FORBIDDEN_LEAKAGE_TOKENS,
+  sanitizeDomSnapshot,
+  sanitizeUrlOrRoute,
 } from "../scripts/vlm/evidence-sanitizer";
+import { stripInspectionMetadataFromDom } from "../scripts/evidence-helpers";
 import {
   prepareEvaluationBundle,
   createEvaluationZipArchives,
@@ -256,5 +259,219 @@ test.describe("OmniSight Evaluation Dataset Bundle Verification", () => {
     expect(metadataListing).toContain("DATASET_README.md");
     expect(metadataListing).not.toContain(".png");
     expect(metadataListing).not.toContain("model_inputs/");
+  });
+
+  test("SEC-01 Regression: sanitizeUrlOrRoute strips defect query parameters and preserves legitimate routes/params", () => {
+    // 1. Defective absolute URL
+    const url1 = "http://127.0.0.1:5173/products?defect=product-image-distortion";
+    expect(sanitizeUrlOrRoute(url1)).toBe("http://127.0.0.1:5173/products");
+
+    // 2. Multi-param URL preserving other params
+    const url2 = "http://127.0.0.1:5173/products?category=audio&defect=low-contrast-text&sort=price";
+    expect(sanitizeUrlOrRoute(url2)).toBe("http://127.0.0.1:5173/products?category=audio&sort=price");
+
+    // 3. Relative route with defect parameter
+    const route1 = "/products?defect=mobile-nav-overflow";
+    expect(sanitizeUrlOrRoute(route1)).toBe("/products");
+
+    // 4. Relative route with hash and multiple params
+    const route2 = "/products?page=2&defect=product-card-layout-break#section";
+    expect(sanitizeUrlOrRoute(route2)).toBe("/products?page=2#section");
+
+    // 5. Clean URL and route unchanged
+    expect(sanitizeUrlOrRoute("http://127.0.0.1:5173/products")).toBe("http://127.0.0.1:5173/products");
+    expect(sanitizeUrlOrRoute("/products")).toBe("/products");
+    expect(sanitizeUrlOrRoute("/*")).toBe("/*");
+
+    // 6. assertNoGroundTruthLeakage catches un-sanitized URLs (both by defect token and by query parameter)
+    expect(() => assertNoGroundTruthLeakage(url1)).toThrow(/LEAKAGE DETECTED/);
+    expect(() => assertNoGroundTruthLeakage(route1)).toThrow(/LEAKAGE DETECTED/);
+    expect(() => assertNoGroundTruthLeakage("/products?defect=unknown_custom_id")).toThrow(/query parameter/);
+    expect(() => assertNoGroundTruthLeakage(sanitizeUrlOrRoute(url1))).not.toThrow();
+
+    // 7. SEC-URL-01 & SEC-URL-02: Kebab-case params, inject-defect, and SPA hash queries
+    const urlKebab = "http://127.0.0.1:5173/products?defect-id=custom-benchmark&sort=asc";
+    expect(sanitizeUrlOrRoute(urlKebab)).toBe("http://127.0.0.1:5173/products?sort=asc");
+
+    const urlInject = "http://127.0.0.1:5173/products?inject-defect=true&category=shoes";
+    expect(sanitizeUrlOrRoute(urlInject)).toBe("http://127.0.0.1:5173/products?category=shoes");
+
+    const urlInject2 = "http://127.0.0.1:5173/products?inject_defect=true";
+    expect(sanitizeUrlOrRoute(urlInject2)).toBe("http://127.0.0.1:5173/products");
+
+    const urlInject3 = "http://127.0.0.1:5173/products?injectDefect=true";
+    expect(sanitizeUrlOrRoute(urlInject3)).toBe("http://127.0.0.1:5173/products");
+
+    const spaHashRoute = "/products#section?defect=product-image-distortion&filter=true";
+    expect(sanitizeUrlOrRoute(spaHashRoute)).toBe("/products#section?filter=true");
+
+    const spaHashRoute2 = "/#/products?defect=mobile-nav-overflow&sort=desc";
+    expect(sanitizeUrlOrRoute(spaHashRoute2)).toBe("/#/products?sort=desc");
+
+    const encodedPath = "/products%3Fdefect=product-image-distortion";
+    expect(sanitizeUrlOrRoute(encodedPath)).toBe("/products");
+  });
+
+  test("SEC-02 Regression: stripInspectionMetadataFromDom removes CSS comments and scripts while preserving declarations", () => {
+    const rawHtml = `
+      <style>
+        /* Defect 1: Product Image Distortion */
+        /* Controlled UI Defect Scenarios */
+        .product-image { object-fit: fill; width: 100%; }
+      </style>
+      <script>console.log("vite");</script>
+      <div class="product-card"></div>
+    `;
+
+    const cleaned = stripInspectionMetadataFromDom(rawHtml);
+    expect(cleaned).not.toContain("Defect 1");
+    expect(cleaned).not.toContain("Controlled UI");
+    expect(cleaned).not.toContain("<script>");
+    expect(cleaned).toContain("object-fit: fill");
+    expect(cleaned).toContain("product-card");
+  });
+
+  test("SEC-03 & SEC-DOM-01 Regression: data-defect-* attributes (double, single, unquoted, valueless) are stripped cleanly", () => {
+    const rawHtml = `
+      <article
+        class="product-card"
+        data-product-id="prod-1"
+        data-defect-applied="mobile-nav-overflow"
+        data-defect-single='product-image-distortion'
+        data-defect-unquoted=custom-val
+        data-defect-custom="val123"
+        data-defect-foo
+        data-testid="product-card-1"
+        aria-label="Product Card"
+      >
+        <span data-discover="true">Test</span>
+      </article>
+    `;
+
+    const cleaned = sanitizeDomSnapshot(rawHtml);
+    // Defect attributes stripped without orphaned characters or malformed HTML
+    expect(cleaned).not.toContain("data-defect-applied");
+    expect(cleaned).not.toContain("data-defect-single");
+    expect(cleaned).not.toContain("data-defect-unquoted");
+    expect(cleaned).not.toContain("data-defect-custom");
+    expect(cleaned).not.toContain("data-defect-foo");
+    expect(cleaned).not.toContain("='product-image-distortion'");
+    expect(cleaned).not.toContain("=custom-val");
+    expect(cleaned).not.toContain("<article='");
+
+    // Application attributes preserved
+    expect(cleaned).toContain('data-product-id="prod-1"');
+    expect(cleaned).toContain('data-testid="product-card-1"');
+    expect(cleaned).toContain('aria-label="Product Card"');
+    expect(cleaned).toContain('data-discover="true"');
+  });
+
+  test("SEC-04 & SEC-DOM-02 Regression: selector cleaning preserves legitimate compound selectors and hyphenated classes", () => {
+    const rawCss = `
+      .navbar.defect-mobile-nav-overflow .navbar-container { width: 650px; }
+      .defect-product-card-layout-break .product-card-body { position: relative; }
+      .btn.btn-primary { background: blue; }
+      .nav-link.nav-link-active { font-weight: bold; }
+      .product-card.non-defect-card { border: 1px solid green; }
+    `;
+
+    const cleanedCss = sanitizeDomSnapshot(rawCss);
+    // Defect class removed from compound selector without selector corruption or trailing dots
+    expect(cleanedCss).toContain(".navbar .navbar-container");
+    expect(cleanedCss).not.toContain("defect-mobile-nav-overflow");
+    expect(cleanedCss).not.toContain(".navbar.product-cardnavbar-container");
+    expect(cleanedCss).not.toContain(".navbar.");
+
+    // Standalone defect selector mapped to component
+    expect(cleanedCss).toContain(".product-card .product-card-body");
+    expect(cleanedCss).not.toContain("defect-product-card-layout-break");
+
+    // Legitimate adjacent class selectors preserved untouched
+    expect(cleanedCss).toContain(".btn.btn-primary");
+    expect(cleanedCss).toContain(".nav-link.nav-link-active");
+    expect(cleanedCss).toContain(".product-card.non-defect-card");
+    expect(cleanedCss).not.toContain(".product-card.non- ");
+
+    // HTML class attributes: preserves legitimate hyphenated classes
+    const rawHtml = `<div class="product-card non-defect-card anti-defect-system defect-product-image-distortion active">Content</div>`;
+    const cleanedHtml = sanitizeDomSnapshot(rawHtml);
+    expect(cleanedHtml).toContain("non-defect-card");
+    expect(cleanedHtml).toContain("anti-defect-system");
+    expect(cleanedHtml).toContain("active");
+    expect(cleanedHtml).not.toContain("defect-product-image-distortion");
+    expect(cleanedHtml).not.toContain("non- ");
+    expect(cleanedHtml).not.toContain("anti- ");
+  });
+
+  test("SEC-CAL-01 Regression: model_facing_evidence.json uses neutral aliases and paths without leakage", () => {
+    const runDir = path.resolve(process.cwd(), "artifacts/visual-evidence/run-2026-10-13T17-36-08-002Z");
+    const modelEvidencePath = path.join(runDir, "model_facing_evidence.json");
+    expect(fs.existsSync(modelEvidencePath)).toBe(true);
+
+    const content = fs.readFileSync(modelEvidencePath, "utf8");
+    // Must pass complete ground truth assertion without throwing
+    expect(() => assertNoGroundTruthLeakage(content)).not.toThrow();
+
+    const parsed = JSON.parse(content);
+    expect(parsed.scenarios).toHaveLength(4);
+
+    for (let i = 0; i < parsed.scenarios.length; i++) {
+      const sc = parsed.scenarios[i];
+      // Neutral alias check
+      expect(sc.scenarioId).toBe(`scenario_${String(i + 1).padStart(2, "0")}`);
+      // Case-based folder paths check
+      const expectedCase = `case_${String(i + 1).padStart(2, "0")}`;
+      expect(sc.baselineScreenshot).toContain(expectedCase);
+      expect(sc.defectiveScreenshot).toContain(expectedCase);
+      expect(sc.baselineDom).toContain(expectedCase);
+      expect(sc.defectiveDom).toContain(expectedCase);
+
+      // Verify files actually exist on disk through the neutral paths
+      expect(fs.existsSync(path.join(runDir, sc.baselineScreenshot))).toBe(true);
+      expect(fs.existsSync(path.join(runDir, sc.defectiveScreenshot))).toBe(true);
+      expect(fs.existsSync(path.join(runDir, sc.baselineDom))).toBe(true);
+      expect(fs.existsSync(path.join(runDir, sc.defectiveDom))).toBe(true);
+    }
+  });
+
+  test("SEC-AST-01 Regression: assertNoGroundTruthLeakage catches encoded tokens and alternative query spellings", () => {
+    // 1. URL encoded token
+    const encodedUrl = "http://localhost/products?scenario=product%2Dimage%2Ddistortion";
+    expect(() => assertNoGroundTruthLeakage(encodedUrl)).toThrow(/LEAKAGE DETECTED/);
+
+    // 2. HTML decimal entity
+    const htmlDec = "<div>&#112;roduct-image-distortion</div>";
+    expect(() => assertNoGroundTruthLeakage(htmlDec)).toThrow(/LEAKAGE DETECTED/);
+
+    // 3. HTML hex entity
+    const htmlHex = "<div>&#x70;roduct-image-distortion</div>";
+    expect(() => assertNoGroundTruthLeakage(htmlHex)).toThrow(/LEAKAGE DETECTED/);
+
+    // 4. Alternative parameter spellings
+    expect(() => assertNoGroundTruthLeakage("http://localhost?defect-id=custom")).toThrow(/query parameter/);
+    expect(() => assertNoGroundTruthLeakage("http://localhost?inject-defect=true")).toThrow(/query parameter/);
+    expect(() => assertNoGroundTruthLeakage("http://localhost?inject_defect=true")).toThrow(/query parameter/);
+    expect(() => assertNoGroundTruthLeakage("http://localhost?injectDefect=true")).toThrow(/query parameter/);
+
+    // 5. Clean string with legitimate text passes without false positive
+    expect(() => assertNoGroundTruthLeakage("http://localhost/products?search=defect-free")).not.toThrow();
+  });
+
+  test("SEC-DOM-04 Regression: sanitizeDomSnapshot strips cross-platform local development paths", () => {
+    const rawWithPaths = `
+      <div data-trace="/Users/ajaykowkuntla/Desktop/OmniSight/src/app.tsx">
+        <span>/home/runner/work/OmniSight/dist/main.js</span>
+        <p>C:\\Users\\runneradmin\\workspace\\index.ts</p>
+      </div>
+    `;
+
+    const cleaned = sanitizeDomSnapshot(rawWithPaths);
+    expect(cleaned).not.toContain("/Users/");
+    expect(cleaned).not.toContain("/home/runner");
+    expect(cleaned).not.toContain("C:\\Users");
+    expect(cleaned).toContain("<div");
+    expect(cleaned).toContain("<span>");
+    expect(cleaned).toContain("<p>");
+    expect(cleaned).toContain("</div>");
   });
 });

@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { type DefectCategory, type DiagnosisResult } from "./diagnosis-schema";
 import { type DiagnosisRunManifest } from "./diagnosis-service";
+import { createNeutralScenarioAlias } from "./evidence-sanitizer";
 
 export interface ScenarioEvaluationResult {
   scenarioId: string;
@@ -79,6 +80,7 @@ export class DiagnosisEvaluator {
 
     const scenarios = groundTruthData.scenarios || {};
     const totalScenarios = Object.keys(scenarios).length;
+    const scenarioKeys = Object.keys(scenarios);
 
     for (const [scenarioId, gt] of Object.entries<any>(scenarios)) {
       const expectedCat = normalizeCategory(gt.expectedCategory);
@@ -88,7 +90,16 @@ export class DiagnosisEvaluator {
       }
       categoryBreakdown[expectedCat].expectedCount++;
 
-      const diagResult: DiagnosisResult | undefined = diagnosisManifest.results[scenarioId];
+      let diagResult: DiagnosisResult | undefined = diagnosisManifest.results[scenarioId];
+      if (!diagResult) {
+        // Fall back to correlation via neutral alias or case identifier
+        const sIdx = scenarioKeys.indexOf(scenarioId);
+        if (sIdx >= 0) {
+          const neutralAlias = createNeutralScenarioAlias(sIdx);
+          const caseAlias = `case_${String(sIdx + 1).padStart(2, "0")}`;
+          diagResult = diagnosisManifest.results[neutralAlias] || diagnosisManifest.results[caseAlias];
+        }
+      }
 
       if (!diagResult) {
         scenarioResults.push({

@@ -1,3 +1,5 @@
+import { sanitizeDomSnapshot } from "./vlm/evidence-sanitizer";
+
 export interface BoundingBox {
   x: number;
   y: number;
@@ -169,18 +171,10 @@ export function resolveEffectiveColor(
 }
 
 /**
- * Strips inspection metadata and internal test defect IDs from a DOM HTML string
- * so the model-facing DOM snapshot is completely clean of ground-truth test labels.
+ * Strips inspection metadata, internal test defect IDs, and CSS comments from a DOM HTML string
+ * by delegating to the unified sanitizeDomSnapshot implementation.
+ * Ensures model-facing DOM snapshots and raw evidence captures are completely clean of ground-truth test labels.
  */
 export function stripInspectionMetadataFromDom(rawHtml: string): string {
-  let cleaned = rawHtml;
-  // Remove the hidden metadata element
-  cleaned = cleaned.replace(/<div[^>]*id="omnisight-defect-metadata"[^>]*>[\s\S]*?<\/div>/gi, "");
-  cleaned = cleaned.replace(/<div[^>]*id="omnisight-defect-metadata"[^>]*\/>/gi, "");
-  // Remove data-defect-applied and data-defect-injection-enabled attributes
-  cleaned = cleaned.replace(/\s*data-defect-applied="[^"]*"/gi, "");
-  cleaned = cleaned.replace(/\s*data-defect-injection-enabled="[^"]*"/gi, "");
-  // Remove internal defect class names from class attributes to simulate natural un-tagged styling
-  cleaned = cleaned.replace(/\s*defect-[a-z0-9-]+/gi, "");
-  return cleaned;
+  return sanitizeDomSnapshot(rawHtml);
 }

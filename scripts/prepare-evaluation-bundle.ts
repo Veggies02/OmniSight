@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
-import { assertNoGroundTruthLeakage, sanitizeDomSnapshot } from "./vlm/evidence-sanitizer";
+import { assertNoGroundTruthLeakage, sanitizeDomSnapshot, sanitizeUrlOrRoute } from "./vlm/evidence-sanitizer";
 
 export interface EvaluationScenarioMapping {
   caseId: string;
@@ -163,8 +163,8 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): PrepareRe
       screenshot_path: "screenshot.png",
       dom_path: "dom.html",
       page_title: "OmniShop — Modern Curated Essentials",
-      route: sc.targetRoute === "/*" ? "/products" : sc.targetRoute,
-      url: "http://127.0.0.1:5173/products",
+      route: sanitizeUrlOrRoute(sc.targetRoute === "/*" ? "/products" : sc.targetRoute),
+      url: sanitizeUrlOrRoute("http://127.0.0.1:5173/products"),
       viewport: sc.viewport,
       is_mobile: sc.isMobile,
       browser: "chromium",
@@ -223,8 +223,8 @@ export function prepareEvaluationBundle(options: PrepareOptions = {}): PrepareRe
       screenshot_path: "screenshot.png",
       dom_path: "dom.html",
       page_title: "OmniShop — Modern Curated Essentials",
-      route: sc.targetRoute === "/*" ? "/products" : sc.targetRoute,
-      url: "http://127.0.0.1:5173/products",
+      route: sanitizeUrlOrRoute(sc.targetRoute === "/*" ? "/products" : sc.targetRoute),
+      url: sanitizeUrlOrRoute("http://127.0.0.1:5173/products"),
       viewport: sc.viewport,
       is_mobile: sc.isMobile,
       browser: "chromium",
