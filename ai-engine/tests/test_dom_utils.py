@@ -100,5 +100,8 @@ def test_prepare_returns_filtered_dom():
     assert prepare_dom_context("<p>Hi</p><button>Buy</button>") == "<button>Buy</button>"
 
 
-def test_prepare_falls_back_to_original_when_nothing_interactive():
-    assert prepare_dom_context("<p>Only text</p>") == "<p>Only text</p>"
+def test_prepare_falls_back_to_sanitized_text_when_nothing_interactive():
+    # Sanitized visible text extraction prevents raw HTML, script, or defect class leakage
+    assert prepare_dom_context("<p>Only text</p>") == "Only text"
+    # Strips scripts and styles safely
+    assert prepare_dom_context("<script>evil()</script><style>.a{}</style><p>Clean text</p>") == "Clean text"

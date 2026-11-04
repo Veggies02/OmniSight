@@ -1,0 +1,29 @@
+{
+  "jobId": "test-unknown-patch-1793648232669",
+  "proposalId": "prop-test-bad-patch",
+  "defectCategory": "product-image-distortion",
+  "targetBaseCommit": "HEAD",
+  "isolatedWorktreePath": "",
+  "isolatedBranch": "",
+  "patchId": "unknown-patch-999",
+  "createdAt": "2026-11-02T19:37:12.669Z",
+  "completedAt": "2026-11-02T19:37:12.669Z",
+  "finalState": "UNSUPPORTED",
+  "approvalValidation": {
+    "approved": true,
+    "reviewStatus": "approved",
+    "sourceFreshnessVerified": false,
+    "recordedSourceHash": "eb1b2855b8b2a74a91619899769a75be0e9f146fd3483a6602dafaeb6dad231a",
+    "currentSourceHash": "",
+    "baseCommitVerified": false,
+    "targetBaseCommit": "HEAD",
+    "rejectionReason": "No registered patch available for scenario 'product-image-distortion' (patchId: 'unknown-patch-999')."
+  },
+  "cleanupStatus": {
+    "cleaned": true,
+    "worktreeRemoved": false,
+    "branchRemoved": false,
+    "branchPreserved": false
+  },
+  "failureReason": "No registered patch available for scenario 'product-image-distortion' (patchId: 'unknown-patch-999')."
+}

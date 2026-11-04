@@ -605,4 +605,5 @@ class TestDomFilteringInPipeline:
         captured = self._spy_on_prompt(monkeypatch)
         evidence.dom_snippet = "<p>Only text</p>"
         analyze_evidence(evidence, MockVisionModel())
-        assert captured["dom_snippet"] == "<p>Only text</p>"
+        # Sanitized visible text extraction prevents raw HTML or script leakage
+        assert captured["dom_snippet"] == "Only text"

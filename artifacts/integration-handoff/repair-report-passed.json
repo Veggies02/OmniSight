@@ -1,0 +1,119 @@
+{
+  "jobId": "v2-commit-job-1793648238733",
+  "proposalId": "prop-v2-commit-test",
+  "defectCategory": "product-image-distortion",
+  "targetBaseCommit": "HEAD",
+  "isolatedWorktreePath": "/Users/ajaykowkuntla/Desktop/ OmniSight/artifacts/repair-worktrees/v2-commit-job-1793648238733",
+  "isolatedBranch": "omnisight-repair/v2-commit-job-1793648238733",
+  "patchId": "patch-product-image-distortion-001",
+  "createdAt": "2026-11-02T19:37:18.733Z",
+  "completedAt": "2026-11-02T19:37:25.159Z",
+  "finalState": "PASSED",
+  "approvalValidation": {
+    "approved": true,
+    "reviewStatus": "approved",
+    "reviewedBy": "release-architect@omnisight.ai",
+    "reviewedAt": "2026-11-02T19:37:18.733Z",
+    "approvalNotes": "Approved for v2 worktree commit test.",
+    "sourceFreshnessVerified": true,
+    "recordedSourceHash": "eb1b2855b8b2a74a91619899769a75be0e9f146fd3483a6602dafaeb6dad231a",
+    "currentSourceHash": "eb1b2855b8b2a74a91619899769a75be0e9f146fd3483a6602dafaeb6dad231a",
+    "baseCommitVerified": true,
+    "targetBaseCommit": "HEAD"
+  },
+  "patchApplication": {
+    "patchId": "patch-product-image-distortion-001",
+    "appliedSuccessfully": true,
+    "changedFiles": [
+      "src/index.css"
+    ],
+    "diffSummary": "src/index.css | 8 ++++----\n 1 file changed, 4 insertions(+), 4 deletions(-)",
+    "appliedAt": "2026-11-02T19:37:18.991Z"
+  },
+  "buildExecution": {
+    "command": "npm run build",
+    "exitCode": 0,
+    "passed": true,
+    "totalTests": 0,
+    "passedTests": 0,
+    "failedTests": 0,
+    "durationMs": 4432,
+    "stdoutSummary": "\n> omnisight@0.0.0 build\n> tsc -b && vite build\n\n\u001b[36mvite v8.3.4 \u001b[32mbuilding client environment for production...\u001b[36m\u001b[39m\ntransforming...\n\u001b[32m✓\u001b[0m 70 modules transformed.\nrendering chunks...\ncomputing gzip size...\n\u001b[2mdist/\u001b[0m\u001b[32mindex.html                 \u001b[0m\u001b[1;2m  1.13 kB\u001b[0m\u001b[2m │ gzip:   0.58 kB\u001b[0m\n\u001b[2mdist/\u001b[0m\u001b[2massets/\u001b[0m\u001b[35mindex-BV-Lr8FH.css  \u001b[0m\u001b[1;2m 54.91 kB\u001b[0m\u001b[2m │ gzip:   9.70 kB\u001b[0m\n\u001b[2mdist/\u001b[0m\u001b[2massets/\u001b[0m\u001b[36mindex-BaNHYUBU.js   \u001b[0m\u001b[1;2m466.67 kB\u001b[0m\u001b[2m │ gzip: 127.20 kB\u001b[0m\n\n\u001b[32m✓ built in 103ms\u001b[39m\n",
+    "stderrSummary": ""
+  },
+  "testExecution": {
+    "command": "npm run build",
+    "exitCode": 0,
+    "passed": true,
+    "totalTests": 0,
+    "passedTests": 0,
+    "failedTests": 0,
+    "durationMs": 4432,
+    "stdoutSummary": "\n> omnisight@0.0.0 build\n> tsc -b && vite build\n\n\u001b[36mvite v8.3.4 \u001b[32mbuilding client environment for production...\u001b[36m\u001b[39m\ntransforming...\n\u001b[32m✓\u001b[0m 70 modules transformed.\nrendering chunks...\ncomputing gzip size...\n\u001b[2mdist/\u001b[0m\u001b[32mindex.html                 \u001b[0m\u001b[1;2m  1.13 kB\u001b[0m\u001b[2m │ gzip:   0.58 kB\u001b[0m\n\u001b[2mdist/\u001b[0m\u001b[2massets/\u001b[0m\u001b[35mindex-BV-Lr8FH.css  \u001b[0m\u001b[1;2m 54.91 kB\u001b[0m\u001b[2m │ gzip:   9.70 kB\u001b[0m\n\u001b[2mdist/\u001b[0m\u001b[2massets/\u001b[0m\u001b[36mindex-BaNHYUBU.js   \u001b[0m\u001b[1;2m466.67 kB\u001b[0m\u001b[2m │ gzip: 127.20 kB\u001b[0m\n\n\u001b[32m✓ built in 103ms\u001b[39m\n",
+    "stderrSummary": ""
+  },
+  "visualValidation": {
+    "passed": true,
+    "verificationStatus": "passed",
+    "defectCategory": "product-image-distortion",
+    "route": "/products?defect=product-image-distortion",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "cleanBaselineMetric": {
+      "imageRenderedWidth": 265,
+      "imageRenderedHeight": 265,
+      "imageNaturalWidth": 800,
+      "imageNaturalHeight": 533,
+      "mediaRenderedHeight": 265,
+      "isDistorted": false
+    },
+    "repairedMetric": {
+      "objectFit": "cover",
+      "transform": "none",
+      "renderedWidth": 265,
+      "renderedHeight": 198.75,
+      "renderedAspectRatio": 1.33,
+      "mediaHeight": "198.75px"
+    },
+    "checks": [
+      {
+        "name": "image-object-fit",
+        "expected": "cover",
+        "actual": "cover",
+        "passed": true,
+        "details": "Computed object-fit: cover"
+      },
+      {
+        "name": "image-transform-identity",
+        "expected": "none or non-distorting",
+        "actual": "none",
+        "passed": true,
+        "details": "Computed transform: none"
+      },
+      {
+        "name": "media-container-height",
+        "expected": "!= 380px",
+        "actual": "198.75px",
+        "passed": true,
+        "details": "Computed media height: 198.75px"
+      }
+    ],
+    "failureReasons": [],
+    "assertionSummary": "Product image distortion resolved: object-fit is cover, aspect ratio is 1.33, media height is 198.75px.",
+    "unrelatedRegressionsDetected": false,
+    "beforeScreenshotPath": "/Users/ajaykowkuntla/Desktop/ OmniSight/artifacts/visual-evidence/run-2026-10-13T17-36-08-002Z/product-image-distortion/baseline.png",
+    "afterScreenshotPath": "/Users/ajaykowkuntla/Desktop/ OmniSight/artifacts/repair-executions/v2-commit-job-1793648238733/post_repair.png",
+    "resultJsonPath": "/Users/ajaykowkuntla/Desktop/ OmniSight/artifacts/repair-executions/v2-commit-job-1793648238733/verification-result.json"
+  },
+  "cleanupStatus": {
+    "cleaned": true,
+    "worktreeRemoved": true,
+    "branchRemoved": false,
+    "branchPreserved": true
+  },
+  "branch": "omnisight-repair/v2-commit-job-1793648238733",
+  "commitSha": "2b1da3701f3dedbb1c99b2505fa26e5322540c1c",
+  "commit_sha": "2b1da3701f3dedbb1c99b2505fa26e5322540c1c"
+}

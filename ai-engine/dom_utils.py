@@ -181,13 +181,58 @@ def filter_dom(
     return "\n".join(lines)
 
 
+class _TextExtractor(HTMLParser):
+    """Safely extracts visible text content without scripts, styles, or hidden tags."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.text_parts = []
+        self._ignore_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in _IGNORED_TAGS:
+            self._ignore_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() in _IGNORED_TAGS and self._ignore_depth > 0:
+            self._ignore_depth -= 1
+
+    def handle_data(self, data):
+        if self._ignore_depth == 0:
+            cleaned = " ".join(data.split())
+            if cleaned:
+                self.text_parts.append(cleaned)
+
+
+def extract_visible_text_summary(dom: str, max_chars: int = 500) -> str:
+    """Extract visible non-script text from DOM as safe fallback."""
+    if not dom or not isinstance(dom, str) or not dom.strip():
+        return ""
+    parser = _TextExtractor()
+    try:
+        parser.feed(dom)
+        parser.close()
+    except Exception:
+        pass
+    combined = " ".join(parser.text_parts)
+    if len(combined) > max_chars:
+        return combined[:max_chars].rstrip() + "..."
+    return combined
+
+
 def prepare_dom_context(dom: Optional[str]) -> Optional[str]:
     """Prepare a DOM snippet for the prompt.
 
-    Returns the filtered excerpt, or the original snippet when it contains no
-    interactive elements (so text-only context is not lost), or None when
-    there is no snippet at all.
+    Returns the filtered interactive excerpt, or a sanitized visible text
+    summary when no interactive elements are present (preventing raw-DOM leakage),
+    or None when there is no snippet at all.
     """
     if not dom or not dom.strip():
         return None
-    return filter_dom(dom) or dom
+    filtered = filter_dom(dom)
+    if filtered:
+        return filtered
+
+    # Safe fallback: extract visible text only instead of returning raw unparsed HTML
+    text_summary = extract_visible_text_summary(dom)
+    return text_summary if text_summary else None
