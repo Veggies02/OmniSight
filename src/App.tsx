@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Outlet } from "react-router-dom";
+import { ScrollToTop } from "./components/ScrollToTop";
 import { CartProvider } from "./context/CartContext";
 import { DefectProvider } from "./context/DefectContext";
 import { OmniSightProvider } from "./context/OmniSightContext";
@@ -41,6 +42,7 @@ export function App() {
     <OmniSightProvider>
       <CartProvider>
         <BrowserRouter>
+          <ScrollToTop />
           <DefectProvider>
             <Routes>
               {/* OmniSight Platform Dashboard Routes */}

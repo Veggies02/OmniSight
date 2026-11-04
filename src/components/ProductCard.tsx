@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { Product } from "../data/products";
 import { useCart } from "../hooks/useCart";
 import { useDefects } from "../hooks/useDefects";
+import { handleImageError } from "../utils/imageFallbacks";
 
 interface ProductCardProps {
   product: Product;
@@ -62,12 +63,16 @@ export function ProductCard({ product }: ProductCardProps) {
           alt={product.name}
           className="product-image"
           loading="lazy"
+          width={800}
+          height={800}
+          onError={(e) => handleImageError(e, product.category)}
         />
         <span className="product-category-tag">{product.category}</span>
       </Link>
 
       <div className="product-card-body">
         <div className="product-meta">
+          <span className="sr-only">Category: {product.category}</span>
           <span className="product-rating" aria-label={`Rated ${product.rating} out of 5 stars`}>
             ★ {product.rating.toFixed(1)}
             <span className="review-count">({product.reviewCount})</span>

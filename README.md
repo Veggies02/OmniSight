@@ -173,7 +173,8 @@ flowchart TD
 * **Lead Engineer**: Ajay Kowkuntla
 * **Status**: Implemented & Verified
 * **Functionality**:
-  * Complete, functional e-commerce storefront with catalog browsing, dynamic routing (`/products/:id`), shopping cart state persistence (`CartContext`), and checkout workflows.
+  * Complete, functional e-commerce storefront with catalog browsing, dynamic routing (`/products/:id`), shopping cart state persistence (`CartContext`), integer-cents monetary precision, and responsive checkout.
+  * Fluid responsive architecture: CSS Grid auto-fill layouts (`repeat(auto-fill, minmax(260px, 1fr))`) adapting seamlessly from desktop (1440×900, 4-column) to tablet (768×1024, 2-column) and mobile (390×844, single-column fluid layout with zero horizontal overflow).
   * Controlled Defect-Injection Framework (`src/context/DefectContext.tsx`) allowing deterministic activation of 4 distinct visual bug scenarios via URL query parameters (`?defect=<category>`).
   * Strict isolation: defect injection is disabled by default in production builds, isolated to scoped styling classes, fails safely on unknown IDs, and does not corrupt application business logic or state.
 
@@ -458,7 +459,7 @@ OmniSight/
 ## 10. Getting Started & Installation Guide
 
 ### Prerequisites
-- **Node.js**: v18.0.0 or later (v20+ LTS recommended)
+- **Node.js**: v20.19.0+ or v22.12.0+ (specified in `package.json` engines `^20.19.0 || >=22.12.0` per Vite 8)
 - **npm**: v9.0.0 or later
 - **Python**: v3.11 or later
 - **Git**: v2.30+ (supporting `git worktree`)

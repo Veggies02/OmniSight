@@ -1,8 +1,16 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useCart } from "../hooks/useCart";
+import { computeLineTotal } from "../utils/currency";
+import { handleImageError } from "../utils/imageFallbacks";
 
 export function Cart() {
   const { items, totalUnits, subtotal, updateQuantity, removeItem, clearCart } = useCart();
+  const hasOutOfStockItems = items.some((item) => !item.product.inStock);
+
+  useEffect(() => {
+    document.title = "Shopping Cart | OmniShop";
+  }, []);
 
   if (items.length === 0) {
     return (
@@ -62,7 +70,7 @@ export function Cart() {
 
           <div className="cart-items-list">
             {items.map(({ product, quantity }) => {
-              const lineTotal = product.price * quantity;
+              const lineTotal = computeLineTotal(product.price, quantity);
 
               return (
                 <div key={product.id} className="cart-item-row" data-product-id={product.id}>
@@ -71,6 +79,10 @@ export function Cart() {
                       src={product.image}
                       alt={product.name}
                       className="cart-item-image"
+                      width={64}
+                      height={64}
+                      loading="lazy"
+                      onError={(e) => handleImageError(e, product.category)}
                     />
                     <div>
                       <span className="cart-item-cat">{product.category}</span>
@@ -80,6 +92,11 @@ export function Cart() {
                       <span className="cart-item-mobile-price">
                         ${product.price.toFixed(2)} each
                       </span>
+                      {!product.inStock && (
+                        <span className="stock-indicator out-of-stock" style={{ display: "inline-block", marginTop: "0.25rem", fontSize: "0.75rem" }}>
+                          Out of Stock
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -104,7 +121,8 @@ export function Cart() {
                         type="button"
                         className="qty-btn-sm"
                         onClick={() => updateQuantity(product.id, quantity + 1)}
-                        aria-label={`Increase quantity of ${product.name}`}
+                        aria-label={product.inStock ? `Increase quantity of ${product.name}` : `${product.name} is out of stock`}
+                        disabled={!product.inStock}
                       >
                         +
                       </button>
@@ -161,10 +179,23 @@ export function Cart() {
             </div>
 
             <p className="summary-note">
-              Taxes calculated during mock checkout. Free standard shipping on all demo orders.
+              Free standard shipping on all demo orders. No additional taxes or fees applied.
             </p>
 
-            <Link to="/checkout" className="btn btn-primary btn-lg btn-block">
+            {hasOutOfStockItems && (
+              <p className="cart-stock-alert" role="alert" style={{ color: "var(--color-error, #b91c1c)", fontSize: "0.85rem", marginBottom: "1rem" }}>
+                ⚠️ Some items in your cart are currently out of stock. Please remove them before checking out.
+              </p>
+            )}
+
+            <Link
+              to="/checkout"
+              className={`btn btn-primary btn-lg btn-block ${hasOutOfStockItems ? "btn-disabled" : ""}`}
+              aria-disabled={hasOutOfStockItems}
+              onClick={(e) => {
+                if (hasOutOfStockItems) e.preventDefault();
+              }}
+            >
               Proceed to Checkout →
             </Link>
           </div>

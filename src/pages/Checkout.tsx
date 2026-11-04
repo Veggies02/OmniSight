@@ -1,10 +1,13 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useCart } from "../hooks/useCart";
+import { computeLineTotal } from "../utils/currency";
+import { handleImageError } from "../utils/imageFallbacks";
 
 export function Checkout() {
   const { items, totalUnits, subtotal, clearCart } = useCart();
   const [isOrdered, setIsOrdered] = useState(false);
+  const [confirmationNumber, setConfirmationNumber] = useState<string>("");
   const [formData, setFormData] = useState({
     fullName: "Alex Rivera",
     email: "alex.rivera@example.com",
@@ -14,6 +17,12 @@ export function Checkout() {
   });
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    document.title = "Checkout | OmniShop";
+  }, []);
+
+  const hasOutOfStockItems = items.some((item) => !item.product.inStock);
 
   const validateField = (name: string, value: string): string => {
     switch (name) {
@@ -68,7 +77,8 @@ export function Checkout() {
   const handleConfirmDemoOrder = (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitted(true);
-    if (items.length === 0 || hasErrors) return;
+    if (items.length === 0 || hasErrors || hasOutOfStockItems) return;
+    setConfirmationNumber(`OS-DEMO-${Math.floor(100000 + Math.random() * 900000)}`);
     setIsOrdered(true);
     clearCart();
   };
@@ -87,7 +97,7 @@ export function Checkout() {
           <div className="order-details-box">
             <div className="spec-row">
               <span className="spec-label">Confirmation Number</span>
-              <span className="spec-value" data-testid="confirmation-number">OS-DEMO-{Math.floor(100000 + Math.random() * 900000)}</span>
+              <span className="spec-value" data-testid="confirmation-number">{confirmationNumber || "OS-DEMO-100000"}</span>
             </div>
             <div className="spec-row">
               <span className="spec-label">Confirmation Email</span>
@@ -265,7 +275,18 @@ export function Checkout() {
               UI testing. No payment gateway or credit card collection is connected.
             </div>
 
-            <button type="submit" className="btn btn-primary btn-lg btn-block" data-testid="place-order-btn">
+            {hasOutOfStockItems && (
+              <p className="cart-stock-alert" role="alert" style={{ color: "var(--color-error, #b91c1c)", fontSize: "0.85rem", marginBottom: "1rem" }}>
+                ⚠️ Your order contains out-of-stock items. Please return to your cart and remove them to complete checkout.
+              </p>
+            )}
+
+            <button
+              type="submit"
+              className={`btn btn-primary btn-lg btn-block ${hasOutOfStockItems ? "btn-disabled" : ""}`}
+              data-testid="place-order-btn"
+              disabled={hasOutOfStockItems}
+            >
               Place Demo Order (${subtotal.toFixed(2)})
             </button>
           </form>
@@ -283,15 +304,24 @@ export function Checkout() {
                     src={product.image}
                     alt={product.name}
                     className="checkout-item-thumb"
+                    width={48}
+                    height={48}
+                    loading="lazy"
+                    onError={(e) => handleImageError(e, product.category)}
                   />
                   <div className="checkout-item-meta">
                     <span className="checkout-item-name">{product.name}</span>
                     <span className="checkout-item-sub">
                       Qty: {quantity} × ${product.price.toFixed(2)}
                     </span>
+                    {!product.inStock && (
+                      <span className="stock-indicator out-of-stock" style={{ display: "inline-block", fontSize: "0.75rem" }}>
+                        Out of stock
+                      </span>
+                    )}
                   </div>
                   <span className="checkout-item-total">
-                    ${(product.price * quantity).toFixed(2)}
+                    ${computeLineTotal(product.price, quantity).toFixed(2)}
                   </span>
                 </div>
               ))}

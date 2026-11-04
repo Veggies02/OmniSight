@@ -1,5 +1,6 @@
 import React, { createContext, useReducer, useEffect, useMemo } from "react";
 import { products, type Product } from "../data/products";
+import { computeSubtotal } from "../utils/currency";
 
 export interface CartItem {
   product: Product;
@@ -74,11 +75,16 @@ function cartReducer(state: CartState, action: CartAction): CartState {
         };
       }
       return {
-        items: state.items.map((item) =>
-          item.product.id === action.productId
-            ? { ...item, quantity: validQty }
-            : item
-        ),
+        items: state.items.map((item) => {
+          if (item.product.id === action.productId) {
+            // Out of stock items cannot have their quantity increased
+            if (!item.product.inStock && validQty > item.quantity) {
+              return item;
+            }
+            return { ...item, quantity: validQty };
+          }
+          return item;
+        }),
       };
     }
 
@@ -158,10 +164,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [state.items]);
 
   const subtotal = useMemo(() => {
-    return state.items.reduce(
-      (sum, item) => sum + item.product.price * item.quantity,
-      0
-    );
+    return computeSubtotal(state.items);
   }, [state.items]);
 
   const addItem = (product: Product, quantity = 1) => {

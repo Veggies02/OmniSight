@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { products } from "../data/products";
 import { useCart } from "../hooks/useCart";
+import { handleImageError } from "../utils/imageFallbacks";
 
 export function ProductDetails() {
   const { id } = useParams<{ id: string }>();
@@ -9,6 +10,14 @@ export function ProductDetails() {
   const { addItem } = useCart();
   const [quantity, setQuantity] = useState(1);
   const [addedNotice, setAddedNotice] = useState(false);
+
+  useEffect(() => {
+    if (product) {
+      document.title = `${product.name} | OmniShop`;
+    } else {
+      document.title = "Product Not Found | OmniShop";
+    }
+  }, [product]);
 
   if (!product) {
     return (
@@ -32,7 +41,8 @@ export function ProductDetails() {
 
   const handleAddToCart = () => {
     if (!product.inStock) return;
-    addItem(product, quantity);
+    const safeQty = Math.max(1, Math.min(99, Math.floor(quantity)));
+    addItem(product, safeQty);
     setAddedNotice(true);
     setTimeout(() => {
       setAddedNotice(false);
@@ -58,6 +68,9 @@ export function ProductDetails() {
               src={product.image}
               alt={product.name}
               className="detail-image"
+              width={800}
+              height={800}
+              onError={(e) => handleImageError(e, product.category)}
             />
           </div>
         </div>
@@ -78,7 +91,7 @@ export function ProductDetails() {
 
           <div className="detail-price-box">
             <span className="detail-price">${product.price.toFixed(2)}</span>
-            <span className="detail-vat">Taxes included • Free shipping over $50</span>
+            <span className="detail-vat">Free standard shipping on all demo orders • Taxes included</span>
           </div>
 
           <div className="detail-description">
@@ -119,8 +132,9 @@ export function ProductDetails() {
                 <button
                   type="button"
                   className="qty-btn"
-                  onClick={() => setQuantity((q) => q + 1)}
+                  onClick={() => setQuantity((q) => Math.min(99, q + 1))}
                   aria-label="Increase quantity"
+                  disabled={quantity >= 99}
                 >
                   +
                 </button>
@@ -130,7 +144,11 @@ export function ProductDetails() {
                 type="button"
                 className="btn btn-primary btn-lg detail-add-btn"
                 onClick={handleAddToCart}
-                aria-label={`Add ${quantity} of ${product.name} to cart`}
+                aria-label={
+                  addedNotice
+                    ? `Added ${quantity} of ${product.name} to cart!`
+                    : `Add ${quantity} of ${product.name} to cart`
+                }
               >
                 {addedNotice ? "✓ Added to Cart!" : "Add to Cart"}
               </button>
