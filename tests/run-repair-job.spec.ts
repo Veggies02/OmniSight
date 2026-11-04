@@ -6,6 +6,7 @@ import {
   loadAndValidateProposal,
   runRepairJob,
 } from '../scripts/run-repair-job';
+import { WorktreeManager } from '../scripts/repair/worktree-manager';
 import { computeFileHash } from '../scripts/vlm/source-path-security';
 
 test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
@@ -279,7 +280,7 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
           repoRoot
         );
         expect(result.success).toBe(false);
-        expect(result.report.finalState).toBe('REJECTED');
+        expect(result.report.finalState).toBe('UNSUPPORTED');
         expect(result.report.failureReason).toContain("not found in registered patch catalog");
       } finally {
         if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
@@ -323,6 +324,7 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
         if (fs.existsSync(reportDir)) {
           fs.rmSync(reportDir, { recursive: true, force: true });
         }
+        await (new WorktreeManager(repoRoot)).cleanupWorktree(jobId);
       }
     });
 
@@ -392,6 +394,7 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
         if (fs.existsSync(reportDir)) {
           fs.rmSync(reportDir, { recursive: true, force: true });
         }
+        await (new WorktreeManager(repoRoot)).cleanupWorktree(jobId);
       }
     });
   });

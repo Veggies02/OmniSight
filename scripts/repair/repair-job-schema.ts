@@ -14,14 +14,15 @@ export type RepairJobState =
   | 'PASSED'
   | 'FAILED'
   | 'REJECTED'
+  | 'UNSUPPORTED'
   | 'CLEANUP_REQUIRED';
 
 /**
  * Valid allowed state transitions.
  */
 export const VALID_REPAIR_TRANSITIONS: Record<RepairJobState, RepairJobState[]> = {
-  PENDING: ['VALIDATING_APPROVAL', 'REJECTED', 'FAILED'],
-  VALIDATING_APPROVAL: ['PREPARING_WORKTREE', 'REJECTED', 'FAILED'],
+  PENDING: ['VALIDATING_APPROVAL', 'REJECTED', 'UNSUPPORTED', 'FAILED'],
+  VALIDATING_APPROVAL: ['PREPARING_WORKTREE', 'REJECTED', 'UNSUPPORTED', 'FAILED'],
   PREPARING_WORKTREE: ['PATCH_APPLIED', 'FAILED', 'CLEANUP_REQUIRED'],
   PATCH_APPLIED: ['RUNNING_TESTS', 'FAILED', 'CLEANUP_REQUIRED'],
   RUNNING_TESTS: ['VISUAL_VALIDATION', 'FAILED', 'CLEANUP_REQUIRED'],
@@ -29,6 +30,7 @@ export const VALID_REPAIR_TRANSITIONS: Record<RepairJobState, RepairJobState[]> 
   PASSED: ['CLEANUP_REQUIRED'],
   FAILED: ['CLEANUP_REQUIRED'],
   REJECTED: [], // Terminal
+  UNSUPPORTED: [], // Terminal
   CLEANUP_REQUIRED: ['PASSED', 'FAILED'], // Final
 };
 
@@ -126,9 +128,13 @@ export interface RepairExecutionReport {
     cleaned: boolean;
     worktreeRemoved: boolean;
     branchRemoved: boolean;
+    branchPreserved?: boolean;
     notes?: string;
   };
   failureReason?: string;
+  branch?: string;
+  commitSha?: string;
+  commit_sha?: string;
 }
 
 /**

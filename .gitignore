@@ -24,6 +24,10 @@ playwright-report/
 test-results/
 artifacts/
 
+# Evaluation Bundle Binaries & Archives
+*.zip
+omnisight-yuvraj-evaluation/**/*.png
+
 # Editor & OS files
 .vscode/*
 !.vscode/extensions.json

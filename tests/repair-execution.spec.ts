@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { RepairExecutionService, resolveNpmCommand, resolveNpxCommand } from '../scripts/repair/repair-execution-service';
 import { RepairJobContract, validateRepairJobContract } from '../scripts/repair/repair-job-schema';
 import { WorktreeManager } from '../scripts/repair/worktree-manager';
@@ -11,6 +13,9 @@ import {
   normalizeLineEndings,
 } from '../scripts/repair/patch-registry';
 import { computeFileHash } from '../scripts/vlm/source-path-security';
+import { runRepairJob } from '../scripts/run-repair-job';
+
+const execFileAsync = promisify(execFile);
 
 test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', () => {
   const repoRoot = process.cwd();
@@ -142,14 +147,20 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     };
 
     const report = await service.executeRepairJob(contract);
-    expect(report.finalState).toBe('REJECTED');
-    expect(report.failureReason).toContain("Registered patch 'unknown-patch-999' not found");
+    expect(report.finalState).toBe('UNSUPPORTED');
+    expect(report.failureReason).toContain("No registered patch available for scenario 'product-image-distortion' (patchId: 'unknown-patch-999')");
+    expect(report.patchApplication).toBeUndefined();
+    expect(report.buildExecution).toBeUndefined();
+    expect(report.testExecution).toBeUndefined();
+    const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', contract.jobId);
+    expect(fs.existsSync(worktreePath)).toBe(false);
   });
 
   test('Rejects invalid state machine transitions', async () => {
     const service = new RepairExecutionService(repoRoot);
     expect(() => service.transitionState('PENDING', 'PASSED')).toThrow(/Invalid state transition/);
     expect(() => service.transitionState('REJECTED', 'RUNNING_TESTS')).toThrow(/Invalid state transition/);
+    expect(() => service.transitionState('UNSUPPORTED', 'RUNNING_TESTS')).toThrow(/Invalid state transition/);
   });
 
   test('Executes end-to-end isolated repair in temporary worktree without modifying main working tree', async () => {
@@ -197,6 +208,15 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     expect(report.visualValidation?.passed).toBe(true);
     expect(report.cleanupStatus.cleaned).toBe(true);
     expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+    expect(report.cleanupStatus.branchRemoved).toBe(false);
+    expect(report.cleanupStatus.branchPreserved).toBe(true);
+    expect(report.branch).toBe(`omnisight-repair/${jobId}`);
+    expect(report.commitSha).toBeDefined();
+    expect(report.commitSha?.length).toBe(40);
+    expect(report.commit_sha).toBe(report.commitSha);
+
+    // Clean up created branch for test isolation
+    await (new WorktreeManager(repoRoot)).cleanupWorktree(jobId);
 
     // 2. Verify machine-readable report was persisted
     const savedReportPath = path.join(repoRoot, 'artifacts', 'repair-executions', jobId, 'repair_execution_report.json');
@@ -673,6 +693,9 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     expect(report.visualValidation?.repairedMetric?.renderedAspectRatio).toBeGreaterThan(1.2);
     expect(report.visualValidation?.beforeScreenshotPath).toBeDefined();
     expect(fs.existsSync(report.visualValidation!.beforeScreenshotPath!)).toBe(true);
+
+    // Clean up created branch for test isolation
+    await (new WorktreeManager(repoRoot)).cleanupWorktree(jobId);
   });
 
   test('Real Browser Visual Verification: accurately flags failure when rendered visual metrics fail assertion', async () => {
@@ -794,6 +817,9 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     expect(report.testExecution?.passedTests).toBeGreaterThan(0);
     expect(report.cleanupStatus.cleaned).toBe(true);
     expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+    expect(report.cleanupStatus.branchRemoved).toBe(false);
+    expect(report.cleanupStatus.branchPreserved).toBe(true);
+    await (new WorktreeManager(repoRoot)).cleanupWorktree(jobId);
   });
 
   test('Required Tests: failing required test fails the repair job and cleans up worktree', async () => {
@@ -903,6 +929,8 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     expect(report.failureReason).toContain('forbidden shell metacharacters');
     expect(report.cleanupStatus.cleaned).toBe(true);
     expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+    expect(report.cleanupStatus.branchRemoved).toBe(true);
+    expect(report.cleanupStatus.branchPreserved).toBe(false);
   });
 
   test('Required Tests: executes with timeout and safely cleans up upon timeout', async () => {
@@ -917,5 +945,258 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     expect(outcome.passed).toBe(false);
     expect(outcome.error).toContain('timed out');
     expect(outcome.testExecution?.exitCode).toBe(124);
+  });
+
+  test('v2 Workflow: Explicit UNSUPPORTED finalState when scenario has no registered patch', async () => {
+    const fakeProposalDir = path.join(repoRoot, 'artifacts', 'test-unsupported');
+    fs.mkdirSync(fakeProposalDir, { recursive: true });
+    const fakeProposalPath = path.join(fakeProposalDir, 'unsupported-proposal.json');
+
+    const fakeProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-unsupported-test',
+      scenarioId: 'unsupported-feature-break',
+      diagnosisRef: {
+        diagnosisStatus: 'diagnosed',
+        model: 'gemini-1.5-pro',
+        provider: 'google',
+        primaryDefectCategory: 'unknown',
+        reportedConfidence: 0.9,
+      },
+      defectCategory: 'unknown',
+      severity: 'medium',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+        componentOrSelector: '.unknown-defect',
+        excerpt: {
+          filePath: 'src/index.css',
+          startLine: 1,
+          endLine: 5,
+          content: '/* unknown */',
+          sha256: currentCssHash,
+        },
+        evidence: [],
+        uncertaintyNotes: [],
+      },
+      suspectedRootCause: 'Unknown defect pattern without registered fix',
+      evidenceExplanation: ['No deterministic patch available'],
+      proposedCorrection: {
+        type: 'css_rule_modification',
+        targetSelectorOrComponent: '.unknown-defect',
+        currentCode: 'color: red;',
+        proposedCode: 'color: blue;',
+        diffSummary: 'Fix color',
+      },
+      expectedVisualImprovement: 'Improve contrast',
+      confidence: 'medium',
+      confidenceScore: 0.8,
+      potentialRisks: [],
+      requiredValidationTests: ['npm run build'],
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      createdAt: new Date().toISOString(),
+      isMock: true,
+    };
+    fs.writeFileSync(fakeProposalPath, JSON.stringify(fakeProposal, null, 2), 'utf-8');
+
+    const jobId = `job-unsupported-${Date.now()}`;
+    const runResult = await runRepairJob([
+      `--proposal=${fakeProposalPath}`,
+      `--job-id=${jobId}`,
+    ], repoRoot);
+
+    expect(runResult.success).toBe(false);
+    expect(runResult.report.finalState).toBe('UNSUPPORTED');
+    expect(runResult.report.failureReason).toContain('No registered patch found for defect category');
+    expect(runResult.report.branch).toBeUndefined();
+    expect(runResult.report.commitSha).toBeUndefined();
+    expect(runResult.report.commit_sha).toBeUndefined();
+
+    // Verify no worktree directory was created
+    const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', jobId);
+    expect(fs.existsSync(worktreePath)).toBe(false);
+
+    // Verify report was persisted to artifacts
+    expect(fs.existsSync(runResult.reportPath)).toBe(true);
+
+    // Cleanup fake proposal file
+    fs.rmSync(fakeProposalDir, { recursive: true, force: true });
+  });
+
+  test('v2 Workflow: Validated repair creates Git commit, preserves local branch, and outputs metadata', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const worktreeManager = new WorktreeManager(repoRoot);
+
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-v2-commit-test',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'release-architect@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      reviewNotes: 'Approved for v2 worktree commit test.',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `v2-commit-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+
+    try {
+      // 1. Verify execution passed
+      expect(report.finalState).toBe('PASSED');
+
+      // 2. Verify branch preservation
+      const expectedBranch = `omnisight-repair/${jobId}`;
+      expect(report.branch).toBe(expectedBranch);
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+      expect(report.cleanupStatus.branchRemoved).toBe(false);
+      expect(report.cleanupStatus.branchPreserved).toBe(true);
+
+      // Verify worktree folder was deleted from disk
+      const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', jobId);
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      // 3. Verify git commit creation and commit SHA
+      expect(report.commitSha).toBeDefined();
+      expect(report.commit_sha).toBe(report.commitSha);
+      expect(report.commitSha).toMatch(/^[0-9a-f]{40}$/);
+
+      // 4. Verify commit exists in git repository on the preserved branch
+      const branchCommitSha = await worktreeManager.getBranchCommit(expectedBranch);
+      expect(branchCommitSha).toBe(report.commitSha);
+
+      // 5. Verify commit author metadata
+      const { stdout: authorLog } = await execFileAsync('git', ['log', '-1', '--format=%an <%ae>', report.commitSha!], { cwd: repoRoot });
+      expect(authorLog.trim()).toBe('OmniSight Repair Agent <repair-agent@omnisight.ai>');
+
+      // 6. Verify commit message structure
+      const { stdout: messageLog } = await execFileAsync('git', ['log', '-1', '--format=%B', report.commitSha!], { cwd: repoRoot });
+      expect(messageLog).toContain('fix(repair): apply verified patch');
+      expect(messageLog).toContain(`Job: ${jobId}`);
+
+      // 7. Verify changed files in the commit
+      const { stdout: diffFiles } = await execFileAsync('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', report.commitSha!], { cwd: repoRoot });
+      const filesInCommit = diffFiles.trim().split('\n').filter(Boolean);
+      expect(filesInCommit).toEqual(['src/index.css']);
+    } finally {
+      // Cleanup the preserved branch
+      await worktreeManager.cleanupWorktree(jobId);
+    }
+  });
+
+  test('v2 Workflow: WorktreeManager.commitChanges rejects committing on clean tree', async () => {
+    const worktreeManager = new WorktreeManager(repoRoot);
+    const jobId = `clean-tree-job-${Date.now()}`;
+    const worktreeInfo = await worktreeManager.createWorktree(jobId);
+
+    try {
+      await expect(
+        worktreeManager.commitChanges(worktreeInfo.worktreePath, 'should fail on clean tree')
+      ).rejects.toThrow(/Cannot commit changes: Working tree has no unstaged or staged changes/);
+    } finally {
+      await worktreeManager.cleanupWorktree(jobId);
+    }
+  });
+
+  test('v2 Workflow: Validation failure deletes both worktree and branch without creating a commit', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const worktreeManager = new WorktreeManager(repoRoot);
+
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-v2-fail-test',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `v2-fail-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    // Override evaluateVisualRepair to simulate validation failure
+    const originalEvaluate = (service as any).evaluateVisualRepair.bind(service);
+    (service as any).evaluateVisualRepair = async () => ({
+      passed: false,
+      defectCategory: 'product-image-distortion',
+      route: '/products',
+      viewport: { width: 1280, height: 800 },
+      assertionSummary: 'Simulated visual validation failure for v2 test',
+      unrelatedRegressionsDetected: false,
+    });
+
+    try {
+      const report = await service.executeRepairJob(contract);
+      expect(report.finalState).toBe('FAILED');
+      expect(report.branch).toBeUndefined();
+      expect(report.commitSha).toBeUndefined();
+      expect(report.commit_sha).toBeUndefined();
+
+      // Verify worktree folder removed
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+      expect(report.cleanupStatus.branchRemoved).toBe(true);
+      expect(report.cleanupStatus.branchPreserved).toBe(false);
+
+      // Verify branch does not exist in git
+      const branchExists = await worktreeManager.verifyCommitExists(`omnisight-repair/${jobId}`);
+      expect(branchExists).toBe(false);
+    } finally {
+      (service as any).evaluateVisualRepair = originalEvaluate;
+    }
+  });
+
+  test('v2 Workflow: WorktreeManager.cleanupWorktree defaults to removing branch for backward compatibility', async () => {
+    const worktreeManager = new WorktreeManager(repoRoot);
+    const jobId = `compat-job-${Date.now()}`;
+    await worktreeManager.createWorktree(jobId);
+
+    const branchName = `omnisight-repair/${jobId}`;
+    expect(await worktreeManager.verifyCommitExists(branchName)).toBe(true);
+
+    // Default cleanupWorktree call (no options) must delete branch
+    const cleanupResult = await worktreeManager.cleanupWorktree(jobId);
+    expect(cleanupResult.worktreeRemoved).toBe(true);
+    expect(cleanupResult.branchRemoved).toBe(true);
+    expect(cleanupResult.branchPreserved).toBe(false);
+    expect(await worktreeManager.verifyCommitExists(branchName)).toBe(false);
   });
 });

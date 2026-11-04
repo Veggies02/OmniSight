@@ -57,6 +57,8 @@ export interface BackendRepairResult {
   duration_seconds?: number;
   stdout_tail?: string;
   stderr_tail?: string;
+  branch?: string;
+  commit_sha?: string;
 }
 
 export interface BackendArtifactRef {
@@ -96,6 +98,132 @@ export interface BackendPullRequestCreateRequest {
   labels?: string[];
 }
 
+// ============================================================================
+// Multi-Scenario V2 Types (agreed with Backend V2 contract)
+// ============================================================================
+
+export type ScenarioReviewStatus = "pending_review" | "approved" | "rejected";
+
+export type ScenarioRepairState =
+  | "not_started"
+  | "running"
+  | "passed"
+  | "failed"
+  | "rejected"
+  | "unsupported"
+  | "error";
+
+export type ScenarioPRStatus = "not_started" | "created" | "failed";
+
+export type ScenarioOutcome =
+  | "all_passed"
+  | "partial"
+  | "all_failed"
+  | "all_rejected"
+  | "no_repairs_needed";
+
+export interface ScenarioSummary {
+  total: number;
+  pending_review: number;
+  approved: number;
+  repairing: number;
+  passed: number;
+  failed: number;
+  rejected: number;
+  unsupported: number;
+  prs_created: number;
+}
+
+export interface ScenarioDiagnosis {
+  provider: string;
+  model: string;
+  status: string;
+  primaryDefectCategory?: string;
+  reportedConfidence?: number;
+  [key: string]: any;
+}
+
+export interface ScenarioProposal {
+  schemaVersion?: string;
+  proposalId?: string;
+  scenarioId?: string;
+  defectCategory?: string;
+  suspectedRootCause?: string;
+  expectedVisualImprovement?: string;
+  proposedCorrection?: Record<string, any>;
+  requiredValidationTests?: string[];
+  [key: string]: any;
+}
+
+export interface ScenarioApproval {
+  reviewed_by: string;
+  reviewed_at: string;
+}
+
+export interface ScenarioRepairResult {
+  outcome: "passed" | "failed" | "rejected" | "unsupported" | "error" | (string & {});
+  passed?: boolean;
+  job_id?: string;
+  message?: string;
+  exit_code?: number;
+  final_state?: string;
+  failure_reason?: string;
+  approved?: boolean;
+  build_passed?: boolean;
+  test_passed?: boolean;
+  visual_passed?: boolean;
+  patch_id?: string;
+  proposal_id?: string;
+  cleanup?: Record<string, any>;
+  proposal_path?: string;
+  report_path?: string;
+  duration_seconds?: number;
+  stdout_tail?: string;
+  stderr_tail?: string;
+  branch?: string;
+  commit_sha?: string;
+  [key: string]: any;
+}
+
+export interface ScenarioPullRequest {
+  pr_number: number;
+  url?: string;
+  pr_url?: string;
+  title?: string;
+  state?: string;
+  status?: string;
+  draft?: boolean;
+  is_draft?: boolean;
+  head_branch: string;
+  head_commit_sha?: string;
+  base_branch: string;
+  repository: string;
+  existing?: boolean;
+  created_at?: string;
+  [key: string]: any;
+}
+
+export interface ScenarioResponse {
+  scenario_id: string;
+  defect_category: string;
+  is_mock: boolean;
+  diagnosis: ScenarioDiagnosis;
+  proposal: ScenarioProposal | Record<string, any>;
+  review_status: ScenarioReviewStatus;
+  approval: ScenarioApproval | null;
+  repair_state: ScenarioRepairState;
+  repair_job_id: string;
+  repair: ScenarioRepairResult | null;
+  pr_status: ScenarioPRStatus;
+  pull_request: ScenarioPullRequest | null;
+}
+
+export interface CreateScenarioPullRequestPayload {
+  title?: string;
+  body?: string;
+  base_branch?: string;
+}
+
 export interface BackendJobResponse {
   job_id: string;
   website_url: string;
@@ -113,6 +241,10 @@ export interface BackendJobResponse {
   pull_request?: BackendPullRequestResponse;
   error?: string;
   artifacts: BackendArtifactRef[];
+  // v2 multi-scenario additions (per CONTRACT_V2_DRAFT.md)
+  summary?: ScenarioSummary;
+  outcome?: ScenarioOutcome | null;
+  scenarios?: ScenarioResponse[];
 }
 
 export class BackendRepairError extends Error {
@@ -307,6 +439,136 @@ export class BackendRepairClient {
   public async getPullRequest(jobId: string): Promise<BackendPullRequestResponse | null> {
     try {
       return await this.request<BackendPullRequestResponse>(`jobs/${encodeURIComponent(jobId)}/pr`);
+    } catch (err: unknown) {
+      if (err instanceof BackendRepairError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  // ============================================================================
+  // Multi-Scenario V2 API Methods (agreed with Backend V2 contract)
+  // ============================================================================
+
+  /**
+   * Retrieve list of scenarios for a job (v2)
+   * GET /jobs/{job_id}/scenarios
+   */
+  public async getJobScenarios(jobId: string): Promise<ScenarioResponse[]> {
+    const raw = await this.request<ScenarioResponse[] | { scenarios: ScenarioResponse[] }>(
+      `jobs/${encodeURIComponent(jobId)}/scenarios`
+    );
+    if (Array.isArray(raw)) {
+      return raw;
+    }
+    if (raw && typeof raw === "object" && Array.isArray((raw as any).scenarios)) {
+      return (raw as any).scenarios;
+    }
+    return [];
+  }
+
+  /**
+   * Retrieve a single scenario for a job (v2)
+   * GET /jobs/{job_id}/scenarios/{scenario_id}
+   */
+  public async getScenario(jobId: string, scenarioId: string): Promise<ScenarioResponse> {
+    return this.request<ScenarioResponse>(
+      `jobs/${encodeURIComponent(jobId)}/scenarios/${encodeURIComponent(scenarioId)}`
+    );
+  }
+
+  /**
+   * Record human review approval for a specific scenario (v2)
+   * POST /jobs/{job_id}/scenarios/{scenario_id}/approval
+   */
+  public async approveScenario(
+    jobId: string,
+    scenarioId: string,
+    reviewedBy: string = "reviewer"
+  ): Promise<ScenarioResponse> {
+    return this.request<ScenarioResponse>(
+      `jobs/${encodeURIComponent(jobId)}/scenarios/${encodeURIComponent(scenarioId)}/approval`,
+      {
+        method: "POST",
+        body: JSON.stringify({ reviewed_by: reviewedBy }),
+        requireAuth: true,
+      }
+    );
+  }
+
+  /**
+   * Record human review rejection for a specific scenario (v2)
+   * POST /jobs/{job_id}/scenarios/{scenario_id}/rejection
+   */
+  public async rejectScenario(
+    jobId: string,
+    scenarioId: string,
+    reviewedBy: string = "reviewer",
+    reason?: string
+  ): Promise<ScenarioResponse> {
+    const body: { reviewed_by: string; reason?: string } = { reviewed_by: reviewedBy };
+    if (reason !== undefined) {
+      body.reason = reason;
+    }
+    return this.request<ScenarioResponse>(
+      `jobs/${encodeURIComponent(jobId)}/scenarios/${encodeURIComponent(scenarioId)}/rejection`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        requireAuth: true,
+      }
+    );
+  }
+
+  /**
+   * Request repair execution for a specific scenario (v2)
+   * POST /jobs/{job_id}/scenarios/{scenario_id}/repair
+   */
+  public async executeScenarioRepair(
+    jobId: string,
+    scenarioId: string
+  ): Promise<BackendJobResponse | ScenarioResponse> {
+    return this.request<BackendJobResponse | ScenarioResponse>(
+      `jobs/${encodeURIComponent(jobId)}/scenarios/${encodeURIComponent(scenarioId)}/repair`,
+      {
+        method: "POST",
+        requireAuth: true,
+      }
+    );
+  }
+
+  /**
+   * Request server-side Draft Pull Request creation for an approved, verified scenario (v2)
+   * POST /jobs/{job_id}/scenarios/{scenario_id}/pr
+   */
+  public async createScenarioPullRequest(
+    jobId: string,
+    scenarioId: string,
+    request?: CreateScenarioPullRequestPayload | BackendPullRequestCreateRequest
+  ): Promise<ScenarioResponse | ScenarioPullRequest> {
+    return this.request<ScenarioResponse | ScenarioPullRequest>(
+      `jobs/${encodeURIComponent(jobId)}/scenarios/${encodeURIComponent(scenarioId)}/pr`,
+      {
+        method: "POST",
+        body: request ? JSON.stringify(request) : undefined,
+        requireAuth: true,
+      }
+    );
+  }
+
+  /**
+   * Fetch created Pull Request metadata for a specific scenario (v2)
+   * GET /jobs/{job_id}/scenarios/{scenario_id}/pr
+   */
+  public async getScenarioPullRequest(
+    jobId: string,
+    scenarioId: string
+  ): Promise<ScenarioPullRequest | null> {
+    try {
+      return await this.request<ScenarioPullRequest>(
+        `jobs/${encodeURIComponent(jobId)}/scenarios/${encodeURIComponent(scenarioId)}/pr`
+      );
     } catch (err: unknown) {
       if (err instanceof BackendRepairError && err.status === 404) {
         return null;
