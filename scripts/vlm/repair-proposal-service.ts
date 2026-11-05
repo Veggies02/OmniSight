@@ -14,6 +14,7 @@ import {
   validateAndResolveSourcePath,
   verifySourceHashFreshness,
 } from "./source-path-security";
+import { resolveAuthoritativePatch } from "../repair/patch-registry";
 
 export interface RepairProposalServiceOptions {
   projectRoot?: string;
@@ -110,11 +111,18 @@ export class RepairProposalService {
     // 2. Select primary defect (highest confidence)
     const primaryDefect = [...diag.defects].sort((a, b) => b.confidence - a.confidence)[0];
 
-    // 3. Localize source code
-    const localization = this.localizationService.localizeDefect(primaryDefect, diagnosisResult.scenarioId);
+    // 3. Authoritative Scenario-Based Resolution:
+    // scenarioId is the authoritative patch lookup key, rather than relying on the AI-diagnosed defect category.
+    const scenarioResolution = resolveAuthoritativePatch(
+      diagnosisResult.scenarioId,
+      primaryDefect.category
+    );
 
-    // 4. Check if localization failed or category unsupported
-    if (localization.status !== "localized" || !localization.filePath || !localization.excerpt) {
+    const hasExplicitScenario = Boolean(diagnosisResult.scenarioId && diagnosisResult.scenarioId.trim() !== '');
+
+    // If an explicit scenarioId was provided but no registered patch was resolved,
+    // the scenario is unsupported. Automated code repair must not attempt to localize or guess fixes.
+    if (hasExplicitScenario && !scenarioResolution.patch) {
       const unsupportedProposal: RepairProposal = {
         schemaVersion: "1.0",
         proposalId,
@@ -128,9 +136,80 @@ export class RepairProposalService {
         },
         defectCategory: primaryDefect.category,
         severity: primaryDefect.severity,
-        localization,
+        localization: {
+          status: "unsupported",
+          filePath: null,
+          fileHash: null,
+          componentOrSelector: primaryDefect.affected_element?.selector || null,
+          excerpt: null,
+          evidence: [],
+          uncertaintyNotes: [`Unknown scenario '${diagnosisResult.scenarioId}'. No registered patch exists.`],
+        },
         suspectedRootCause: primaryDefect.suspected_cause,
         evidenceExplanation: primaryDefect.evidence,
+        proposedCorrection: {
+          type: "css_rule_modification",
+          targetSelectorOrComponent: primaryDefect.affected_element?.selector || "unknown",
+          currentCode: "/* Scenario not recognized in registered patch catalog */",
+          proposedCode: "/* Manual inspection required */",
+          diffSummary: `Scenario '${diagnosisResult.scenarioId}' is not registered in the patch catalog.`,
+        },
+        expectedVisualImprovement: primaryDefect.suggested_fix,
+        confidence: "low",
+        confidenceScore: 0,
+        potentialRisks: [`Scenario '${diagnosisResult.scenarioId}' has no registered patch. Automated code repair is unsupported.`],
+        requiredValidationTests: ["tests/responsive.spec.ts"],
+        humanReviewStatus: "pending_review",
+        status: "unsupported_category",
+        createdAt,
+        isMock: this.isMock,
+      };
+
+      return unsupportedProposal;
+    }
+
+    const isMismatch = scenarioResolution.isMismatch;
+    const effectiveCategory = scenarioResolution.expectedCategory || primaryDefect.category;
+
+    // Create effective defect representing authoritative category for localization and correction
+    const effectiveDefect: DetectedDefect = {
+      ...primaryDefect,
+      category: effectiveCategory,
+    };
+
+    // 4. Localize source code using effective authoritative defect and scenario
+    const localization = this.localizationService.localizeDefect(
+      effectiveDefect,
+      diagnosisResult.scenarioId
+    );
+
+    if (isMismatch && scenarioResolution.mismatchWarning) {
+      localization.uncertaintyNotes.push(scenarioResolution.mismatchWarning);
+    }
+
+    // 5. Check if localization failed or category unsupported
+    if (localization.status !== "localized" || !localization.filePath || !localization.excerpt) {
+      const unsupportedRisks = ["Unable to verify underlying source file."];
+      if (isMismatch && scenarioResolution.mismatchWarning) {
+        unsupportedRisks.unshift(scenarioResolution.mismatchWarning);
+      }
+
+      const unsupportedProposal: RepairProposal = {
+        schemaVersion: "1.0",
+        proposalId,
+        scenarioId: diagnosisResult.scenarioId,
+        diagnosisRef: {
+          diagnosisStatus: diagnosisResult.status,
+          model: diagnosisResult.model,
+          provider: diagnosisResult.provider,
+          primaryDefectCategory: primaryDefect.category, // Preserves raw AI diagnosed category
+          reportedConfidence: primaryDefect.confidence,
+        },
+        defectCategory: effectiveCategory,
+        severity: primaryDefect.severity,
+        localization,
+        suspectedRootCause: primaryDefect.suspected_cause,
+        evidenceExplanation: primaryDefect.evidence, // Preserves raw AI evidence
         proposedCorrection: {
           type: "css_rule_modification",
           targetSelectorOrComponent: primaryDefect.affected_element?.selector || "unknown",
@@ -141,7 +220,7 @@ export class RepairProposalService {
         expectedVisualImprovement: primaryDefect.suggested_fix,
         confidence: "low",
         confidenceScore: primaryDefect.confidence * 0.5,
-        potentialRisks: ["Unable to verify underlying source file."],
+        potentialRisks: unsupportedRisks,
         requiredValidationTests: ["tests/responsive.spec.ts"],
         humanReviewStatus: "pending_review",
         status: localization.status === "unsupported" ? "unsupported_category" : "localization_failed",
@@ -152,7 +231,7 @@ export class RepairProposalService {
       return unsupportedProposal;
     }
 
-    // 5. Verify source security and freshness
+    // 6. Verify source security and freshness
     const pathValidation = validateAndResolveSourcePath(localization.filePath, this.projectRoot);
     if (!pathValidation.valid || !pathValidation.absolutePath) {
       const rejectedProposal: RepairProposal = {
@@ -166,7 +245,7 @@ export class RepairProposalService {
           primaryDefectCategory: primaryDefect.category,
           reportedConfidence: primaryDefect.confidence,
         },
-        defectCategory: primaryDefect.category,
+        defectCategory: effectiveCategory,
         severity: primaryDefect.severity,
         localization: {
           ...localization,
@@ -209,7 +288,7 @@ export class RepairProposalService {
           primaryDefectCategory: primaryDefect.category,
           reportedConfidence: primaryDefect.confidence,
         },
-        defectCategory: primaryDefect.category,
+        defectCategory: effectiveCategory,
         severity: primaryDefect.severity,
         localization: {
           ...localization,
@@ -239,31 +318,40 @@ export class RepairProposalService {
       return staleProposal;
     }
 
-    // 6. Generate concrete ProposedCodeCorrection for the localized category
-    const correction = this.generateCorrection(primaryDefect, localization);
+    // 7. Generate concrete ProposedCodeCorrection for the localized authoritative category
+    const correction = this.generateCorrection(effectiveDefect, localization);
+
+    const risks = this.assessRisks(effectiveCategory);
+    if (isMismatch && scenarioResolution.mismatchWarning) {
+      risks.unshift(scenarioResolution.mismatchWarning);
+    }
+
+    const resolvedScenarioId = diagnosisResult.scenarioId && diagnosisResult.scenarioId.trim() !== ''
+      ? diagnosisResult.scenarioId.trim()
+      : (scenarioResolution.patch?.defectCategory || "legacy-defect");
 
     const proposal: RepairProposal = {
       schemaVersion: "1.0",
       proposalId,
-      scenarioId: diagnosisResult.scenarioId,
+      scenarioId: resolvedScenarioId,
       diagnosisRef: {
         diagnosisStatus: diagnosisResult.status,
         model: diagnosisResult.model,
         provider: diagnosisResult.provider,
-        primaryDefectCategory: primaryDefect.category,
+        primaryDefectCategory: primaryDefect.category, // Preserves raw AI diagnosed category
         reportedConfidence: primaryDefect.confidence,
       },
-      defectCategory: primaryDefect.category,
+      defectCategory: effectiveCategory, // Authoritative expected category
       severity: primaryDefect.severity,
       localization,
       suspectedRootCause: primaryDefect.suspected_cause,
-      evidenceExplanation: primaryDefect.evidence,
+      evidenceExplanation: primaryDefect.evidence, // Preserves raw AI evidence
       proposedCorrection: correction,
       expectedVisualImprovement: primaryDefect.suggested_fix,
       confidence: primaryDefect.confidence >= 0.9 ? "high" : primaryDefect.confidence >= 0.7 ? "medium" : "low",
       confidenceScore: primaryDefect.confidence,
-      potentialRisks: this.assessRisks(primaryDefect.category),
-      requiredValidationTests: this.determineRequiredTests(primaryDefect.category),
+      potentialRisks: risks,
+      requiredValidationTests: this.determineRequiredTests(effectiveCategory),
       humanReviewStatus: "pending_review",
       status: "proposed",
       createdAt,

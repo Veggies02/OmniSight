@@ -14,6 +14,12 @@ import {
 import { SourceLocalizationService } from "../scripts/vlm/source-localization-service";
 import { RepairProposalService } from "../scripts/vlm/repair-proposal-service";
 import { type DiagnosisResult } from "../scripts/vlm/diagnosis-schema";
+import {
+  resolveAuthoritativePatch,
+  findPatchForScenario,
+  getExpectedCategoryForScenario,
+  findPatchForDefect,
+} from "../scripts/repair/patch-registry";
 
 test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () => {
   // =========================================================================
@@ -422,7 +428,7 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
 
     test("rejects proposal generation if source file SHA-256 is stale", () => {
       const diag: DiagnosisResult = {
-        scenarioId: "test-stale",
+        scenarioId: "product-image-distortion",
         status: "diagnosed",
         diagnosis: {
           schema_version: "1.0",
@@ -488,6 +494,297 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
 
       const navbar = fs.readFileSync(path.resolve(process.cwd(), "src/components/Navbar.tsx"), "utf8");
       expect(navbar).toContain("data-testid=\"navbar\"");
+    });
+  });
+
+  // =========================================================================
+  // 6. Authoritative Scenario Resolution & Category Mismatch Handling
+  // =========================================================================
+  test.describe("6. Authoritative Scenario Resolution & Category Mismatch Handling", () => {
+    const proposalService = new RepairProposalService({ isMock: true });
+
+    test("resolves authoritative patch and category when scenario and diagnosis category match", () => {
+      const resolution = resolveAuthoritativePatch("product-image-distortion", "image_distortion");
+      expect(resolution.patch).toBeDefined();
+      expect(resolution.patch?.patchId).toBe("patch-product-image-distortion-001");
+      expect(resolution.expectedCategory).toBe("image_distortion");
+      expect(resolution.resolutionSource).toBe("scenario");
+      expect(resolution.isMismatch).toBe(false);
+      expect(resolution.mismatchWarning).toBeUndefined();
+
+      const diag: DiagnosisResult = {
+        scenarioId: "product-image-distortion",
+        status: "diagnosed",
+        diagnosis: {
+          schema_version: "1.0",
+          status: "diagnosed",
+          summary: "Image distortion detected",
+          defects: [
+            {
+              category: "image_distortion",
+              severity: "medium",
+              confidence: 0.94,
+              description: "Image is distorted with fill",
+              evidence: ["aspect-ratio"],
+              affected_element: { description: "Thumbnail", selector: ".product-image" },
+              suspected_cause: "object-fit: fill override",
+              suggested_fix: "object-fit: cover",
+            },
+          ],
+          limitations: [],
+        },
+        model: "mock-vlm-v1",
+        provider: "mock",
+        executionTimeMs: 2,
+        sanitizedEvidenceRef: {
+          baselineScreenshot: "baseline.png",
+          defectiveScreenshot: "defective.png",
+          viewport: { width: 1440, height: 900 },
+        },
+      };
+
+      const proposal = proposalService.generateProposal(diag);
+      expect(proposal.defectCategory).toBe("image_distortion");
+      expect(proposal.diagnosisRef.primaryDefectCategory).toBe("image_distortion");
+      expect(proposal.potentialRisks.some((r) => r.includes("Category mismatch detected"))).toBe(false);
+      expect(proposal.humanReviewStatus).toBe("pending_review");
+    });
+
+    test("authoritatively resolves correct patch and category when AI misdiagnoses category", () => {
+      // Scenario is product-card-layout-break (expects layout_breakage), but AI erroneously diagnosed image_distortion
+      const resolution = resolveAuthoritativePatch("product-card-layout-break", "image_distortion");
+      expect(resolution.patch).toBeDefined();
+      expect(resolution.patch?.patchId).toBe("patch-product-card-layout-break-002");
+      expect(resolution.expectedCategory).toBe("layout_breakage");
+      expect(resolution.resolutionSource).toBe("scenario");
+      expect(resolution.isMismatch).toBe(true);
+      expect(resolution.mismatchWarning).toContain("Category mismatch detected");
+      expect(resolution.mismatchWarning).toContain("product-card-layout-break");
+
+      const misdiagnosedResult: DiagnosisResult = {
+        scenarioId: "product-card-layout-break",
+        status: "diagnosed",
+        diagnosis: {
+          schema_version: "1.0",
+          status: "diagnosed",
+          summary: "AI mistakenly calls layout break an image distortion defect",
+          defects: [
+            {
+              category: "image_distortion", // Erroneous category
+              severity: "high",
+              confidence: 0.91,
+              description: "Product layout is squished",
+              evidence: ["grid-distortion"],
+              affected_element: { description: "Card container", selector: ".product-grid" },
+              suspected_cause: "grid flex issue",
+              suggested_fix: "grid fix",
+            },
+          ],
+          limitations: [],
+        },
+        model: "mock-vlm-v1",
+        provider: "mock",
+        executionTimeMs: 2,
+        sanitizedEvidenceRef: {
+          baselineScreenshot: "baseline.png",
+          defectiveScreenshot: "defective.png",
+          viewport: { width: 1440, height: 900 },
+        },
+      };
+
+      const proposal = proposalService.generateProposal(misdiagnosedResult);
+
+      // Proposal effective category must be the authoritative expected category
+      expect(proposal.defectCategory).toBe("layout_breakage");
+      // Raw diagnosis reference retains the model's actual diagnosed category
+      expect(proposal.diagnosisRef.primaryDefectCategory).toBe("image_distortion");
+      // Code localization targets the authoritative layout element, not image
+      expect(proposal.proposedCorrection.targetSelectorOrComponent).toBe(".product-card-footer, .product-card-body");
+
+      // Critical safety check: potentialRisks must contain the explicit mismatch warning
+      const riskWarning = proposal.potentialRisks.find((r) => r.includes("Category mismatch detected"));
+      expect(riskWarning).toBeDefined();
+      expect(riskWarning).toContain("Authoritative scenario 'product-card-layout-break' expects 'layout_breakage'");
+      expect(riskWarning).toContain("AI model diagnosed 'image_distortion'");
+
+      // Critical safety check: uncertaintyNotes must also flag the mismatch
+      expect(proposal.localization.uncertaintyNotes.some((n) => n.includes("Category mismatch"))).toBe(true);
+
+      // Human review gate must remain strictly enforced
+      expect(proposal.humanReviewStatus).toBe("pending_review");
+      expect(proposal.status).toBe("proposed");
+    });
+
+    test("handles scenario aliases and evaluation case identifiers authoritatively", () => {
+      // Short alias
+      expect(findPatchForScenario("product-card-layout")?.patchId).toBe("patch-product-card-layout-break-002");
+      expect(getExpectedCategoryForScenario("product-card-layout")).toBe("layout_breakage");
+
+      // Evaluation suite IDs
+      expect(findPatchForScenario("scenario_01")?.patchId).toBe("patch-product-image-distortion-001");
+      expect(findPatchForScenario("scenario_02")?.patchId).toBe("patch-product-card-layout-break-002");
+      expect(findPatchForScenario("scenario_03")?.patchId).toBe("patch-low-contrast-text-003");
+      expect(findPatchForScenario("scenario_04")?.patchId).toBe("patch-mobile-nav-overflow-004");
+
+      // Case aliases
+      expect(findPatchForScenario("case_01")?.patchId).toBe("patch-product-image-distortion-001");
+      expect(findPatchForScenario("case_04")?.patchId).toBe("patch-mobile-nav-overflow-004");
+
+      // Ground truth defect labels
+      expect(findPatchForScenario("visual-distortion")?.patchId).toBe("patch-product-image-distortion-001");
+      expect(findPatchForScenario("layout-shift")?.patchId).toBe("patch-product-card-layout-break-002");
+      expect(findPatchForScenario("color-contrast")?.patchId).toBe("patch-low-contrast-text-003");
+      expect(findPatchForScenario("responsive-overflow")?.patchId).toBe("patch-mobile-nav-overflow-004");
+    });
+
+    test("rejects unknown scenario even with a valid AI category and returns unsupported_category", () => {
+      // Security check (AUD-SEC-01): Unknown scenario ID must NOT fall back to AI category
+      const resolution = resolveAuthoritativePatch("unknown-custom-scenario-99", "low_contrast");
+      expect(resolution.patch).toBeUndefined();
+      expect(resolution.expectedCategory).toBeUndefined();
+      expect(resolution.resolutionSource).toBe("none");
+      expect(resolution.isMismatch).toBe(false);
+      expect(resolution.mismatchWarning).toBeUndefined();
+
+      const diag: DiagnosisResult = {
+        scenarioId: "unknown-custom-scenario-99",
+        status: "diagnosed",
+        diagnosis: {
+          schema_version: "1.0",
+          status: "diagnosed",
+          summary: "Low contrast text detected on unmapped scenario",
+          defects: [
+            {
+              category: "low_contrast",
+              severity: "low",
+              confidence: 0.88,
+              description: "Text contrast is below WCAG AAA",
+              evidence: ["contrast-ratio"],
+              affected_element: { description: "Price tag", selector: ".product-price" },
+              suspected_cause: "color: #999",
+              suggested_fix: "color: #333",
+            },
+          ],
+          limitations: [],
+        },
+        model: "mock-vlm-v1",
+        provider: "mock",
+        executionTimeMs: 2,
+        sanitizedEvidenceRef: {
+          baselineScreenshot: "baseline.png",
+          defectiveScreenshot: "defective.png",
+          viewport: { width: 1440, height: 900 },
+        },
+      };
+
+      const proposal = proposalService.generateProposal(diag);
+      expect(proposal.status).toBe("unsupported_category");
+      expect(proposal.localization.status).toBe("unsupported");
+      expect(proposal.confidenceScore).toBe(0);
+      expect(proposal.potentialRisks.some((r) => r.includes("has no registered patch. Automated code repair is unsupported"))).toBe(true);
+      expect(proposal.localization.uncertaintyNotes.some((n) => n.includes("Unknown scenario 'unknown-custom-scenario-99'"))).toBe(true);
+    });
+
+    test("preserves backward-compatible category fallback when scenarioId is genuinely missing or empty", () => {
+      // Legacy proposals without scenarioId fall back to diagnosed category
+      const resolutionUndefined = resolveAuthoritativePatch(undefined, "low_contrast");
+      expect(resolutionUndefined.patch).toBeDefined();
+      expect(resolutionUndefined.patch?.patchId).toBe("patch-low-contrast-text-003");
+      expect(resolutionUndefined.resolutionSource).toBe("category");
+
+      const resolutionEmpty = resolveAuthoritativePatch("", "low_contrast");
+      expect(resolutionEmpty.patch).toBeDefined();
+      expect(resolutionEmpty.patch?.patchId).toBe("patch-low-contrast-text-003");
+      expect(resolutionEmpty.resolutionSource).toBe("category");
+
+      const legacyDiag: DiagnosisResult = {
+        scenarioId: "", // Genuinely empty scenarioId
+        status: "diagnosed",
+        diagnosis: {
+          schema_version: "1.0",
+          status: "diagnosed",
+          summary: "Legacy low contrast issue",
+          defects: [
+            {
+              category: "low_contrast",
+              severity: "low",
+              confidence: 0.9,
+              description: "Low contrast text",
+              evidence: ["contrast-ratio"],
+              affected_element: { description: "Price", selector: ".product-price" },
+              suspected_cause: "color: #999",
+              suggested_fix: "color: #333",
+            },
+          ],
+          limitations: [],
+        },
+        model: "mock-vlm-v1",
+        provider: "mock",
+        executionTimeMs: 2,
+        sanitizedEvidenceRef: {
+          baselineScreenshot: "baseline.png",
+          defectiveScreenshot: "defective.png",
+          viewport: { width: 1440, height: 900 },
+        },
+      };
+
+      const proposal = proposalService.generateProposal(legacyDiag);
+      expect(proposal.status).toBe("proposed");
+      expect(proposal.defectCategory).toBe("low_contrast");
+      expect(proposal.localization.status).toBe("localized");
+      expect(proposal.proposedCorrection.targetSelectorOrComponent).toBe(".product-snippet, .product-title-link, .product-price");
+    });
+
+    test("returns unsupported when both scenarioId and diagnosed category are unknown", () => {
+      const resolution = resolveAuthoritativePatch("unknown-scenario", "unknown_category" as any);
+      expect(resolution.patch).toBeUndefined();
+      expect(resolution.expectedCategory).toBeUndefined();
+      expect(resolution.resolutionSource).toBe("none");
+
+      const diag: DiagnosisResult = {
+        scenarioId: "unrecognized-scenario",
+        status: "diagnosed",
+        diagnosis: {
+          schema_version: "1.0",
+          status: "diagnosed",
+          summary: "Unrecognized defect category",
+          defects: [
+            {
+              category: "unsupported_defect_category" as any,
+              severity: "low",
+              confidence: 0.5,
+              description: "Mystery glitch",
+              evidence: [],
+              affected_element: { description: "Unknown", selector: ".unknown" },
+              suspected_cause: "Unknown",
+              suggested_fix: "Unknown",
+            },
+          ],
+          limitations: [],
+        },
+        model: "mock-vlm-v1",
+        provider: "mock",
+        executionTimeMs: 2,
+        sanitizedEvidenceRef: {
+          baselineScreenshot: "baseline.png",
+          defectiveScreenshot: "defective.png",
+          viewport: { width: 1440, height: 900 },
+        },
+      };
+
+      const proposal = proposalService.generateProposal(diag);
+      expect(proposal.status).toBe("unsupported_category");
+      expect(proposal.localization.status).toBe("unsupported");
+    });
+
+    test("preserves backward compatibility for legacy findPatchForDefect lookups", () => {
+      expect(findPatchForDefect("image_distortion")?.patchId).toBe("patch-product-image-distortion-001");
+      expect(findPatchForDefect("layout_breakage")?.patchId).toBe("patch-product-card-layout-break-002");
+      expect(findPatchForDefect("color_contrast")?.patchId).toBe("patch-low-contrast-text-003");
+      expect(findPatchForDefect("responsive_overflow")?.patchId).toBe("patch-mobile-nav-overflow-004");
+      // Scenario ID lookup via findPatchForDefect
+      expect(findPatchForDefect("product-image-distortion")?.patchId).toBe("patch-product-image-distortion-001");
+      expect(findPatchForDefect("non_existent")).toBeUndefined();
     });
   });
 });

@@ -2,7 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import { RepairExecutionService } from './repair/repair-execution-service';
 import { RepairJobContract, RepairExecutionReport } from './repair/repair-job-schema';
-import { findPatchForDefect, getRegisteredPatch } from './repair/patch-registry';
+import {
+  findPatchForDefect,
+  findPatchForScenario,
+  getExpectedCategoryForScenario,
+  getRegisteredPatch,
+} from './repair/patch-registry';
 import { validateRepairProposalSchema, RepairProposal } from './vlm/repair-proposal-schema';
 
 export interface RunRepairJobCliArgs {
@@ -162,8 +167,14 @@ export function loadAndValidateProposal(
   }
 
   const schemaValidation = validateRepairProposalSchema(proposal);
-  if (!schemaValidation.valid) {
-    throw new Error(`Invalid proposal schema in ${resolvedPath}: ${schemaValidation.errors.join('; ')}`);
+  // Support legacy proposals genuinely lacking scenarioId for backward compatibility
+  const errors = schemaValidation.errors.filter((err) => {
+    const isMissingScenario = proposal.scenarioId === undefined || proposal.scenarioId === '';
+    return !(isMissingScenario && err.includes("'scenarioId'"));
+  });
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid proposal schema in ${resolvedPath}: ${errors.join('; ')}`);
   }
 
   return { proposal, resolvedPath };
@@ -182,32 +193,30 @@ export async function runRepairJob(
   const jobId = cliArgs.jobId || `job-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const targetBaseCommit = cliArgs.baseCommit || (proposal as any).baseCommitSha || 'HEAD';
 
-  // 1. Resolve registered patch
-  const patch = cliArgs.patchId
-    ? getRegisteredPatch(cliArgs.patchId)
-    : findPatchForDefect(proposal.defectCategory);
-
-  if (!patch) {
-    const errorMsg = cliArgs.patchId
-      ? `Specified patch '${cliArgs.patchId}' not found in registered patch catalog.`
-      : `No registered patch found for defect category: ${proposal.defectCategory}`;
-
-    // Return structured unsupported report without executing
+  const createEarlyExitReport = (
+    finalState: 'UNSUPPORTED' | 'REJECTED',
+    patchId: string,
+    errorMsg: string,
+    isApprovalFailure: boolean = false
+  ) => {
     const service = new RepairExecutionService(repoRoot);
-    const unsupportedReport: RepairExecutionReport = {
+    const exitReport: RepairExecutionReport = {
       jobId,
       proposalId: proposal.proposalId,
       defectCategory: proposal.defectCategory,
       targetBaseCommit,
       isolatedWorktreePath: '',
       isolatedBranch: '',
-      patchId: cliArgs.patchId || 'unknown',
+      patchId,
       createdAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
-      finalState: 'UNSUPPORTED',
+      finalState,
       approvalValidation: {
-        approved: proposal.humanReviewStatus === 'approved',
+        approved: isApprovalFailure ? false : proposal.humanReviewStatus === 'approved',
         reviewStatus: proposal.humanReviewStatus,
+        reviewedBy: (proposal as any).reviewedBy,
+        reviewedAt: (proposal as any).reviewedAt,
+        approvalNotes: (proposal as any).reviewNotes,
         sourceFreshnessVerified: false,
         recordedSourceHash: proposal.localization?.fileHash || '',
         currentSourceHash: '',
@@ -218,43 +227,91 @@ export async function runRepairJob(
       cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false, branchPreserved: false },
       failureReason: errorMsg,
     };
-    const reportPath = service.saveReport(jobId, unsupportedReport);
-    return { success: false, report: unsupportedReport, reportPath };
+    const reportPath = service.saveReport(jobId, exitReport);
+    return { success: false, report: exitReport, reportPath };
+  };
+
+  // 1. Resolve registered patch deterministically:
+  // Precedence & Safety Rules:
+  // - If a proposal has a valid scenarioId, its registered patch is strictly authoritative.
+  // - An explicit CLI --patch matching the scenario patch is allowed.
+  // - An explicit CLI --patch conflicting with the scenario patch is strictly rejected.
+  // - An unknown scenario cannot be rescued by --patch or AI defectCategory fallback.
+  // - Legacy proposals genuinely lacking scenarioId retain defectCategory fallback.
+  const hasScenarioId = Boolean(proposal.scenarioId && proposal.scenarioId.trim() !== '');
+  const scenarioId = hasScenarioId ? proposal.scenarioId.trim() : undefined;
+  const scenarioPatch = scenarioId ? findPatchForScenario(scenarioId) : undefined;
+
+  let patch: any = undefined;
+
+  if (cliArgs.patchId) {
+    const explicitPatch = getRegisteredPatch(cliArgs.patchId);
+    if (!explicitPatch) {
+      return createEarlyExitReport(
+        'UNSUPPORTED',
+        cliArgs.patchId,
+        `Specified patch '${cliArgs.patchId}' not found in registered patch catalog.`
+      );
+    }
+
+    if (hasScenarioId) {
+      if (!scenarioPatch) {
+        // Unknown scenario cannot be rescued by an explicit CLI --patch
+        return createEarlyExitReport(
+          'UNSUPPORTED',
+          cliArgs.patchId,
+          `No registered patch found for defect category: ${proposal.defectCategory} (scenario: '${scenarioId}').`
+        );
+      }
+
+      if (explicitPatch.patchId !== scenarioPatch.patchId) {
+        // Conflicting CLI patch override is strictly rejected
+        return createEarlyExitReport(
+          'REJECTED',
+          cliArgs.patchId,
+          `Explicit CLI patch '${cliArgs.patchId}' conflicts with authoritative scenario '${scenarioId}' patch '${scenarioPatch.patchId}'.`,
+          true
+        );
+      }
+    }
+
+    patch = explicitPatch;
+  } else if (hasScenarioId) {
+    if (!scenarioPatch) {
+      // Unknown scenario cannot fall back to AI defectCategory
+      return createEarlyExitReport(
+        'UNSUPPORTED',
+        'unknown',
+        `No registered patch found for defect category: ${proposal.defectCategory} (scenario: '${scenarioId}').`
+      );
+    }
+
+    patch = scenarioPatch;
+  } else {
+    // Legacy proposals genuinely lacking scenarioId fall back to defectCategory
+    patch = findPatchForDefect(proposal.defectCategory);
+    if (!patch) {
+      return createEarlyExitReport(
+        'UNSUPPORTED',
+        'unknown',
+        `No registered patch found for defect category: ${proposal.defectCategory}`
+      );
+    }
+  }
+
+  if (hasScenarioId && proposal.defectCategory) {
+    const expectedCat = getExpectedCategoryForScenario(scenarioId!);
+    if (expectedCat && proposal.defectCategory !== expectedCat) {
+      console.error(
+        `[OmniSight Repair CLI] Note: Scenario '${scenarioId}' expected '${expectedCat}', proposal defectCategory was '${proposal.defectCategory}'. Authoritatively resolved patch '${patch.patchId}'.`
+      );
+    }
   }
 
   // 2. Strict Pre-flight Human Approval Enforcement
   if (proposal.humanReviewStatus !== 'approved') {
     const reason = `Human review validation failed: Proposal '${proposal.proposalId}' has review status '${proposal.humanReviewStatus}', must be 'approved' before code repair.`;
-    const service = new RepairExecutionService(repoRoot);
-    const rejectionReport: RepairExecutionReport = {
-      jobId,
-      proposalId: proposal.proposalId,
-      defectCategory: proposal.defectCategory,
-      targetBaseCommit,
-      isolatedWorktreePath: '',
-      isolatedBranch: '',
-      patchId: patch.patchId,
-      createdAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-      finalState: 'REJECTED',
-      approvalValidation: {
-        approved: false,
-        reviewStatus: proposal.humanReviewStatus,
-        reviewedBy: (proposal as any).reviewedBy,
-        reviewedAt: (proposal as any).reviewedAt,
-        approvalNotes: (proposal as any).reviewNotes,
-        sourceFreshnessVerified: false,
-        recordedSourceHash: proposal.localization?.fileHash || '',
-        currentSourceHash: '',
-        baseCommitVerified: false,
-        targetBaseCommit,
-        rejectionReason: reason,
-      },
-      cleanupStatus: { cleaned: true, worktreeRemoved: false, branchRemoved: false, branchPreserved: false },
-      failureReason: reason,
-    };
-    const reportPath = service.saveReport(jobId, rejectionReport);
-    return { success: false, report: rejectionReport, reportPath };
+    return createEarlyExitReport('REJECTED', patch.patchId, reason, true);
   }
 
   // 3. Assemble verified contract

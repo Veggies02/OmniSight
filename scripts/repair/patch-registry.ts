@@ -1,3 +1,5 @@
+import { type DefectCategory } from '../vlm/diagnosis-schema';
+
 export interface RegisteredPatch {
   patchId: string;
   defectCategory: string;
@@ -216,6 +218,129 @@ export function getRegisteredPatch(patchId: string): RegisteredPatch | undefined
   return REGISTERED_PATCHES[patchId];
 }
 
+export interface ScenarioMapping {
+  expectedCategory: DefectCategory;
+  patchId: string;
+}
+
+/**
+ * Authoritative mapping of seeded scenarios, aliases, and evaluation labels to deterministic patches and expected categories.
+ */
+export const SCENARIO_TO_PATCH_MAP: Record<string, ScenarioMapping> = {
+  // Scenario 1: Product Image Distortion
+  'product-image-distortion': { expectedCategory: 'image_distortion', patchId: 'patch-product-image-distortion-001' },
+  'scenario_01': { expectedCategory: 'image_distortion', patchId: 'patch-product-image-distortion-001' },
+  'case_01': { expectedCategory: 'image_distortion', patchId: 'patch-product-image-distortion-001' },
+  'visual-distortion': { expectedCategory: 'image_distortion', patchId: 'patch-product-image-distortion-001' },
+
+  // Scenario 2: Product Card Layout Break
+  'product-card-layout-break': { expectedCategory: 'layout_breakage', patchId: 'patch-product-card-layout-break-002' },
+  'product-card-layout': { expectedCategory: 'layout_breakage', patchId: 'patch-product-card-layout-break-002' },
+  'scenario_02': { expectedCategory: 'layout_breakage', patchId: 'patch-product-card-layout-break-002' },
+  'case_02': { expectedCategory: 'layout_breakage', patchId: 'patch-product-card-layout-break-002' },
+  'layout-shift': { expectedCategory: 'layout_breakage', patchId: 'patch-product-card-layout-break-002' },
+
+  // Scenario 3: Low Contrast Text
+  'low-contrast-text': { expectedCategory: 'low_contrast', patchId: 'patch-low-contrast-text-003' },
+  'scenario_03': { expectedCategory: 'low_contrast', patchId: 'patch-low-contrast-text-003' },
+  'case_03': { expectedCategory: 'low_contrast', patchId: 'patch-low-contrast-text-003' },
+  'color-contrast': { expectedCategory: 'low_contrast', patchId: 'patch-low-contrast-text-003' },
+
+  // Scenario 4: Mobile Navigation Overflow
+  'mobile-nav-overflow': { expectedCategory: 'responsive_overflow', patchId: 'patch-mobile-nav-overflow-004' },
+  'nav-overflow': { expectedCategory: 'responsive_overflow', patchId: 'patch-mobile-nav-overflow-004' },
+  'scenario_04': { expectedCategory: 'responsive_overflow', patchId: 'patch-mobile-nav-overflow-004' },
+  'case_04': { expectedCategory: 'responsive_overflow', patchId: 'patch-mobile-nav-overflow-004' },
+  'responsive-overflow': { expectedCategory: 'responsive_overflow', patchId: 'patch-mobile-nav-overflow-004' },
+};
+
+/**
+ * Resolves the expected defect category from the authoritative scenario ID.
+ */
+export function getExpectedCategoryForScenario(scenarioId: string): DefectCategory | undefined {
+  if (!scenarioId || typeof scenarioId !== 'string') return undefined;
+  return SCENARIO_TO_PATCH_MAP[scenarioId]?.expectedCategory;
+}
+
+/**
+ * Resolves the registered patch deterministically using the authoritative scenario ID.
+ */
+export function findPatchForScenario(scenarioId: string): RegisteredPatch | undefined {
+  if (!scenarioId || typeof scenarioId !== 'string') return undefined;
+  const mapping = SCENARIO_TO_PATCH_MAP[scenarioId];
+  if (mapping) {
+    return REGISTERED_PATCHES[mapping.patchId];
+  }
+  return undefined;
+}
+
+export interface AuthoritativePatchResolution {
+  patch?: RegisteredPatch;
+  expectedCategory?: DefectCategory;
+  resolutionSource: 'scenario' | 'category' | 'none';
+  isMismatch: boolean;
+  mismatchWarning?: string;
+}
+
+/**
+ * Authoritatively resolves the target patch, comparing the scenario expectation with the AI diagnosis.
+ */
+export function resolveAuthoritativePatch(
+  scenarioId?: string,
+  diagnosedCategory?: string
+): AuthoritativePatchResolution {
+  const hasScenarioId = Boolean(scenarioId && scenarioId.trim() !== '');
+
+  if (hasScenarioId) {
+    const cleanScenarioId = scenarioId!.trim();
+    const scenarioPatch = findPatchForScenario(cleanScenarioId);
+    const expectedCat = getExpectedCategoryForScenario(cleanScenarioId);
+    if (scenarioPatch && expectedCat) {
+      const isMismatch = Boolean(diagnosedCategory && diagnosedCategory !== expectedCat);
+      const mismatchWarning = isMismatch
+        ? `WARNING: Category mismatch detected. Authoritative scenario '${cleanScenarioId}' expects '${expectedCat}', but AI model diagnosed '${diagnosedCategory}'. Deterministic patch '${scenarioPatch.patchId}' selected based on scenarioId.`
+        : undefined;
+      return {
+        patch: scenarioPatch,
+        expectedCategory: expectedCat,
+        resolutionSource: 'scenario',
+        isMismatch,
+        mismatchWarning,
+      };
+    }
+
+    // Explicitly provided scenario ID is unrecognized.
+    // Strictly return 'none' without falling back to AI diagnosed category.
+    return {
+      patch: undefined,
+      expectedCategory: undefined,
+      resolutionSource: 'none',
+      isMismatch: false,
+    };
+  }
+
+  // Fallback to diagnosed category ONLY for legacy proposals genuinely lacking scenarioId
+  if (diagnosedCategory && diagnosedCategory.trim() !== '') {
+    const cleanCategory = diagnosedCategory.trim();
+    const categoryPatch = findPatchForDefect(cleanCategory);
+    if (categoryPatch) {
+      return {
+        patch: categoryPatch,
+        expectedCategory: undefined,
+        resolutionSource: 'category',
+        isMismatch: false,
+      };
+    }
+  }
+
+  return {
+    patch: undefined,
+    expectedCategory: undefined,
+    resolutionSource: 'none',
+    isMismatch: false,
+  };
+}
+
 const CATEGORY_TO_PATCH_MAP: Record<string, string> = {
   'product-image-distortion': 'patch-product-image-distortion-001',
   'image_distortion': 'patch-product-image-distortion-001',
@@ -223,11 +348,17 @@ const CATEGORY_TO_PATCH_MAP: Record<string, string> = {
   'layout_breakage': 'patch-product-card-layout-break-002',
   'low-contrast-text': 'patch-low-contrast-text-003',
   'low_contrast': 'patch-low-contrast-text-003',
+  'color_contrast': 'patch-low-contrast-text-003',
+  'color-contrast': 'patch-low-contrast-text-003',
   'mobile-nav-overflow': 'patch-mobile-nav-overflow-004',
   'responsive_overflow': 'patch-mobile-nav-overflow-004',
 };
 
 export function findPatchForDefect(defectCategoryOrScenario: string): RegisteredPatch | undefined {
+  // First check if it is a known scenario ID
+  const fromScenario = findPatchForScenario(defectCategoryOrScenario);
+  if (fromScenario) return fromScenario;
+
   const direct = Object.values(REGISTERED_PATCHES).find((p) => p.defectCategory === defectCategoryOrScenario);
   if (direct) return direct;
 

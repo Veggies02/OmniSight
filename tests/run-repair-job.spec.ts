@@ -286,6 +286,194 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
         if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
       }
     });
+
+    test('strictly rejects unknown scenario with UNSUPPORTED even when AI defectCategory is valid', async () => {
+      // Security check (AUD-SEC-01): Unknown scenario cannot fall back to AI category
+      const unsupportedProposal = makeProposal({
+        scenarioId: 'unsupported-mystery-defect',
+        defectCategory: 'image_distortion', // Valid registered defect category!
+        humanReviewStatus: 'approved',
+      });
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_unsupported_valid_cat.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify(unsupportedProposal));
+
+      try {
+        const result = await runRepairJob(
+          ['--proposal', tempPath, '--job-id', 'test-unsupported-scenario-job'],
+          repoRoot
+        );
+        expect(result.success).toBe(false);
+        expect(result.report.finalState).toBe('UNSUPPORTED');
+        expect(result.report.failureReason).toContain(
+          "No registered patch found for defect category: image_distortion (scenario: 'unsupported-mystery-defect')"
+        );
+        expect(result.report.isolatedWorktreePath).toBe('');
+      } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
+
+    test('strictly rejects unknown scenario with UNSUPPORTED even when valid explicit CLI --patch is provided', async () => {
+      // Security check (AUD-SEC-02): Unknown scenario cannot be rescued by CLI --patch
+      const unsupportedProposal = makeProposal({
+        scenarioId: 'unsupported-mystery-defect',
+        defectCategory: 'image_distortion',
+        humanReviewStatus: 'approved',
+      });
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_unsupported_cli_patch.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify(unsupportedProposal));
+
+      try {
+        const result = await runRepairJob(
+          [
+            '--proposal', tempPath,
+            '--job-id', 'test-unsupported-rescued-job',
+            '--patch', 'patch-product-image-distortion-001',
+          ],
+          repoRoot
+        );
+        expect(result.success).toBe(false);
+        expect(result.report.finalState).toBe('UNSUPPORTED');
+        expect(result.report.failureReason).toContain(
+          "No registered patch found for defect category: image_distortion (scenario: 'unsupported-mystery-defect')"
+        );
+        expect(result.report.isolatedWorktreePath).toBe('');
+      } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
+
+    test('authoritatively resolves patch by scenarioId over mismatched defectCategory and logs advisory note', async () => {
+      const originalConsoleError = console.error;
+      const loggedErrors: string[] = [];
+      console.error = (...args: any[]) => {
+        loggedErrors.push(args.join(' '));
+      };
+
+      const mismatchedProposal = makeProposal({
+        scenarioId: 'product-image-distortion',
+        defectCategory: 'responsive_overflow', // Mismatched category!
+        humanReviewStatus: 'pending_review', // Ensure safe fast rejection without spinning up worktree
+      });
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_mismatch_prop.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify(mismatchedProposal));
+
+      try {
+        const result = await runRepairJob(
+          ['--proposal', tempPath, '--job-id', 'test-mismatch-log-job'],
+          repoRoot
+        );
+        // Human review gate rejects execution
+        expect(result.success).toBe(false);
+        expect(result.report.finalState).toBe('REJECTED');
+
+        // Advisory note logged confirming authoritative resolution
+        const advisoryLog = loggedErrors.find((log) =>
+          log.includes("Scenario 'product-image-distortion' expected 'image_distortion'")
+        );
+        expect(advisoryLog).toBeDefined();
+        expect(advisoryLog).toContain("proposal defectCategory was 'responsive_overflow'");
+        expect(advisoryLog).toContain("Authoritatively resolved patch 'patch-product-image-distortion-001'");
+      } finally {
+        console.error = originalConsoleError;
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
+
+    test('permits explicit CLI --patch when it matches the scenario authoritative patch', async () => {
+      const matchingProposal = makeProposal({
+        scenarioId: 'product-image-distortion',
+        defectCategory: 'image_distortion',
+        humanReviewStatus: 'pending_review',
+      });
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_matching_patch.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify(matchingProposal));
+
+      try {
+        const result = await runRepairJob(
+          [
+            '--proposal', tempPath,
+            '--job-id', 'test-matching-patch-job',
+            '--patch', 'patch-product-image-distortion-001',
+          ],
+          repoRoot
+        );
+        // Matches scenario patch, proceeds past patch validation to human review gate
+        expect(result.report.finalState).toBe('REJECTED');
+        expect(result.report.failureReason).toContain("must be 'approved' before code repair");
+        expect(result.report.patchId).toBe('patch-product-image-distortion-001');
+      } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
+
+    test('strictly rejects explicit CLI --patch when it conflicts with the scenario authoritative patch', async () => {
+      // Security check (AUD-SEC-02): CLI --patch must NOT contradict scenarioId
+      const proposalData = makeProposal({
+        scenarioId: 'product-image-distortion',
+        defectCategory: 'image_distortion',
+        humanReviewStatus: 'approved',
+      });
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_conflicting_patch.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify(proposalData));
+
+      try {
+        const result = await runRepairJob(
+          [
+            '--proposal', tempPath,
+            '--job-id', 'test-conflict-patch-job',
+            '--patch', 'patch-mobile-nav-overflow-004', // Conflicting patch!
+          ],
+          repoRoot
+        );
+        expect(result.success).toBe(false);
+        expect(result.report.finalState).toBe('REJECTED');
+        expect(result.report.failureReason).toContain(
+          "Explicit CLI patch 'patch-mobile-nav-overflow-004' conflicts with authoritative scenario 'product-image-distortion' patch 'patch-product-image-distortion-001'"
+        );
+        expect(result.report.isolatedWorktreePath).toBe('');
+      } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
+
+    test('preserves backward compatibility: falls back to defectCategory only when scenarioId is missing', async () => {
+      const originalConsoleError = console.error;
+      const loggedErrors: string[] = [];
+      console.error = (...args: any[]) => {
+        loggedErrors.push(args.join(' '));
+      };
+
+      // Proposal genuinely lacking scenarioId
+      const legacyProposal = makeProposal({
+        scenarioId: '',
+        defectCategory: 'image_distortion',
+        humanReviewStatus: 'pending_review',
+      });
+      const tempPath = path.resolve(repoRoot, 'artifacts/temp_legacy_missing_scenario.json');
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.writeFileSync(tempPath, JSON.stringify(legacyProposal));
+
+      try {
+        const result = await runRepairJob(
+          ['--proposal', tempPath, '--job-id', 'test-legacy-fallback-job'],
+          repoRoot
+        );
+        // It successfully resolved the fallback patch (patch-product-image-distortion-001)
+        // and stopped at the human review gate (not UNSUPPORTED!)
+        expect(result.report.finalState).toBe('REJECTED');
+        expect(result.report.failureReason).toContain("must be 'approved' before code repair");
+        expect(result.report.patchId).toBe('patch-product-image-distortion-001');
+      } finally {
+        console.error = originalConsoleError;
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      }
+    });
   });
 
   // D. End-to-End Execution with Approved Proposal
