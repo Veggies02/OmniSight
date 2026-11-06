@@ -4,7 +4,6 @@ Supports:
 - Abstract VisionModel base interface
 - Deterministic MockVisionModel for offline development and testing
 - GeminiVisionModel for real Google Gemini API vision inference
-- OpenAIVisionModel for OpenAI-compatible vision models
 - Configurable timeouts, bounded retries with exponential backoff, and strict credential safety.
 """
 from abc import ABC, abstractmethod
@@ -266,6 +265,19 @@ class GeminiVisionModel(VisionModel):
 # Factory Function
 # =====================================================================
 
+
+def _max_retries_from_env(default: int = 3) -> int:
+    """Read VLM_MAX_RETRIES. Missing, non-numeric or negative values use the default."""
+    raw = os.getenv("VLM_MAX_RETRIES")
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
 def get_vision_client(
     provider: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -285,7 +297,8 @@ def get_vision_client(
         return GeminiVisionModel(
             api_key=api_key,
             model_name=model,
-            timeout_seconds=timeout
+            timeout_seconds=timeout,
+            max_retries=_max_retries_from_env(),
         )
 
     raise VLMConfigurationError(

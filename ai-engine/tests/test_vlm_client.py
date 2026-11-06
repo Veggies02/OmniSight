@@ -128,3 +128,22 @@ def test_no_retry_on_auth_error():
         )
     # Auth errors should fail immediately on first attempt
     assert attempts == 1
+
+import pytest
+from vlm_client import get_vision_client
+
+
+def test_gemini_client_reads_max_retries_from_environment(monkeypatch):
+    monkeypatch.setenv("VLM_MAX_RETRIES", "5")
+    assert get_vision_client("gemini", api_key="test-key").max_retries == 5
+
+
+@pytest.mark.parametrize("value", ["abc", "-1", ""])
+def test_invalid_max_retries_falls_back_to_three(monkeypatch, value):
+    monkeypatch.setenv("VLM_MAX_RETRIES", value)
+    assert get_vision_client("gemini", api_key="test-key").max_retries == 3
+
+
+def test_max_retries_defaults_to_three_when_unset(monkeypatch):
+    monkeypatch.delenv("VLM_MAX_RETRIES", raising=False)
+    assert get_vision_client("gemini", api_key="test-key").max_retries == 3
