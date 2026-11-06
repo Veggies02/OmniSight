@@ -1,9 +1,23 @@
+import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { products } from "../data/products";
+import { useCart } from "../hooks/useCart";
+import { handleImageError } from "../utils/imageFallbacks";
 
 export function ProductDetails() {
   const { id } = useParams<{ id: string }>();
   const product = products.find((p) => p.id === id);
+  const { addItem } = useCart();
+  const [quantity, setQuantity] = useState(1);
+  const [addedNotice, setAddedNotice] = useState(false);
+
+  useEffect(() => {
+    if (product) {
+      document.title = `${product.name} | OmniShop`;
+    } else {
+      document.title = "Product Not Found | OmniShop";
+    }
+  }, [product]);
 
   if (!product) {
     return (
@@ -25,6 +39,16 @@ export function ProductDetails() {
     );
   }
 
+  const handleAddToCart = () => {
+    if (!product.inStock) return;
+    const safeQty = Math.max(1, Math.min(99, Math.floor(quantity)));
+    addItem(product, safeQty);
+    setAddedNotice(true);
+    setTimeout(() => {
+      setAddedNotice(false);
+    }, 2000);
+  };
+
   return (
     <div className="page product-details-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
@@ -44,6 +68,9 @@ export function ProductDetails() {
               src={product.image}
               alt={product.name}
               className="detail-image"
+              width={800}
+              height={800}
+              onError={(e) => handleImageError(e, product.category)}
             />
           </div>
         </div>
@@ -64,7 +91,7 @@ export function ProductDetails() {
 
           <div className="detail-price-box">
             <span className="detail-price">${product.price.toFixed(2)}</span>
-            <span className="detail-vat">Taxes included • Free shipping over $50</span>
+            <span className="detail-vat">Free standard shipping on all demo orders • Taxes included</span>
           </div>
 
           <div className="detail-description">
@@ -87,12 +114,57 @@ export function ProductDetails() {
             </div>
           </div>
 
-          <div className="detail-actions">
-            <Link to="/cart" className="btn btn-primary btn-lg">
-              Add to Cart
+          {product.inStock ? (
+            <div className="detail-purchase-row">
+              <div className="quantity-selector" aria-label="Quantity Selector">
+                <button
+                  type="button"
+                  className="qty-btn"
+                  onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                  aria-label="Decrease quantity"
+                  disabled={quantity <= 1}
+                >
+                  −
+                </button>
+                <span className="qty-value" aria-label={`Current quantity ${quantity}`}>
+                  {quantity}
+                </span>
+                <button
+                  type="button"
+                  className="qty-btn"
+                  onClick={() => setQuantity((q) => Math.min(99, q + 1))}
+                  aria-label="Increase quantity"
+                  disabled={quantity >= 99}
+                >
+                  +
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-primary btn-lg detail-add-btn"
+                onClick={handleAddToCart}
+                aria-label={
+                  addedNotice
+                    ? `Added ${quantity} of ${product.name} to cart!`
+                    : `Add ${quantity} of ${product.name} to cart`
+                }
+              >
+                {addedNotice ? "✓ Added to Cart!" : "Add to Cart"}
+              </button>
+            </div>
+          ) : (
+            <div className="out-of-stock-banner" role="alert">
+              This product is currently out of stock and cannot be added to the cart.
+            </div>
+          )}
+
+          <div className="detail-secondary-actions">
+            <Link to="/products" className="link-arrow">
+              ← Return to Catalogue
             </Link>
-            <Link to="/products" className="btn btn-outline btn-lg">
-              Continue Shopping
+            <Link to="/cart" className="link-arrow">
+              View Shopping Cart →
             </Link>
           </div>
         </div>

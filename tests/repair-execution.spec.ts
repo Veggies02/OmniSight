@@ -1,0 +1,1183 @@
+import { test, expect } from '@playwright/test';
+import fs from 'fs';
+import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { RepairExecutionService, resolveNpmCommand } from '../scripts/repair/repair-execution-service';
+import { RepairJobContract } from '../scripts/repair/repair-job-schema';
+import { WorktreeManager } from '../scripts/repair/worktree-manager';
+import {
+  getRegisteredPatch,
+  REGISTERED_PATCHES,
+  applyDeterministicPatch,
+  normalizeLineEndings,
+} from '../scripts/repair/patch-registry';
+import { computeFileHash } from '../scripts/vlm/source-path-security';
+import { runRepairJob } from '../scripts/run-repair-job';
+
+const execFileAsync = promisify(execFile);
+
+test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', () => {
+  const repoRoot = process.cwd();
+  const indexCssPath = path.resolve(repoRoot, 'src/index.css');
+  const currentCssHash = computeFileHash(indexCssPath);
+
+  test('Registered Patches Registry defines all 4 seeded defect patches with strict allowlists', async () => {
+    expect(Object.keys(REGISTERED_PATCHES).length).toBe(4);
+
+    const categories = [
+      'product-image-distortion',
+      'product-card-layout-break',
+      'low-contrast-text',
+      'mobile-nav-overflow',
+    ];
+
+    for (const cat of categories) {
+      const patch = Object.values(REGISTERED_PATCHES).find((p) => p.defectCategory === cat);
+      expect(patch).toBeDefined();
+      expect(patch!.approvedSourceFiles).toEqual(['src/index.css']);
+      expect(patch!.targetFile).toBe('src/index.css');
+      expect(patch!.targetMatchString.length).toBeGreaterThan(10);
+      expect(patch!.replacementString.length).toBeGreaterThan(10);
+      expect(patch!.expectedVisualEffect.length).toBeGreaterThan(10);
+    }
+  });
+
+  test('Rejects repair job if humanReviewStatus is pending or rejected', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const unapprovedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-unapproved',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'pending_review',
+      status: 'proposed',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const contract: RepairJobContract = {
+      jobId: `test-reject-${Date.now()}`,
+      proposalId: unapprovedProposal.proposalId,
+      proposal: unapprovedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+    expect(report.finalState).toBe('REJECTED');
+    expect(report.approvalValidation.approved).toBe(false);
+    expect(report.failureReason).toContain('must be \'approved\'');
+    expect(report.patchApplication).toBeUndefined();
+  });
+
+  test('Rejects repair job if recorded source hash does not match current disk (stale proposal)', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const staleProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-stale',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', // Wrong hash
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const contract: RepairJobContract = {
+      jobId: `test-stale-${Date.now()}`,
+      proposalId: staleProposal.proposalId,
+      proposal: staleProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+    expect(report.finalState).toBe('REJECTED');
+    expect(report.approvalValidation.sourceFreshnessVerified).toBe(false);
+    expect(report.failureReason).toContain('Source hash mismatch');
+  });
+
+  test('Rejects repair job with unknown patch identifier', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const validProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-bad-patch',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const contract: RepairJobContract = {
+      jobId: `test-unknown-patch-${Date.now()}`,
+      proposalId: validProposal.proposalId,
+      proposal: validProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'unknown-patch-999',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+    expect(report.finalState).toBe('UNSUPPORTED');
+    expect(report.failureReason).toContain("No registered patch available for scenario 'product-image-distortion' (patchId: 'unknown-patch-999')");
+    expect(report.patchApplication).toBeUndefined();
+    expect(report.buildExecution).toBeUndefined();
+    expect(report.testExecution).toBeUndefined();
+    const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', contract.jobId);
+    expect(fs.existsSync(worktreePath)).toBe(false);
+  });
+
+  test('Rejects invalid state machine transitions', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    expect(() => service.transitionState('PENDING', 'PASSED')).toThrow(/Invalid state transition/);
+    expect(() => service.transitionState('REJECTED', 'RUNNING_TESTS')).toThrow(/Invalid state transition/);
+    expect(() => service.transitionState('UNSUPPORTED', 'RUNNING_TESTS')).toThrow(/Invalid state transition/);
+  });
+
+  test('Executes end-to-end isolated repair in temporary worktree without modifying main working tree', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-pass-001',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      reviewNotes: 'Verified clean baseline comparison and test assertions.',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `e2e-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+
+    // 1. Validate complete report contract
+    expect(report.finalState).toBe('PASSED');
+    expect(report.approvalValidation.approved).toBe(true);
+    expect(report.approvalValidation.sourceFreshnessVerified).toBe(true);
+    expect(report.patchApplication?.appliedSuccessfully).toBe(true);
+    expect(report.patchApplication?.changedFiles).toEqual(['src/index.css']);
+    expect(report.buildExecution?.passed).toBe(true);
+    expect(report.visualValidation?.passed).toBe(true);
+    expect(report.cleanupStatus.cleaned).toBe(true);
+    expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+    expect(report.cleanupStatus.branchRemoved).toBe(false);
+    expect(report.cleanupStatus.branchPreserved).toBe(true);
+    expect(report.branch).toBe(`omnisight-repair/${jobId}`);
+    expect(report.commitSha).toBeDefined();
+    expect(report.commitSha?.length).toBe(40);
+    expect(report.commit_sha).toBe(report.commitSha);
+
+    // Clean up created branch for test isolation
+    await (new WorktreeManager(repoRoot)).cleanupWorktree(jobId);
+
+    // 2. Verify machine-readable report was persisted
+    const savedReportPath = path.join(repoRoot, 'artifacts', 'repair-executions', jobId, 'repair_execution_report.json');
+    expect(fs.existsSync(savedReportPath)).toBe(true);
+
+    // 3. Strict Safety Invariant: Original working tree file was never modified!
+    const postExecutionCssHash = computeFileHash(indexCssPath);
+    expect(postExecutionCssHash).toBe(currentCssHash);
+  });
+
+  test('Review Dashboard detail page shows Execute Repair Job action and modal for approved proposals', async ({ page }) => {
+    // Inject approved proposal into localStorage
+    await page.addInitScript(() => {
+      const mockApproved = [
+        {
+          schemaVersion: '1.0',
+          proposalId: 'prop_approved_e2e_test',
+          scenarioId: 'product-image-distortion',
+          defectCategory: 'image_distortion',
+          severity: 'medium',
+          localization: {
+            status: 'localized',
+            filePath: 'src/index.css',
+            fileHash: '0fd73158ca1b6976e2bd0255687bc4abc19d776fc2ab108de3f0adb61ba110fa',
+            componentOrSelector: '.product-image',
+            excerpt: {
+              filePath: 'src/index.css',
+              startLine: 446,
+              endLine: 464,
+              content: '.product-image { object-fit: fill; }',
+              sha256: '0fd73158ca1b6976e2bd0255687bc4abc19d776fc2ab108de3f0adb61ba110fa',
+            },
+            evidence: [],
+            uncertaintyNotes: [],
+          },
+          suspectedRootCause: 'object-fit: fill distortion',
+          evidenceExplanation: ['Aspect ratio distorted'],
+          proposedCorrection: {
+            type: 'css_rule_modification',
+            targetSelectorOrComponent: '.product-image',
+            currentCode: 'object-fit: fill;',
+            proposedCode: 'object-fit: cover;',
+            diffSummary: 'Restore cover fit',
+          },
+          expectedVisualImprovement: 'Restore 4:3 natural aspect ratio',
+          confidence: 'high',
+          confidenceScore: 0.95,
+          potentialRisks: [],
+          requiredValidationTests: ['npm run build'],
+          humanReviewStatus: 'approved',
+          status: 'proposed',
+          createdAt: new Date().toISOString(),
+          isMock: true,
+          sourceFreshness: 'fresh',
+        },
+      ];
+      window.localStorage.setItem('omnisight:review-proposals', JSON.stringify(mockApproved));
+    });
+
+    await page.goto('/review/proposals/prop_approved_e2e_test');
+
+    // Confirm Execute button is displayed for approved proposal
+    const executeBtn = page.locator('[data-testid="btn-execute-repair"]');
+    await expect(executeBtn).toBeVisible();
+
+    // Click execute button to open confirmation dialog
+    await executeBtn.click();
+    const dialog = page.locator('[data-testid="repair-execution-dialog"]');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('A separate temporary Git worktree and branch will be created');
+
+    // Confirm execution
+    const confirmBtn = page.locator('[data-testid="btn-confirm-repair-exec"]');
+    await expect(confirmBtn).toBeVisible();
+    await confirmBtn.click();
+
+    // Verify summary is rendered
+    const summary = page.locator('[data-testid="repair-job-summary"]');
+    await expect(summary).toBeVisible({ timeout: 15_000 });
+    await expect(summary).toContainText('PASSED');
+    await expect(summary).toContainText('omnisight-repair/');
+  });
+
+  test('Line-Ending Normalization: matches and applies patch on CRLF file content and restores CRLF', async () => {
+    const patch = getRegisteredPatch('patch-product-image-distortion-001')!;
+    expect(patch).toBeDefined();
+
+    // Create a CRLF version of targetMatchString wrapped in sample CSS
+    const lfFile = `/* Header */\n${patch.targetMatchString}\n/* Footer */\n`;
+    const crlfFile = lfFile.replace(/\n/g, '\r\n');
+    expect(crlfFile).toContain('\r\n');
+
+    // Apply patch deterministically
+    const result = applyDeterministicPatch(crlfFile, patch);
+    expect(result.success).toBe(true);
+    expect(result.updatedContent).toContain('object-fit: cover');
+    expect(result.updatedContent).toContain('\r\n'); // Preserves CRLF convention
+    expect(result.updatedContent).not.toContain('object-fit: fill');
+  });
+
+  test('Line-Ending Normalization: matches and applies patch on LF file content and preserves LF', async () => {
+    const patch = getRegisteredPatch('patch-low-contrast-text-003')!;
+    expect(patch).toBeDefined();
+
+    const lfFile = `/* Header */\n${patch.targetMatchString}\n/* Footer */\n`;
+    expect(lfFile).not.toContain('\r\n');
+
+    const result = applyDeterministicPatch(lfFile, patch);
+    expect(result.success).toBe(true);
+    expect(result.updatedContent).toContain('color: var(--color-text-body) !important');
+    expect(result.updatedContent).not.toContain('\r\n'); // Preserves LF convention
+  });
+
+  test('Line-Ending Normalization: fails gracefully when target snippet is missing', async () => {
+    const patch = getRegisteredPatch('patch-product-image-distortion-001')!;
+    const missingTargetContent = `/* Some completely different CSS */\n.some-class { color: red; }\n`;
+
+    const result = applyDeterministicPatch(missingTargetContent, patch);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Precondition check failed');
+    expect(result.updatedContent).toBe(missingTargetContent);
+  });
+
+  test('Cross-Platform Command Execution: resolves npm.cmd on win32 and npm on posix', async () => {
+    const originalPlatform = process.platform;
+    try {
+      // Test current platform resolution
+      const current = resolveNpmCommand(['run', 'build']);
+      expect(current.args).toEqual(['run', 'build']);
+      if (process.platform === 'win32') {
+        expect(current.executable).toBe('npm.cmd');
+      } else {
+        expect(current.executable).toBe('npm');
+      }
+    } finally {
+      // Safety reset
+    }
+  });
+
+  test('Cross-Platform Command Execution: runCommand captures exit codes, stdout, and stderr reliably', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    // Successful command
+    const okRes = await service.runCommand('node -e console.log("hello-cross-platform")', repoRoot);
+    expect(okRes.exitCode).toBe(0);
+    expect(okRes.stdout.trim()).toBe('hello-cross-platform');
+
+    // Failing command
+    const failRes = await service.runCommand('node -e process.exit(42)', repoRoot);
+    expect(failRes.exitCode).toBe(42);
+  });
+
+  test('Worktree Lifecycle: cleans up worktree on unexpected failure in isolated worktree', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const worktreeManager = new WorktreeManager(repoRoot);
+
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-cleanup-on-fail',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `fail-cleanup-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    // Spy on evaluateVisualRepair to simulate a validation failure mid-job
+    const originalEvaluate = (service as any).evaluateVisualRepair.bind(service);
+    (service as any).evaluateVisualRepair = async () => {
+      return {
+        passed: false,
+        defectCategory: 'product-image-distortion',
+        route: '/products',
+        viewport: { width: 1280, height: 800 },
+        assertionSummary: 'Simulated visual assertion failure for cleanup test',
+        unrelatedRegressionsDetected: false,
+      };
+    };
+
+    try {
+      const report = await service.executeRepairJob(contract);
+      expect(report.finalState).toBe('FAILED');
+      expect(report.failureReason).toContain('Simulated visual assertion failure');
+
+      // Crucial: worktree must be cleaned up even though repair failed!
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+
+      // Verify worktree folder is gone from disk
+      const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', jobId);
+      expect(fs.existsSync(worktreePath)).toBe(false);
+    } finally {
+      (service as any).evaluateVisualRepair = originalEvaluate;
+    }
+  });
+
+  test('Worktree Manager: cleanupWorktree is idempotent and safe for non-existent worktrees', async () => {
+    const worktreeManager = new WorktreeManager(repoRoot);
+    const nonExistentJobId = `non-existent-${Date.now()}`;
+
+    // Cleaning an already non-existent worktree should return clean without throwing
+    const result = await worktreeManager.cleanupWorktree(nonExistentJobId);
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.branchRemoved).toBe(false);
+  });
+
+  test('Real Browser Visual Verification: captures real post-repair screenshot, DOM evidence, and computed metrics', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-real-browser-test',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `e2e-vis-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+    expect(report.finalState).toBe('PASSED');
+    expect(report.visualValidation).toBeDefined();
+    expect(report.visualValidation?.passed).toBe(true);
+
+    // Assert that real visual evidence files exist on disk
+    expect(report.visualValidation?.afterScreenshotPath).toBeDefined();
+    expect(fs.existsSync(report.visualValidation!.afterScreenshotPath!)).toBe(true);
+
+    const domFile = path.join(repoRoot, 'artifacts', 'repair-executions', jobId, 'dom_post_repair.html');
+    expect(fs.existsSync(domFile)).toBe(true);
+
+    // Verify rendered metrics were captured
+    expect(report.visualValidation?.repairedMetric?.objectFit).toBe('cover');
+    expect(report.visualValidation?.repairedMetric?.renderedAspectRatio).toBeGreaterThan(1.2);
+    expect(report.visualValidation?.beforeScreenshotPath).toBeDefined();
+    expect(fs.existsSync(report.visualValidation!.beforeScreenshotPath!)).toBe(true);
+
+    // Clean up created branch for test isolation
+    await (new WorktreeManager(repoRoot)).cleanupWorktree(jobId);
+  });
+
+  test('Real Browser Visual Verification: accurately flags failure when rendered visual metrics fail assertion', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-real-fail-test',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `e2e-vis-fail-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    // Override evaluateVisualRepair to test failure reporting path with real report fields
+    const originalEvaluate = (service as any).evaluateVisualRepair.bind(service);
+    (service as any).evaluateVisualRepair = async () => {
+      return {
+        passed: false,
+        defectCategory: 'product-image-distortion',
+        route: '/products?defect=product-image-distortion',
+        viewport: { width: 1440, height: 900 },
+        assertionSummary: 'Product image distortion verification failed: object-fit is fill, media height is 380px.',
+        repairedMetric: { objectFit: 'fill', mediaHeight: '380px' },
+        unrelatedRegressionsDetected: false,
+      };
+    };
+
+    try {
+      const report = await service.executeRepairJob(contract);
+      expect(report.finalState).toBe('FAILED');
+      expect(report.failureReason).toContain('Product image distortion verification failed');
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+    } finally {
+      (service as any).evaluateVisualRepair = originalEvaluate;
+    }
+  });
+
+  test('Required Tests: validates and allows authorized test patterns while rejecting arbitrary commands', async () => {
+    const service = new RepairExecutionService(repoRoot);
+
+    // Valid test commands
+    expect(service.validateAndResolveTestCommand('npm run build').valid).toBe(true);
+    expect(service.validateAndResolveTestCommand('npm test').valid).toBe(true);
+    expect(service.validateAndResolveTestCommand('tests/defect-injection.spec.ts').valid).toBe(true);
+    expect(service.validateAndResolveTestCommand('npx playwright test tests/responsive.spec.ts').valid).toBe(true);
+    expect(service.validateAndResolveTestCommand('npx playwright test --reporter=list tests/shopping-cart.spec.ts').valid).toBe(true);
+
+    // Rejection of arbitrary commands and shell injection
+    expect(service.validateAndResolveTestCommand('rm -rf /').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('npm test; rm -rf /').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('npx playwright test && echo hacked').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('npx playwright test | cat').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('curl https://malicious.com').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('tests/../../etc/passwd.spec.ts').valid).toBe(false);
+    expect(service.validateAndResolveTestCommand('').valid).toBe(false);
+  });
+
+  test('Required Tests: executes required test in isolated worktree and marks repair PASSED', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-req-tests-pass',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      requiredValidationTests: ['tests/responsive.spec.ts'],
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `req-pass-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+    expect(report.finalState).toBe('PASSED');
+    expect(report.buildExecution?.passed).toBe(true);
+    expect(report.testExecution).toBeDefined();
+    expect(report.testExecution?.passed).toBe(true);
+    expect(report.testExecution?.command).toContain('tests/responsive.spec.ts');
+    expect(report.testExecution?.passedTests).toBeGreaterThan(0);
+    expect(report.cleanupStatus.cleaned).toBe(true);
+    expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+    expect(report.cleanupStatus.branchRemoved).toBe(false);
+    expect(report.cleanupStatus.branchPreserved).toBe(true);
+    await (new WorktreeManager(repoRoot)).cleanupWorktree(jobId);
+  });
+
+  test('Required Tests: failing required test fails the repair job and cleans up worktree', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-req-tests-fail',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      requiredValidationTests: ['tests/defect-injection.spec.ts'],
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `req-fail-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    // Spy on executeWorktreeTests to simulate test failure
+    const originalExec = service.executeWorktreeTests.bind(service);
+    service.executeWorktreeTests = async () => {
+      return {
+        passed: false,
+        error: "Required test 'npx playwright test tests/defect-injection.spec.ts' failed with exit code 1",
+        testExecution: {
+          command: 'npx playwright test tests/defect-injection.spec.ts',
+          exitCode: 1,
+          passed: false,
+          totalTests: 8,
+          passedTests: 7,
+          failedTests: 1,
+          durationMs: 1200,
+          stdoutSummary: '1 failed test',
+          stderrSummary: 'Assertion failed: expected 1 to be 2',
+        },
+      };
+    };
+
+    try {
+      const report = await service.executeRepairJob(contract);
+      expect(report.finalState).toBe('FAILED');
+      expect(report.failureReason).toContain('failed with exit code 1');
+      expect(report.testExecution?.passed).toBe(false);
+      expect(report.testExecution?.failedTests).toBe(1);
+      // Worktree must be cleaned up
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+      const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', jobId);
+      expect(fs.existsSync(worktreePath)).toBe(false);
+    } finally {
+      service.executeWorktreeTests = originalExec;
+    }
+  });
+
+  test('Required Tests: invalid or unauthorized test command rejects repair job before execution', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const maliciousProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-test-malicious',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'qa-engineer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      requiredValidationTests: ['cat /etc/passwd; echo injection'],
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `req-malicious-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: maliciousProposal.proposalId,
+      proposal: maliciousProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+    expect(report.finalState).toBe('FAILED');
+    expect(report.failureReason).toContain('forbidden shell metacharacters');
+    expect(report.cleanupStatus.cleaned).toBe(true);
+    expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+    expect(report.cleanupStatus.branchRemoved).toBe(true);
+    expect(report.cleanupStatus.branchPreserved).toBe(false);
+  });
+
+  test('Required Tests: executes with timeout and safely cleans up upon timeout', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    // Directly test executeWorktreeTests timeout behavior
+    const outcome = await service.executeWorktreeTests(
+      ['npm run build'],
+      repoRoot,
+      { timeoutMs: 1 } // impossibly short timeout to guarantee timeout trigger
+    );
+
+    expect(outcome.passed).toBe(false);
+    expect(outcome.error).toContain('timed out');
+    expect(outcome.testExecution?.exitCode).toBe(124);
+  });
+
+  test('v2 Workflow: Explicit UNSUPPORTED finalState when scenario has no registered patch', async () => {
+    const fakeProposalDir = path.join(repoRoot, 'artifacts', 'test-unsupported');
+    fs.mkdirSync(fakeProposalDir, { recursive: true });
+    const fakeProposalPath = path.join(fakeProposalDir, 'unsupported-proposal.json');
+
+    const fakeProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-unsupported-test',
+      scenarioId: 'unsupported-feature-break',
+      diagnosisRef: {
+        diagnosisStatus: 'diagnosed',
+        model: 'gemini-1.5-pro',
+        provider: 'google',
+        primaryDefectCategory: 'unknown',
+        reportedConfidence: 0.9,
+      },
+      defectCategory: 'unknown',
+      severity: 'medium',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+        componentOrSelector: '.unknown-defect',
+        excerpt: {
+          filePath: 'src/index.css',
+          startLine: 1,
+          endLine: 5,
+          content: '/* unknown */',
+          sha256: currentCssHash,
+        },
+        evidence: [],
+        uncertaintyNotes: [],
+      },
+      suspectedRootCause: 'Unknown defect pattern without registered fix',
+      evidenceExplanation: ['No deterministic patch available'],
+      proposedCorrection: {
+        type: 'css_rule_modification',
+        targetSelectorOrComponent: '.unknown-defect',
+        currentCode: 'color: red;',
+        proposedCode: 'color: blue;',
+        diffSummary: 'Fix color',
+      },
+      expectedVisualImprovement: 'Improve contrast',
+      confidence: 'medium',
+      confidenceScore: 0.8,
+      potentialRisks: [],
+      requiredValidationTests: ['npm run build'],
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      createdAt: new Date().toISOString(),
+      isMock: true,
+    };
+    fs.writeFileSync(fakeProposalPath, JSON.stringify(fakeProposal, null, 2), 'utf-8');
+
+    const jobId = `job-unsupported-${Date.now()}`;
+    const runResult = await runRepairJob([
+      `--proposal=${fakeProposalPath}`,
+      `--job-id=${jobId}`,
+    ], repoRoot);
+
+    expect(runResult.success).toBe(false);
+    expect(runResult.report.finalState).toBe('UNSUPPORTED');
+    expect(runResult.report.failureReason).toContain('No registered patch found for defect category');
+    expect(runResult.report.branch).toBeUndefined();
+    expect(runResult.report.commitSha).toBeUndefined();
+    expect(runResult.report.commit_sha).toBeUndefined();
+
+    // Verify no worktree directory was created
+    const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', jobId);
+    expect(fs.existsSync(worktreePath)).toBe(false);
+
+    // Verify report was persisted to artifacts
+    expect(fs.existsSync(runResult.reportPath)).toBe(true);
+
+    // Cleanup fake proposal file
+    fs.rmSync(fakeProposalDir, { recursive: true, force: true });
+  });
+
+  test('v2 Workflow: Validated repair creates Git commit, preserves local branch, and outputs metadata', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const worktreeManager = new WorktreeManager(repoRoot);
+
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-v2-commit-test',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      reviewedBy: 'release-architect@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      reviewNotes: 'Approved for v2 worktree commit test.',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `v2-commit-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    const report = await service.executeRepairJob(contract);
+
+    try {
+      // 1. Verify execution passed
+      expect(report.finalState).toBe('PASSED');
+
+      // 2. Verify branch preservation
+      const expectedBranch = `omnisight-repair/${jobId}`;
+      expect(report.branch).toBe(expectedBranch);
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+      expect(report.cleanupStatus.branchRemoved).toBe(false);
+      expect(report.cleanupStatus.branchPreserved).toBe(true);
+
+      // Verify worktree folder was deleted from disk
+      const worktreePath = path.join(repoRoot, 'artifacts', 'repair-worktrees', jobId);
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      // 3. Verify git commit creation and commit SHA
+      expect(report.commitSha).toBeDefined();
+      expect(report.commit_sha).toBe(report.commitSha);
+      expect(report.commitSha).toMatch(/^[0-9a-f]{40}$/);
+
+      // 4. Verify commit exists in git repository on the preserved branch
+      const branchCommitSha = await worktreeManager.getBranchCommit(expectedBranch);
+      expect(branchCommitSha).toBe(report.commitSha);
+
+      // 5. Verify commit author metadata
+      const { stdout: authorLog } = await execFileAsync('git', ['log', '-1', '--format=%an <%ae>', report.commitSha!], { cwd: repoRoot });
+      expect(authorLog.trim()).toBe('OmniSight Repair Agent <repair-agent@omnisight.ai>');
+
+      // 6. Verify commit message structure
+      const { stdout: messageLog } = await execFileAsync('git', ['log', '-1', '--format=%B', report.commitSha!], { cwd: repoRoot });
+      expect(messageLog).toContain('fix(repair): apply verified patch');
+      expect(messageLog).toContain(`Job: ${jobId}`);
+
+      // 7. Verify changed files in the commit
+      const { stdout: diffFiles } = await execFileAsync('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', report.commitSha!], { cwd: repoRoot });
+      const filesInCommit = diffFiles.trim().split('\n').filter(Boolean);
+      expect(filesInCommit).toEqual(['src/index.css']);
+    } finally {
+      // Cleanup the preserved branch
+      await worktreeManager.cleanupWorktree(jobId);
+    }
+  });
+
+  test('v2 Workflow: WorktreeManager.commitChanges rejects committing on clean tree', async () => {
+    const worktreeManager = new WorktreeManager(repoRoot);
+    const jobId = `clean-tree-job-${Date.now()}`;
+    const worktreeInfo = await worktreeManager.createWorktree(jobId);
+
+    try {
+      await expect(
+        worktreeManager.commitChanges(worktreeInfo.worktreePath, 'should fail on clean tree')
+      ).rejects.toThrow(/Cannot commit changes: Working tree has no unstaged or staged changes/);
+    } finally {
+      await worktreeManager.cleanupWorktree(jobId);
+    }
+  });
+
+  test('v2 Workflow: Validation failure deletes both worktree and branch without creating a commit', async () => {
+    const service = new RepairExecutionService(repoRoot);
+    const worktreeManager = new WorktreeManager(repoRoot);
+
+    const approvedProposal: any = {
+      schemaVersion: '1.0',
+      proposalId: 'prop-v2-fail-test',
+      scenarioId: 'product-image-distortion',
+      defectCategory: 'product-image-distortion',
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: currentCssHash,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    const jobId = `v2-fail-job-${Date.now()}`;
+    const contract: RepairJobContract = {
+      jobId,
+      proposalId: approvedProposal.proposalId,
+      proposal: approvedProposal,
+      approvedSourcePaths: ['src/index.css'],
+      approvedPatchId: 'patch-product-image-distortion-001',
+      targetRepositoryPath: repoRoot,
+      targetBaseCommit: 'HEAD',
+      createdAt: new Date().toISOString(),
+      state: 'PENDING',
+    };
+
+    // Override evaluateVisualRepair to simulate validation failure
+    const originalEvaluate = (service as any).evaluateVisualRepair.bind(service);
+    (service as any).evaluateVisualRepair = async () => ({
+      passed: false,
+      defectCategory: 'product-image-distortion',
+      route: '/products',
+      viewport: { width: 1280, height: 800 },
+      assertionSummary: 'Simulated visual validation failure for v2 test',
+      unrelatedRegressionsDetected: false,
+    });
+
+    try {
+      const report = await service.executeRepairJob(contract);
+      expect(report.finalState).toBe('FAILED');
+      expect(report.branch).toBeUndefined();
+      expect(report.commitSha).toBeUndefined();
+      expect(report.commit_sha).toBeUndefined();
+
+      // Verify worktree folder removed
+      expect(report.cleanupStatus.cleaned).toBe(true);
+      expect(report.cleanupStatus.worktreeRemoved).toBe(true);
+      expect(report.cleanupStatus.branchRemoved).toBe(true);
+      expect(report.cleanupStatus.branchPreserved).toBe(false);
+
+      // Verify branch does not exist in git
+      const branchExists = await worktreeManager.verifyCommitExists(`omnisight-repair/${jobId}`);
+      expect(branchExists).toBe(false);
+    } finally {
+      (service as any).evaluateVisualRepair = originalEvaluate;
+    }
+  });
+
+  test('v2 Workflow: WorktreeManager.cleanupWorktree defaults to removing branch for backward compatibility', async () => {
+    const worktreeManager = new WorktreeManager(repoRoot);
+    const jobId = `compat-job-${Date.now()}`;
+    await worktreeManager.createWorktree(jobId);
+
+    const branchName = `omnisight-repair/${jobId}`;
+    expect(await worktreeManager.verifyCommitExists(branchName)).toBe(true);
+
+    // Default cleanupWorktree call (no options) must delete branch
+    const cleanupResult = await worktreeManager.cleanupWorktree(jobId);
+    expect(cleanupResult.worktreeRemoved).toBe(true);
+    expect(cleanupResult.branchRemoved).toBe(true);
+    expect(cleanupResult.branchPreserved).toBe(false);
+    expect(await worktreeManager.verifyCommitExists(branchName)).toBe(false);
+  });
+});
+
+test.describe('WorktreeManager Safety & Job ID Validation Regression Tests', () => {
+  const repoRoot = process.cwd();
+  const worktreeBaseDir = path.join(repoRoot, 'artifacts', 'repair-worktrees');
+
+  test('Job ID Validation: rejects invalid job IDs (slashes, path traversal, whitespace, empty, special chars, too long)', async () => {
+    const wm = new WorktreeManager(repoRoot);
+
+    const invalidJobIds = [
+      '', // empty
+      '   ', // whitespace only
+      'job id with spaces',
+      'job/with/slashes',
+      'job\\with\\backslashes',
+      '../traversal-job',
+      'job-..-traversal',
+      '..',
+      '-starts-with-hyphen',
+      '_starts-with-underscore',
+      'job@symbol',
+      'job$dollar',
+      'job!bang',
+      'job#hash',
+      'job%percent',
+      'a'.repeat(129), // exceeds 128 chars
+      null as any,
+      undefined as any,
+      12345 as any,
+      {} as any,
+    ];
+
+    for (const invalidId of invalidJobIds) {
+      expect(() => wm.validateJobId(invalidId)).toThrow(/Invalid jobId/);
+      await expect(wm.createWorktree(invalidId)).rejects.toThrow(/Invalid jobId/);
+    }
+  });
+
+  test('Job ID Validation: accepts valid job IDs and returns string unmodified', () => {
+    const wm = new WorktreeManager(repoRoot);
+
+    const validJobIds = [
+      'job123',
+      'job-456',
+      'job_789',
+      'repair-job-v2_run-01',
+      'A123-Z987_test',
+      'a'.repeat(128), // maximum 128 characters
+    ];
+
+    for (const validId of validJobIds) {
+      expect(wm.validateJobId(validId)).toBe(validId);
+    }
+  });
+
+  test('Resource Conflict: rejects duplicate job ID when local git branch already exists', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `dup-branch-test-${Date.now()}`;
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    // 1. Create worktree and branch
+    const info = await wm.createWorktree(testJobId);
+    expect(await wm.checkBranchExists(branchName)).toBe(true);
+
+    // 2. Remove the worktree folder but PRESERVE the branch
+    await wm.cleanupWorktree(testJobId, { preserveBranch: true });
+    expect(await wm.checkBranchExists(branchName)).toBe(true);
+    expect(wm.checkWorktreeDirectoryExists(info.worktreePath)).toBe(false);
+
+    try {
+      // 3. Attempting to create a worktree with the same jobId must reject with conflict error
+      await expect(wm.createWorktree(testJobId)).rejects.toThrow(
+        /Cannot create repair worktree: resource conflict detected/
+      );
+      // Verify branch is still preserved and untouched
+      expect(await wm.checkBranchExists(branchName)).toBe(true);
+    } finally {
+      // Cleanup the preserved branch
+      await wm.cleanupWorktree(testJobId);
+      expect(await wm.checkBranchExists(branchName)).toBe(false);
+    }
+  });
+
+  test('Resource Conflict: rejects duplicate job ID when worktree directory already exists on disk', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `dup-dir-test-${Date.now()}`;
+    const targetDir = path.join(worktreeBaseDir, testJobId);
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    // Ensure targetDir exists on disk, but branch does not exist
+    if (!fs.existsSync(worktreeBaseDir)) {
+      fs.mkdirSync(worktreeBaseDir, { recursive: true });
+    }
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(path.join(targetDir, 'dummy.txt'), 'pre-existing content');
+
+    expect(wm.checkWorktreeDirectoryExists(targetDir)).toBe(true);
+    expect(await wm.checkBranchExists(branchName)).toBe(false);
+
+    try {
+      // Attempting to create worktree must reject without overwriting directory
+      await expect(wm.createWorktree(testJobId)).rejects.toThrow(
+        /Cannot create repair worktree: resource conflict detected.*worktree directory already exists on disk/
+      );
+      // Verify directory was not deleted
+      expect(fs.existsSync(targetDir)).toBe(true);
+    } finally {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
+
+  test('Resource Conflict: rejects duplicate job ID when worktree is already registered in git', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `dup-reg-test-${Date.now()}`;
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    const info = await wm.createWorktree(testJobId);
+    expect(await wm.checkWorktreeRegistered(info.worktreePath)).toBe(true);
+
+    try {
+      // Attempting to create again while active worktree is registered must reject
+      await expect(wm.createWorktree(testJobId)).rejects.toThrow(
+        /Cannot create repair worktree: resource conflict detected/
+      );
+    } finally {
+      await wm.cleanupWorktree(testJobId);
+      expect(await wm.checkBranchExists(branchName)).toBe(false);
+      expect(await wm.checkWorktreeRegistered(info.worktreePath)).toBe(false);
+    }
+  });
+
+  test('Resource Conflict: preserves previously committed repair branch and prevents overwrite', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `dup-commit-test-${Date.now()}`;
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    // 1. Create worktree
+    const info = await wm.createWorktree(testJobId);
+
+    // 2. Make a change and commit in the isolated worktree
+    const testFilePath = path.join(info.worktreePath, 'repair-marker.txt');
+    fs.writeFileSync(testFilePath, `Repair executed for ${testJobId}`);
+    const commitResult = await wm.commitChanges(info.worktreePath, `feat: repair patch for ${testJobId}`);
+    expect(commitResult.commitSha).toBeDefined();
+
+    // 3. Remove worktree folder, preserving branch
+    await wm.cleanupWorktree(testJobId, { preserveBranch: true });
+    expect(await wm.checkBranchExists(branchName)).toBe(true);
+
+    const preservedCommit = await wm.getBranchCommit(branchName);
+    expect(preservedCommit).toBe(commitResult.commitSha);
+
+    try {
+      // 4. Attempt to create worktree again with same jobId - must reject and protect branch & commit
+      await expect(wm.createWorktree(testJobId)).rejects.toThrow(
+        /Cannot create repair worktree: resource conflict detected/
+      );
+
+      // Verify branch and commit are intact
+      const stillPreservedCommit = await wm.getBranchCommit(branchName);
+      expect(stillPreservedCommit).toBe(commitResult.commitSha);
+    } finally {
+      await wm.cleanupWorktree(testJobId);
+      expect(await wm.checkBranchExists(branchName)).toBe(false);
+    }
+  });
+
+  test('Worktree Lifecycle: creates fresh unique worktree and cleans up successfully', async () => {
+    const wm = new WorktreeManager(repoRoot);
+    const testJobId = `fresh-job-test-${Date.now()}`;
+    const branchName = `omnisight-repair/${testJobId}`;
+
+    expect(await wm.checkBranchExists(branchName)).toBe(false);
+
+    const info = await wm.createWorktree(testJobId);
+    expect(info.branchName).toBe(branchName);
+    expect(fs.existsSync(info.worktreePath)).toBe(true);
+    expect(await wm.checkBranchExists(branchName)).toBe(true);
+    expect(await wm.checkWorktreeRegistered(info.worktreePath)).toBe(true);
+
+    const cleanup = await wm.cleanupWorktree(testJobId);
+    expect(cleanup.worktreeRemoved).toBe(true);
+    expect(cleanup.branchRemoved).toBe(true);
+    expect(fs.existsSync(info.worktreePath)).toBe(false);
+    expect(await wm.checkBranchExists(branchName)).toBe(false);
+  });
+});

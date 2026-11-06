@@ -1,6 +1,11 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 
 export function NotFound() {
+  useEffect(() => {
+    document.title = "Page Not Found | OmniShop";
+  }, []);
+
   return (
     <div className="page not-found-page">
       <div className="status-card">

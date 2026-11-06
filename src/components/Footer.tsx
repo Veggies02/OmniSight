@@ -1,3 +1,7 @@
+import { Link } from "react-router-dom";
+
+const CURRENT_YEAR = new Date().getFullYear();
+
 export function Footer() {
   return (
     <footer className="footer">
@@ -16,9 +20,9 @@ export function Footer() {
           <div className="footer-column">
             <h4>Shop</h4>
             <ul>
-              <li><a href="/products">All Products</a></li>
-              <li><a href="/cart">Cart</a></li>
-              <li><a href="/checkout">Checkout</a></li>
+              <li><Link to="/products">All Products</Link></li>
+              <li><Link to="/cart">Cart</Link></li>
+              <li><Link to="/checkout">Checkout</Link></li>
             </ul>
           </div>
           <div className="footer-column">
@@ -33,7 +37,7 @@ export function Footer() {
       </div>
 
       <div className="footer-bottom">
-        <p>© {new Date().getFullYear()} OmniShop. Built for OmniSight UI Defect Detection & Self-Healing.</p>
+        <p>© {CURRENT_YEAR} OmniShop. Built for OmniSight UI Defect Detection & Self-Healing.</p>
       </div>
     </footer>
   );

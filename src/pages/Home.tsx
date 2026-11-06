@@ -1,9 +1,15 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { ProductCard } from "../components/ProductCard";
 import { products } from "../data/products";
+import { FALLBACK_IMAGES } from "../utils/imageFallbacks";
 
 export function Home() {
   const featuredProducts = products.filter((p) => p.featured);
+
+  useEffect(() => {
+    document.title = "OmniShop — Crafted Essentials for Modern Living";
+  }, []);
 
   return (
     <div className="page home-page">
@@ -34,8 +40,8 @@ export function Home() {
               </div>
               <div className="stat-divider" aria-hidden="true" />
               <div className="stat-item">
-                <span className="stat-value">2-Day</span>
-                <span className="stat-label">Express Delivery</span>
+                <span className="stat-value">2–4 Day</span>
+                <span className="stat-label">Standard Delivery</span>
               </div>
               <div className="stat-divider" aria-hidden="true" />
               <div className="stat-item">
@@ -52,6 +58,11 @@ export function Home() {
                 alt="OmniShop curated modern storefront collection"
                 className="hero-image"
                 loading="eager"
+                width={1200}
+                height={900}
+                onError={(e) => {
+                  e.currentTarget.src = FALLBACK_IMAGES.Hero;
+                }}
               />
               <div className="hero-floating-badge">
                 <span className="badge-dot" />

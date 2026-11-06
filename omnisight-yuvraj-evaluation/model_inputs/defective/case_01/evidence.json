@@ -1,0 +1,49 @@
+{
+  "case_id": "case_01",
+  "step_name": "not_recorded",
+  "screenshot_path": "screenshot.png",
+  "dom_path": "dom.html",
+  "page_title": "OmniShop — Modern Curated Essentials",
+  "route": "/products",
+  "url": "http://127.0.0.1:5173/products",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "is_mobile": false,
+  "browser": "chromium",
+  "capture_mode": "viewport",
+  "document_metrics": {
+    "clientWidth": 1440,
+    "scrollWidth": 1440,
+    "clientHeight": 900,
+    "scrollHeight": 1927
+  },
+  "element_bounding_boxes": {
+    "card": {
+      "x": 144,
+      "y": 361.765625,
+      "width": 267,
+      "height": 608.390625
+    },
+    "media": {
+      "x": 145,
+      "y": 362.765625,
+      "width": 265,
+      "height": 380
+    },
+    "image": {
+      "x": 178.125,
+      "y": 277.265625,
+      "width": 198.75,
+      "height": 551
+    }
+  },
+  "computed_styles": {
+    "image.objectFit": "fill",
+    "image.height": "380px",
+    "image.transform": "matrix(0.75, 0, 0, 1.45, 0, 0)",
+    "media.height": "380px"
+  },
+  "console_errors": []
+}
