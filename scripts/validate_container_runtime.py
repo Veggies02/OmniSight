@@ -390,11 +390,16 @@ def audit_cancellation_and_process_cleanup() -> None:
         headers=headers,
         method="POST",
     )
+    sub_ok = False
     try:
         with urllib.request.urlopen(req_sub, timeout=5.0) as resp:
+            resp.read()  # Drain socket
             sub_ok = (resp.status == 201)
     except Exception:
         sub_ok = False
+
+    # Allow worker thread a brief moment to transition task to running and spawn process
+    time.sleep(0.2)
 
     # Issue cancellation
     req_cancel = urllib.request.Request(
@@ -403,24 +408,29 @@ def audit_cancellation_and_process_cleanup() -> None:
         method="POST",
     )
     cancel_ok = False
+    cancel_status = ""
     try:
         with urllib.request.urlopen(req_cancel, timeout=5.0) as resp:
             cancel_ok = (resp.status == 200)
-    except Exception:
-        pass
+            cancel_data = json.loads(resp.read().decode())
+            cancel_status = str(cancel_data.get("status", "")).lower()
+    except Exception as exc:
+        cancel_status = f"error: {exc}"
 
     # Poll status to confirm CANCELLED
     req_stat = urllib.request.Request(f"{BASE_URL}/api/v1/tasks/{task_id}", headers=headers, method="GET")
-    status_cancelled = False
+    status_cancelled = (cancel_status == "cancelled")
+    poll_status = cancel_status
     for _ in range(10):
         try:
             with urllib.request.urlopen(req_stat, timeout=5.0) as resp:
                 data = json.loads(resp.read().decode())
-                if data.get("status") == "cancelled":
+                poll_status = str(data.get("status", "")).lower()
+                if poll_status == "cancelled":
                     status_cancelled = True
                     break
-        except Exception:
-            pass
+        except Exception as exc:
+            poll_status = f"error: {exc}"
         time.sleep(0.3)
 
     passed = sub_ok and cancel_ok and status_cancelled
@@ -431,7 +441,9 @@ def audit_cancellation_and_process_cleanup() -> None:
             "task_submitted": sub_ok,
             "cancellation_accepted": cancel_ok,
             "status_cancelled": status_cancelled,
-            "summary": f"Submit={sub_ok}, Cancel={cancel_ok}, State=cancelled",
+            "cancel_endpoint_status": cancel_status,
+            "poll_status": poll_status,
+            "summary": f"Submit={sub_ok}, Cancel={cancel_ok}, State={poll_status}",
         },
     )
 
@@ -458,6 +470,7 @@ def audit_timeout_handling() -> None:
     )
     try:
         with urllib.request.urlopen(req, timeout=5.0) as resp:
+            resp.read()  # Drain socket
             sub_ok = (resp.status == 201)
     except Exception:
         sub_ok = False
