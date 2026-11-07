@@ -1,7 +1,7 @@
 [
     {
-        "Id": "4229d3d3072e06dc92e6b82725ec22b5bb35905df8994b18b66103c7299306a7",
-        "Created": "2026-11-07T19:01:49.231254627Z",
+        "Id": "5d6277b64e01f61091f762926581f34cc7162f796491c458e1b153cc22c0ff49",
+        "Created": "2026-11-07T19:11:17.464792725Z",
         "Path": "/worker_entrypoint.sh",
         "Args": [
             "uvicorn",
@@ -18,29 +18,29 @@
             "Restarting": false,
             "OOMKilled": false,
             "Dead": false,
-            "Pid": 8595,
+            "Pid": 8588,
             "ExitCode": 0,
             "Error": "",
-            "StartedAt": "2026-11-07T19:01:53.661906876Z",
+            "StartedAt": "2026-11-07T19:11:21.943805957Z",
             "FinishedAt": "0001-01-01T00:00:00Z",
             "Health": {
                 "Status": "healthy",
                 "FailingStreak": 0,
                 "Log": [
                     {
-                        "Start": "2026-11-07T19:01:58.784257093Z",
-                        "End": "2026-11-07T19:01:58.957446521Z",
+                        "Start": "2026-11-07T19:11:27.079622948Z",
+                        "End": "2026-11-07T19:11:27.243074192Z",
                         "ExitCode": 0,
                         "Output": ""
                     }
                 ]
             }
         },
-        "Image": "sha256:f47bea661519346e05aff9966a7c09249f75b5ddf2b24bec13ad55c91463c1da",
-        "ResolvConfPath": "/var/lib/docker/containers/4229d3d3072e06dc92e6b82725ec22b5bb35905df8994b18b66103c7299306a7/resolv.conf",
-        "HostnamePath": "/var/lib/docker/containers/4229d3d3072e06dc92e6b82725ec22b5bb35905df8994b18b66103c7299306a7/hostname",
-        "HostsPath": "/var/lib/docker/containers/4229d3d3072e06dc92e6b82725ec22b5bb35905df8994b18b66103c7299306a7/hosts",
-        "LogPath": "/var/lib/docker/containers/4229d3d3072e06dc92e6b82725ec22b5bb35905df8994b18b66103c7299306a7/4229d3d3072e06dc92e6b82725ec22b5bb35905df8994b18b66103c7299306a7-json.log",
+        "Image": "sha256:da8ca9b6b70b0fddf7c1385d79a60c8c4090f132aa36a0c83e6f83f015d0f86c",
+        "ResolvConfPath": "/var/lib/docker/containers/5d6277b64e01f61091f762926581f34cc7162f796491c458e1b153cc22c0ff49/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/5d6277b64e01f61091f762926581f34cc7162f796491c458e1b153cc22c0ff49/hostname",
+        "HostsPath": "/var/lib/docker/containers/5d6277b64e01f61091f762926581f34cc7162f796491c458e1b153cc22c0ff49/hosts",
+        "LogPath": "/var/lib/docker/containers/5d6277b64e01f61091f762926581f34cc7162f796491c458e1b153cc22c0ff49/5d6277b64e01f61091f762926581f34cc7162f796491c458e1b153cc22c0ff49-json.log",
         "Name": "/omnisight-execution-worker",
         "RestartCount": 0,
         "Driver": "overlayfs",
@@ -182,7 +182,7 @@
             }
         ],
         "Config": {
-            "Hostname": "4229d3d3072e",
+            "Hostname": "5d6277b64e01",
             "Domainname": "",
             "User": "10001:10001",
             "AttachStdin": false,
@@ -195,18 +195,18 @@
             "OpenStdin": false,
             "StdinOnce": false,
             "Env": [
-                "OMNISIGHT_ENFORCE_SANDBOX=1",
-                "OMNISIGHT_ENVIRONMENT=production",
-                "OMNISIGHT_ENFORCE_APPROVAL_SIGNATURES=1",
                 "LOG_FORMAT=json",
-                "OMNISIGHT_WORKER_HOST=0.0.0.0",
-                "OMNISIGHT_WORKER_PORT=8080",
+                "OMNISIGHT_APPROVAL_PUBLIC_KEY_HEX=fd95ae0ae928ab66c338f7249c7ede27ae26ceb0cb81b00916171e455b0e3bc8",
                 "SECURITY_SANDBOX_REQUIRED=1",
-                "OMNISIGHT_WORKER_AUTH_TOKEN=e7f392db824fe37d78c32749c9916d0c8c696aa12f295e671690b22d7ae9b0bb",
-                "OMNISIGHT_APPROVAL_PUBLIC_KEY_HEX=737cc0d01aa1c07a596d80617b75392d9ac55fefef01614af7df12b4e7a4ad3e",
+                "OMNISIGHT_ENFORCE_SANDBOX=1",
+                "OMNISIGHT_WORKER_AUTH_TOKEN=6d1ae76f8b1e0509db9f66ceec96df39a19ed17149e1c45e5c7496931820c301",
+                "OMNISIGHT_WORKER_PORT=8080",
                 "OMNISIGHT_REVOKED_KEY_IDS=omnisight-qa-root,omnisight-qa-root-v1",
+                "OMNISIGHT_ENVIRONMENT=production",
                 "STRICT_CONTAINER_SECURITY=1",
-                "OMNISIGHT_WEBHOOK_SECRET=60d804399784b5f5c862653f89c6c348a6bf69c627c29a374f6ada3b8177a97e",
+                "OMNISIGHT_WORKER_HOST=0.0.0.0",
+                "OMNISIGHT_ENFORCE_APPROVAL_SIGNATURES=1",
+                "OMNISIGHT_WEBHOOK_SECRET=c2b6d683bdf965f8aa9da07913051cbe3d7f240d4e13f8a7461bf939e18a9bba",
                 "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "LANG=C.UTF-8",
                 "GPG_KEY=A035C8C19219BA821ECEA86B64E628F8D684696D",
@@ -243,10 +243,10 @@
                 "/worker_entrypoint.sh"
             ],
             "Labels": {
-                "com.docker.compose.config-hash": "8725f63829f5a8c9907fbd1595196dd45901dd6863ebba49f1c92c86c4202bcf",
+                "com.docker.compose.config-hash": "5dd5808264d62b2b0cc18e5cbaacaaae4c56827b05850c6bcc27c072d61e07ea",
                 "com.docker.compose.container-number": "1",
                 "com.docker.compose.depends_on": "",
-                "com.docker.compose.image": "sha256:f47bea661519346e05aff9966a7c09249f75b5ddf2b24bec13ad55c91463c1da",
+                "com.docker.compose.image": "sha256:da8ca9b6b70b0fddf7c1385d79a60c8c4090f132aa36a0c83e6f83f015d0f86c",
                 "com.docker.compose.oneoff": "False",
                 "com.docker.compose.project": "omnisight",
                 "com.docker.compose.project.config_files": "/home/runner/work/OmniSight/OmniSight/docker-compose.worker.yml",
@@ -256,8 +256,8 @@
             }
         },
         "NetworkSettings": {
-            "SandboxID": "6334c748aeab5a2687b9e539bfa3b05fa05c6d5a9751251e37082d036dadc2d9",
-            "SandboxKey": "/var/run/docker/netns/6334c748aeab",
+            "SandboxID": "d6b30b50b9a1a42e729e8fb0bda0c3b892857623e18cba6629bae5de892dfbec",
+            "SandboxKey": "/var/run/docker/netns/d6b30b50b9a1",
             "Ports": {
                 "8080/tcp": [
                     {
@@ -280,11 +280,11 @@
                     ],
                     "DriverOpts": null,
                     "GwPriority": 0,
-                    "NetworkID": "7c95670464780c9dd4c0e1c13da6eed577b9502a562de764b95f48dc2daa88a1",
-                    "EndpointID": "03698d7d6602a96101e888cb3dc1799e12196f301597e3e5f1d5265066cd0c20",
+                    "NetworkID": "6a0cb2c753b690181c0be6c066bb5155e01f4e0cbcee681f684b99d611f13f51",
+                    "EndpointID": "22933ebc0240cdceeea4c46e2f80d6b673a534dccb9ef05169b143618eda7c78",
                     "Gateway": "172.18.0.1",
                     "IPAddress": "172.18.0.2",
-                    "MacAddress": "42:6a:9f:66:e4:b0",
+                    "MacAddress": "26:68:cf:a9:89:c2",
                     "IPPrefixLen": 16,
                     "IPv6Gateway": "",
                     "GlobalIPv6Address": "",
@@ -292,14 +292,14 @@
                     "DNSNames": [
                         "omnisight-execution-worker",
                         "omnisight-worker",
-                        "4229d3d3072e"
+                        "5d6277b64e01"
                     ]
                 }
             }
         },
         "ImageManifestDescriptor": {
             "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "digest": "sha256:06e4d75194f1a13a4aa020a9741f6735e055f952a1795295072398af239d0581",
+            "digest": "sha256:28d2677f8c8231a2746b5bf3ec750b514e2fcd1eea63950141d6aeca49af6e54",
             "size": 3523,
             "platform": {
                 "architecture": "amd64",
