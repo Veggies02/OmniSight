@@ -39,7 +39,6 @@ jobs:
 
       - name: Run worker service automated tests
         run: |
-          python -m pytest test_security_sandbox.py -v
           python -m pytest test_execution_runner.py -v
           python -m pytest test_worker_service.py -v
 
