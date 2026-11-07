@@ -1,6 +1,6 @@
 {
   "milestone": "M3.1",
-  "timestamp": "2026-11-07T17:25:17Z",
+  "timestamp": "2026-11-07T18:51:24Z",
   "container_name": "omnisight-execution-worker",
   "checks": {
     "Container Identity": {
@@ -60,7 +60,7 @@
         "cgroup_cpu_quota": "200000 100000",
         "nano_cpus": "2000000000",
         "quota_verified": true,
-        "bounded_computation_output": "calc_ok 0.012",
+        "bounded_computation_output": "calc_ok 0.025",
         "summary": "CPU Quota=200000 100000, Bounded Stress OK=True"
       }
     },
@@ -106,7 +106,9 @@
         "task_submitted": true,
         "cancellation_accepted": true,
         "status_cancelled": false,
-        "summary": "Submit=True, Cancel=True, State=cancelled"
+        "cancel_endpoint_status": "failed",
+        "poll_status": "failed",
+        "summary": "Submit=True, Cancel=True, State=failed"
       }
     },
     "Task Timeout Handling": {
@@ -121,7 +123,7 @@
       "status": "PASSED",
       "details": {
         "artifacts_mount_verified": true,
-        "mount_details": "drwxrwxrwx 2 omnisight omnisight 4096 Nov  7 17:25 /app/artifacts",
+        "mount_details": "drwxrwxrwx 2 omnisight omnisight 4096 Nov  7 18:51 /app/artifacts",
         "summary": "Volume mounted strictly at /app/artifacts with nosuid"
       }
     },
@@ -162,7 +164,7 @@
         "task_submission": true,
         "idempotency_deduplication": true,
         "webhook_hmac_sha256_verified": true,
-        "correlation_id": "corr-e2e-task-1794072327",
+        "correlation_id": "corr-e2e-task-1794077496",
         "summary": "Submission=True, Idempotent Deduplication=True, HMAC=True"
       }
     }
