@@ -1,6 +1,6 @@
 {
   "milestone": "M3.1",
-  "timestamp": "2026-11-07T15:48:53Z",
+  "timestamp": "2026-11-07T15:54:32Z",
   "container_name": "omnisight-execution-worker",
   "checks": {
     "Container Identity": {
@@ -60,7 +60,7 @@
         "cgroup_cpu_quota": "200000 100000",
         "nano_cpus": "2000000000",
         "quota_verified": true,
-        "bounded_computation_output": "calc_ok 0.0206",
+        "bounded_computation_output": "calc_ok 0.0304",
         "summary": "CPU Quota=200000 100000, Bounded Stress OK=True"
       }
     },
@@ -71,7 +71,7 @@
         "inspect_memory": "2147483648",
         "bounded_allocation_ok": true,
         "oversized_allocation_blocked": false,
-        "summary": "Limit=2147483648 bytes, 64MB OK=True, 3.5GB Blocked=True"
+        "summary": "Limit=2147483648 bytes, 64MB OK=True, Oversized Blocked=False"
       }
     },
     "Actual PID Limit Enforcement": {
@@ -101,11 +101,11 @@
       }
     },
     "Cancellation & Process Cleanup": {
-      "status": "FAILED",
+      "status": "PASSED",
       "details": {
         "task_submitted": true,
         "cancellation_accepted": true,
-        "status_cancelled": false,
+        "status_cancelled": true,
         "summary": "Submit=True, Cancel=True, State=cancelled"
       }
     },
@@ -121,7 +121,7 @@
       "status": "PASSED",
       "details": {
         "artifacts_mount_verified": true,
-        "mount_details": "drwxrwxrwx 2 omnisight omnisight 4096 Nov  7 15:48 /app/artifacts",
+        "mount_details": "drwxrwxrwx 2 omnisight omnisight 4096 Nov  7 15:54 /app/artifacts",
         "summary": "Volume mounted strictly at /app/artifacts with nosuid"
       }
     },
@@ -156,13 +156,13 @@
       }
     },
     "End-to-End Task Lifecycle & Webhook Verification": {
-      "status": "PASSED",
+      "status": "FAILED",
       "details": {
         "task_submission": true,
-        "idempotency_deduplication": true,
+        "idempotency_deduplication": false,
         "webhook_hmac_sha256_verified": true,
-        "correlation_id": "corr-e2e-task-1794066543",
-        "summary": "Submission=True, Idempotent Deduplication=True, HMAC=True"
+        "correlation_id": "corr-e2e-task-1794066884",
+        "summary": "Submission=True, Idempotent Deduplication=False, HMAC=True"
       }
     }
   },
