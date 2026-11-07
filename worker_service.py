@@ -907,7 +907,15 @@ class TaskExecutor:
             else:
                 popen_kwargs["start_new_session"] = True
 
-            process = subprocess.Popen(command, **popen_kwargs)  # noqa: S603
+            try:
+                process = subprocess.Popen(command, **popen_kwargs)  # noqa: S603
+            except OSError as popen_err:
+                if popen_kwargs.get("start_new_session"):
+                    logger.warning("[WORKER] start_new_session failed (%s), retrying without separate session", popen_err)
+                    popen_kwargs.pop("start_new_session", None)
+                    process = subprocess.Popen(command, **popen_kwargs)  # noqa: S603
+                else:
+                    raise
             self.registry.set_process(request.task_id, process)
 
             timed_out = False

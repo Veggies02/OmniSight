@@ -421,16 +421,22 @@ def audit_cancellation_and_process_cleanup() -> None:
     req_stat = urllib.request.Request(f"{BASE_URL}/api/v1/tasks/{task_id}", headers=headers, method="GET")
     status_cancelled = (cancel_status == "cancelled")
     poll_status = cancel_status
+    poll_error = ""
     for _ in range(10):
         try:
             with urllib.request.urlopen(req_stat, timeout=5.0) as resp:
                 data = json.loads(resp.read().decode())
                 poll_status = str(data.get("status", "")).lower()
+                if data.get("error_message"):
+                    poll_error = str(data.get("error_message"))
+                elif data.get("error"):
+                    poll_error = str(data.get("error"))
                 if poll_status == "cancelled":
                     status_cancelled = True
                     break
         except Exception as exc:
             poll_status = f"error: {exc}"
+            poll_error = str(exc)
         time.sleep(0.3)
 
     passed = sub_ok and cancel_ok and status_cancelled
@@ -443,6 +449,7 @@ def audit_cancellation_and_process_cleanup() -> None:
             "status_cancelled": status_cancelled,
             "cancel_endpoint_status": cancel_status,
             "poll_status": poll_status,
+            "poll_error": poll_error,
             "summary": f"Submit={sub_ok}, Cancel={cancel_ok}, State={poll_status}",
         },
     )

@@ -363,6 +363,21 @@ static const int WHITELISTED_SYSCALLS[] = {
 #ifdef __NR_waitid
     __NR_waitid,
 #endif
+#ifdef __NR_setsid
+    __NR_setsid,
+#endif
+#ifdef __NR_getsid
+    __NR_getsid,
+#endif
+#ifdef __NR_setpgid
+    __NR_setpgid,
+#endif
+#ifdef __NR_getpgid
+    __NR_getpgid,
+#endif
+#ifdef __NR_getpgrp
+    __NR_getpgrp,
+#endif
 
     /* Networking (HTTP Server / Uvicorn) */
 #ifdef __NR_socket
