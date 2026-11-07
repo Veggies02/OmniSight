@@ -38,3 +38,12 @@ omnisight-yuvraj-evaluation/**/*.png
 *.njsproj
 *.sln
 *.sw?
+
+# Python & Native Binaries
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.dylib
+*.o
+.pytest_cache/
