@@ -47,7 +47,7 @@ class RepairApproval(BaseModel):
 
 
 class RepairResult(BaseModel):
-    outcome: Literal["passed", "failed", "rejected", "error"]
+    outcome: Literal["passed", "failed", "rejected", "unsupported", "error"]
     passed: bool
     job_id: str
     message: str
@@ -60,6 +60,8 @@ class RepairResult(BaseModel):
     visual_passed: Optional[bool] = None
     patch_id: Optional[str] = None
     proposal_id: Optional[str] = None
+    branch: Optional[str] = Field(default=None, description="Local branch holding the validated commit (absent when nothing was committed)")
+    commit_sha: Optional[str] = Field(default=None, description="Commit made after validation (absent when nothing was committed)")
     cleanup: Optional[Dict[str, Any]] = None
     proposal_path: Optional[str] = None
     report_path: Optional[str] = Field(default=None, description="Relative to the repo root")
@@ -275,6 +277,9 @@ class RepairRunner:
             visual_passed=(report.get("visualValidation") or {}).get("passed"),
             patch_id=report.get("patchId"),
             proposal_id=report.get("proposalId"),
+            # Both spellings exist in the engine's report. Both are absent for UNSUPPORTED and failed repairs.
+            branch=_optional_str(report.get("branch")),
+            commit_sha=_optional_str(report.get("commitSha")) or _optional_str(report.get("commit_sha")),
             cleanup=report.get("cleanupStatus"),
             report_path=self._rel(report_path),
         )
@@ -286,8 +291,17 @@ class RepairRunner:
         if exit_code == 0:
             # Contract says exit 0 means PASSED. Anything else means we misread something.
             return error(f"CLI exited 0 but report state is {final_state!r}; treating as an error.", **fields)
-        outcome = "rejected" if approval_ok is False else "failed"
         reason = report.get("failureReason") or final_state
+        if final_state == "UNSUPPORTED":
+            # No registered patch for this scenario. Nothing was executed; not a failure of the repair itself.
+            return RepairResult(
+                outcome="unsupported",
+                passed=False,
+                message=f"Repair {job_id} unsupported: {reason}",
+                **common,
+                **fields,
+            )
+        outcome = "rejected" if approval_ok is False else "failed"
         return RepairResult(
             outcome=outcome,
             passed=False,
@@ -295,6 +309,10 @@ class RepairRunner:
             **common,
             **fields,
         )
+
+
+def _optional_str(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and value else None
 
 
 def _last_line(text: Optional[str]) -> Optional[str]:
