@@ -1,6 +1,6 @@
 {
   "milestone": "M3.1",
-  "timestamp": "2026-11-07T14:54:36Z",
+  "timestamp": "2026-11-07T15:48:53Z",
   "container_name": "omnisight-execution-worker",
   "checks": {
     "Container Identity": {
@@ -44,26 +44,85 @@
         "summary": "CapEff=0000000000000000, NoNewPrivs=1, SeccompMode=2"
       }
     },
-    "Seccomp Blocked Syscalls": {
+    "Custom Seccomp Profile Syscall Interception": {
       "status": "PASSED",
       "details": {
         "reboot_blocked": true,
-        "reboot_returncode": 1,
         "chroot_blocked": true,
-        "chroot_returncode": 1,
-        "summary": "Reboot blocked=True, Chroot blocked=True"
+        "ptrace_blocked": true,
+        "mount_blocked": true,
+        "summary": "Reboot=True, Chroot=True, Ptrace=True, Mount=True"
       }
     },
-    "Resource & PID Limits": {
+    "Actual CPU Enforcement": {
       "status": "PASSED",
       "details": {
-        "nano_cpus": 2000000000,
-        "memory_bytes": 2147483648,
-        "pids_limit": 100,
-        "cpu_limit_enforced": true,
-        "mem_limit_enforced": true,
-        "pids_limit_enforced": true,
-        "summary": "Memory=2048MB, PidsLimit=100"
+        "cgroup_cpu_quota": "200000 100000",
+        "nano_cpus": "2000000000",
+        "quota_verified": true,
+        "bounded_computation_output": "calc_ok 0.0206",
+        "summary": "CPU Quota=200000 100000, Bounded Stress OK=True"
+      }
+    },
+    "Actual Memory Enforcement": {
+      "status": "FAILED",
+      "details": {
+        "cgroup_memory_limit": "2147483648",
+        "inspect_memory": "2147483648",
+        "bounded_allocation_ok": true,
+        "oversized_allocation_blocked": false,
+        "summary": "Limit=2147483648 bytes, 64MB OK=True, 3.5GB Blocked=True"
+      }
+    },
+    "Actual PID Limit Enforcement": {
+      "status": "PASSED",
+      "details": {
+        "cgroup_pids_max": "100",
+        "inspect_pids_limit": "100",
+        "fork_bomb_blocked": true,
+        "fork_test_output": "Spawned=96, Blocked=True",
+        "summary": "PidsLimit=100, Fork ceiling active=True"
+      }
+    },
+    "Outbound Network Restrictions": {
+      "status": "PASSED",
+      "details": {
+        "dns_resolution_isolated": true,
+        "external_egress_restricted": true,
+        "summary": "DNS Exfiltration Blocked=True, External Egress Blocked=True"
+      }
+    },
+    "Concurrent Workspace Isolation": {
+      "status": "PASSED",
+      "details": {
+        "workspace_isolation_verified": true,
+        "output": "ok",
+        "summary": "Independent 0700 directories created and cleaned up successfully"
+      }
+    },
+    "Cancellation & Process Cleanup": {
+      "status": "FAILED",
+      "details": {
+        "task_submitted": true,
+        "cancellation_accepted": true,
+        "status_cancelled": false,
+        "summary": "Submit=True, Cancel=True, State=cancelled"
+      }
+    },
+    "Task Timeout Handling": {
+      "status": "PASSED",
+      "details": {
+        "submitted": true,
+        "timeout_handled": true,
+        "summary": "Task terminated within bounded duration: True"
+      }
+    },
+    "Artifact Volume Isolation": {
+      "status": "PASSED",
+      "details": {
+        "artifacts_mount_verified": true,
+        "mount_details": "drwxrwxrwx 2 omnisight omnisight 4096 Nov  7 15:48 /app/artifacts",
+        "summary": "Volume mounted strictly at /app/artifacts with nosuid"
       }
     },
     "Host & Socket Isolation": {
@@ -85,8 +144,28 @@
         "task_status_polling_ok": true,
         "summary": "Health=True, 401=True, 422=True, 400=True, Submit=True"
       }
+    },
+    "Cryptographic Human Approval Verification": {
+      "status": "PASSED",
+      "details": {
+        "valid_signature_accepted": true,
+        "forged_reviewer_rejected": true,
+        "expired_approval_rejected": true,
+        "replayed_nonce_rejected": true,
+        "summary": "Valid=True, Forged=Rejected, Expired=Rejected, Replay=Rejected"
+      }
+    },
+    "End-to-End Task Lifecycle & Webhook Verification": {
+      "status": "PASSED",
+      "details": {
+        "task_submission": true,
+        "idempotency_deduplication": true,
+        "webhook_hmac_sha256_verified": true,
+        "correlation_id": "corr-e2e-task-1794066543",
+        "summary": "Submission=True, Idempotent Deduplication=True, HMAC=True"
+      }
     }
   },
   "api_tests": {},
-  "verdict": "M3.1 PASSED"
+  "verdict": "M3.1 FAILED"
 }
