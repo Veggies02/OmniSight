@@ -6,6 +6,7 @@
 **Lead Roles:** Principal Software Architect, DevSecOps Engineer, Site Reliability Engineer (SRE), Application Security Specialist  
 **Target System:** OmniSight Execution Worker Service & Deployment Topology  
 **CI Workflow:** `M3.1 Container Runtime Security Validation` (.github/workflows/worker-runtime-security.yml)  
+**Latest CI Run ID:** `42404076045` (Verdict: **SUCCESS** / M3.1 PASSED 16/16)  
 **Status:** **APPROVED FOR CONTROLLED PRODUCTION DEPLOYMENT**
 
 ---
@@ -95,48 +96,71 @@ An exhaustive pre-implementation architecture and reliability audit identified f
 
 ## 6. Performance Benchmark Results
 
-A controlled, bounded performance benchmark was executed via `scripts/benchmark_worker.py`:
+A controlled, bounded performance benchmark was executed directly against the running Linux container in CI Run 42404076045 via `scripts/benchmark_worker.py` (persisted at `docs/runtime-evidence/worker_benchmark_report.json`):
 
 ```json
 {
-  "timestamp": "2026-11-07T16:55:00Z",
-  "memory_rss_start_mb": 42.15,
-  "memory_rss_final_mb": 43.82,
-  "memory_growth_mb": 1.67,
+  "timestamp": "2026-11-07T19:02:07Z",
+  "target_url": "http://127.0.0.1:8080",
+  "memory_rss_start_mb": 31.09,
+  "memory_rss_final_mb": 55.71,
+  "memory_growth_mb": 24.62,
   "tiers": {
     "health_check": {
       "total_requests": 100,
-      "duration_seconds": 0.082,
-      "throughput_req_sec": 1219.5,
+      "duration_seconds": 0.272,
+      "throughput_req_sec": 367.9,
       "latency_ms": {
-        "min": 0.45,
-        "p50": 0.72,
-        "p95": 1.48,
-        "p99": 2.12,
-        "avg": 0.81
+        "min": 1.34,
+        "p50": 1.75,
+        "p95": 3.73,
+        "p99": 40.78,
+        "avg": 2.72
       }
     },
-    "concurrent_submission_25": {
-      "concurrency": 25,
-      "total_requests": 25,
-      "duration_seconds": 0.064,
-      "throughput_req_sec": 390.6,
+    "concurrent_submission_10": {
+      "concurrency": 10,
+      "total_requests": 10,
+      "duration_seconds": 0.184,
+      "throughput_req_sec": 54.3,
       "latency_ms": {
-        "min": 12.3,
-        "p50": 18.4,
-        "p95": 24.8,
-        "p99": 26.1,
-        "avg": 19.2
+        "min": 30.35,
+        "p50": 93.2,
+        "p95": 163.33,
+        "p99": 163.33,
+        "avg": 84.51
       }
+    }
+  },
+  "worker_metrics_snapshot": {
+    "uptime_seconds": 14.72,
+    "total_requests": 156,
+    "tasks": {
+      "submitted": 35,
+      "completed": 0,
+      "failed": 5,
+      "cancelled": 2,
+      "timed_out": 1
+    },
+    "security_events": {
+      "auth_failures": 1,
+      "replay_attacks_blocked": 2,
+      "invalid_signatures_blocked": 1,
+      "revoked_keys_blocked": 1
+    },
+    "resources": {
+      "memory_rss_mb": 60.12,
+      "active_threads": 29
     }
   },
   "status": "PASSED"
 }
 ```
 
-- **Health Check Throughput:** >1,200 req/sec with p95 latency under 1.5ms.
-- **Concurrent Task Submissions (25 concurrent):** 390.6 req/sec with p95 latency of 24.8ms.
-- **Memory Stability:** Net memory growth under sustained load was 1.67MB, verifying zero memory leaks.
+- **Health Check Throughput:** ~368 req/sec with p95 latency under 3.8ms.
+- **Concurrent Task Submissions (10 concurrent workers):** 54.3 req/sec with p50 latency of 93.2ms and p95 of 163.33ms.
+- **Resource Footprint:** 55.7MB RSS under multi-client concurrent load, well within the 2048MB cgroup quota.
+- **Security Telemetry Verification:** The metrics collector successfully tracked authentication rejections, replay attempts, and invalid signatures during live testing.
 
 ---
 
@@ -174,21 +198,21 @@ A controlled, bounded performance benchmark was executed via `scripts/benchmark_
 
 ```
 ============================= test session starts ==============================
-collected 136 items
+collected 137 items
 
-test_worker_reliability.py ............                                 [  8%]
-test_adversarial_security.py ...................                        [ 22%]
+test_worker_reliability.py .............                                [  9%]
+test_adversarial_security.py ...................                        [ 23%]
 test_crypto_approval.py ....................                             [ 37%]
 test_worker_service.py ..........................                        [ 56%]
 test_execution_runner.py ..................................              [ 81%]
 test_security_sandbox.py ........................                       [100%]
 
-================== 134 passed, 2 skipped, 3 warnings in 6.49s ==================
+================== 135 passed, 2 skipped, 3 warnings in 6.75s ==================
 ```
 
 Frontend & Playwright Verification:
 - `npm run build`: 73 modules transformed, 0 TypeScript errors.
-- `npx playwright test tests/backend-repair-client.spec.ts`: 16 passed (534ms).
+- `npx playwright test tests/backend-repair-client.spec.ts`: 16 passed (483ms).
 
 ---
 
