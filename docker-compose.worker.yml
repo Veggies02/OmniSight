@@ -1,0 +1,71 @@
+version: "3.8"
+
+# ==============================================================================
+# OmniSight Isolated Execution Worker - Production Compose Hardening
+# ==============================================================================
+# Features:
+# - Read-only root filesystem
+# - Unprivileged execution (UID 10001:10001)
+# - Drop all Linux capabilities (cap_drop: ALL)
+# - Prevent privilege escalation (no-new-privileges:true)
+# - Custom seccomp BPF profile (seccomp_worker_profile.json)
+# - Strict memory, CPU, and PID limits
+# - Dedicated internal bridge network
+# ==============================================================================
+
+services:
+  omnisight-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: omnisight-worker:latest
+    container_name: omnisight-execution-worker
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp:./seccomp_worker_profile.json"
+    cap_drop:
+      - ALL
+    ports:
+      - "8080:8080"
+    environment:
+      - OMNISIGHT_WORKER_HOST=0.0.0.0
+      - OMNISIGHT_WORKER_PORT=8080
+      - OMNISIGHT_WORKER_AUTH_TOKEN=${OMNISIGHT_WORKER_AUTH_TOKEN:-worker-auth-secret-token}
+      - OMNISIGHT_WEBHOOK_SECRET=${OMNISIGHT_WEBHOOK_SECRET:-webhook-signing-secret-key}
+      - OMNISIGHT_ENFORCE_SANDBOX=1
+      - SECURITY_SANDBOX_REQUIRED=1
+      - STRICT_CONTAINER_SECURITY=1
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+      - /run:rw,noexec,nosuid,size=64m
+    volumes:
+      - worker_artifacts:/app/artifacts:rw,nosuid
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+          pids: 100
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - omnisight-internal
+
+volumes:
+  worker_artifacts:
+    driver: local
+
+networks:
+  omnisight-internal:
+    driver: bridge
+    internal: false
