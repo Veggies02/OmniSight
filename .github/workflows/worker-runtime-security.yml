@@ -45,9 +45,27 @@ jobs:
           python -m pytest test_execution_runner.py -v
           python -m pytest test_worker_service.py -v
 
-      - name: Generate authoritative approval signing keypair
+      - name: Generate authoritative approval signing keypair and enforce key rotation
         run: |
-          python -c "from crypto_approval import ApprovalSigner; s = ApprovalSigner.generate(); print(f'OMNISIGHT_APPROVAL_PUBLIC_KEY_HEX={s.public_key_hex}'); print(f'OMNISIGHT_APPROVAL_PRIVATE_KEY_HEX={s.private_key_hex}')" >> $GITHUB_ENV
+          python -c "
+          from crypto_approval import ApprovalSigner
+          import os
+
+          # Rotate keypair to version 2; invalidate prior compromised key IDs
+          signer = ApprovalSigner.generate(key_id='omnisight-qa-root-v2')
+          priv_hex = signer.private_key_hex
+          pub_hex = signer.public_key_hex
+
+          # 1. Mask private key value from GitHub Actions logs immediately
+          print(f'::add-mask::{priv_hex}')
+
+          # 2. Export environment variables to GITHUB_ENV
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f'OMNISIGHT_APPROVAL_PUBLIC_KEY_HEX={pub_hex}\n')
+              f.write(f'OMNISIGHT_APPROVAL_PRIVATE_KEY_HEX={priv_hex}\n')
+              f.write('OMNISIGHT_APPROVAL_KEY_ID=omnisight-qa-root-v2\n')
+              f.write('OMNISIGHT_REVOKED_KEY_IDS=omnisight-qa-root,omnisight-qa-root-v1\n')
+          "
 
       - name: Validate Compose Configuration
         run: |

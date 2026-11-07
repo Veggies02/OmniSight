@@ -53,7 +53,10 @@ if command -v seccomp_sandbox >/dev/null 2>&1; then
     fi
 fi
 
-# 4. Clear startup traps and hand over execution
+# 4. Set Python import path for container modules
+export PYTHONPATH="/app:${PYTHONPATH:-}"
+
+# 5. Clear startup traps and hand over execution
 trap - TERM INT
 
 echo "[WORKER-ENTRYPOINT] Security pre-flight checks passed. Launching worker service with PID 1 replacement..."

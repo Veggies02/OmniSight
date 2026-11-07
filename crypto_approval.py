@@ -140,6 +140,12 @@ class ApprovalSigner:
         self.private_key = private_key
         self.key_id = key_id
 
+    def __repr__(self) -> str:
+        return f"<ApprovalSigner key_id={self.key_id!r} public_key={self.public_key_hex[:16]}... (private_key=[REDACTED])>"
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
     @classmethod
     def generate(cls, key_id: str = "omnisight-qa-root") -> ApprovalSigner:
         """Generates a fresh Ed25519 signing keypair."""
@@ -233,11 +239,32 @@ class ApprovalVerifier:
         default_public_key: Optional[ed25519.Ed25519PublicKey] = None,
         replay_cache: Optional[ApprovalReplayCache] = None,
         enforce_signatures: bool = True,
+        revoked_key_ids: Optional[Set[str]] = None,
+        revoked_public_keys: Optional[Set[str]] = None,
     ) -> None:
         self.trusted_public_keys: Dict[str, ed25519.Ed25519PublicKey] = trusted_public_keys or {}
         self.default_public_key: Optional[ed25519.Ed25519PublicKey] = default_public_key
         self.replay_cache = replay_cache or ApprovalReplayCache()
         self.enforce_signatures = enforce_signatures
+        self.revoked_key_ids: Set[str] = set(revoked_key_ids) if revoked_key_ids else set()
+        self.revoked_public_keys: Set[str] = {k.lower() for k in revoked_public_keys} if revoked_public_keys else set()
+
+    def __repr__(self) -> str:
+        return (
+            f"<ApprovalVerifier trusted_keys={list(self.trusted_public_keys.keys())} "
+            f"revoked_keys={list(self.revoked_key_ids)} enforce={self.enforce_signatures}>"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    def revoke_key_id(self, key_id: str) -> None:
+        """Revokes an authoritative key ID, immediately invalidating all signatures issued under it."""
+        self.revoked_key_ids.add(key_id.strip())
+
+    def revoke_public_key_hex(self, public_key_hex: str) -> None:
+        """Revokes an authoritative public key by its raw 64-hex-character value."""
+        self.revoked_public_keys.add(public_key_hex.strip().lower())
 
     @classmethod
     def from_env(cls) -> ApprovalVerifier:
@@ -245,6 +272,8 @@ class ApprovalVerifier:
 
         OMNISIGHT_APPROVAL_PUBLIC_KEY_HEX: hex public key.
         OMNISIGHT_ENFORCE_APPROVAL_SIGNATURES: '1' (default) or '0'.
+        OMNISIGHT_REVOKED_KEY_IDS: comma-separated list of revoked key IDs.
+        OMNISIGHT_REVOKED_PUBLIC_KEYS_HEX: comma-separated list of revoked public keys.
         """
         pub_hex = os.environ.get("OMNISIGHT_APPROVAL_PUBLIC_KEY_HEX", "").strip()
         enforce_raw = os.environ.get("OMNISIGHT_ENFORCE_APPROVAL_SIGNATURES")
@@ -265,10 +294,18 @@ class ApprovalVerifier:
             except Exception as exc:
                 print(f"[ApprovalVerifier] Warning: failed to parse OMNISIGHT_APPROVAL_PUBLIC_KEY_HEX: {exc}")
 
+        revoked_ids_raw = os.environ.get("OMNISIGHT_REVOKED_KEY_IDS", "")
+        revoked_ids = {k.strip() for k in revoked_ids_raw.split(",") if k.strip()}
+
+        revoked_pubs_raw = os.environ.get("OMNISIGHT_REVOKED_PUBLIC_KEYS_HEX", "")
+        revoked_pubs = {k.strip().lower() for k in revoked_pubs_raw.split(",") if k.strip()}
+
         return cls(
             trusted_public_keys=trusted_keys,
             default_public_key=default_key,
             enforce_signatures=enforce,
+            revoked_key_ids=revoked_ids,
+            revoked_public_keys=revoked_pubs,
         )
 
     def add_trusted_key(self, key_id: str, public_key_hex: str) -> None:
@@ -354,21 +391,30 @@ class ApprovalVerifier:
                     f"authoritative patch requires {clean_expected!r}."
                 )
 
-        # Check replay protection
-        if not self.replay_cache.check_and_record(nonce, sig_hex, exp_dt):
-            return False, (
-                f"Approval replay attack detected: nonce {nonce!r} or signature "
-                "has already been submitted."
-            )
+        # Check key revocation by key_id
+        key_id = getattr(proposal_ref, "signer_key_id", None)
+        if key_id and key_id in self.revoked_key_ids:
+            return False, f"Signing key {key_id!r} has been revoked and cannot authorize proposals."
 
         # Select public verification key
-        key_id = getattr(proposal_ref, "signer_key_id", None)
         public_key = self.trusted_public_keys.get(key_id) if key_id else None
         if not public_key:
             public_key = self.default_public_key
 
         if not public_key:
             return False, f"No trusted public key found to verify signature (signer_key_id={key_id!r})."
+
+        # Check key revocation by public key bytes
+        pub_hex = public_key.public_bytes_raw().hex().lower()
+        if pub_hex in self.revoked_public_keys:
+            return False, f"Authoritative public key {pub_hex[:16]}... has been revoked."
+
+        # Check replay protection
+        if not self.replay_cache.check_and_record(nonce, sig_hex, exp_dt):
+            return False, (
+                f"Approval replay attack detected: nonce {nonce!r} or signature "
+                "has already been submitted."
+            )
 
         # Reconstruct canonical signing payload
         payload = ApprovalSigningPayload(

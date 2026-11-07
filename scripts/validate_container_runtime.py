@@ -665,11 +665,12 @@ def audit_cryptographic_human_approval() -> None:
 
     # Read private key from host environment (kept strictly outside the container)
     priv_hex = os.environ.get("OMNISIGHT_APPROVAL_PRIVATE_KEY_HEX", "")
+    key_id = os.environ.get("OMNISIGHT_APPROVAL_KEY_ID", "omnisight-qa-root-v2")
     if not priv_hex:
         # If no key in environment, create a temporary signer for local audit
-        signer = ApprovalSigner.generate(key_id="qa-lead-01")
+        signer = ApprovalSigner.generate(key_id=key_id)
     else:
-        signer = ApprovalSigner.from_hex(priv_hex, key_id="omnisight-qa-root")
+        signer = ApprovalSigner.from_hex(priv_hex, key_id=key_id)
 
     headers = {"Authorization": f"Bearer {AUTH_TOKEN}", "Content-Type": "application/json"}
 
@@ -784,7 +785,38 @@ def audit_cryptographic_human_approval() -> None:
     except Exception:
         replay_rejected = False
 
-    passed = valid_accepted and forge_rejected and exp_rejected and replay_rejected
+    # 5. Revoked key proposal (must be rejected)
+    rev_signer = ApprovalSigner.generate(key_id="omnisight-qa-root")  # Revoked key ID
+    rev_ref = rev_signer.create_approved_ref(
+        proposal_id="prop-live-revoked",
+        defect_category="UI_DEFECT",
+        source_file="src/index.css",
+        source_file_sha256="0" * 64,
+        reviewed_by="Compromised Key Reviewer",
+    )
+    payload_rev = {
+        "task_id": f"repair-crypto-rev-{int(time.time())}",
+        "job_id": "job-rev",
+        "operation": "execute_repair",
+        "correlation_id": "corr-rev",
+        "idempotency_key": "idem-rev",
+        "proposal_ref": rev_ref,
+    }
+    req_rev = urllib.request.Request(
+        f"{BASE_URL}/api/v1/tasks",
+        data=json.dumps(payload_rev).encode(),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req_rev, timeout=5.0)
+        rev_rejected = False
+    except urllib.error.HTTPError as err:
+        rev_rejected = (err.code == 400)
+    except Exception:
+        rev_rejected = False
+
+    passed = valid_accepted and forge_rejected and exp_rejected and replay_rejected and rev_rejected
     log_check(
         "Cryptographic Human Approval Verification",
         passed,
@@ -793,7 +825,8 @@ def audit_cryptographic_human_approval() -> None:
             "forged_reviewer_rejected": forge_rejected,
             "expired_approval_rejected": exp_rejected,
             "replayed_nonce_rejected": replay_rejected,
-            "summary": f"Valid={valid_accepted}, Forged=Rejected, Expired=Rejected, Replay=Rejected",
+            "revoked_key_rejected": rev_rejected,
+            "summary": f"Valid={valid_accepted}, Forged=Rejected, Expired=Rejected, Replay=Rejected, Revoked=Rejected",
         },
     )
 

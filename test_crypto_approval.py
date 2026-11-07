@@ -399,3 +399,111 @@ class TestWorkerServiceCryptoApprovalIntegration:
         )
         assert resp2.status_code == 400
         assert "replay attack detected" in resp2.json()["detail"].lower()
+
+
+class TestKeyRevocationAndSecretRedaction:
+    """Tests key rotation, revocation enforcement, and private key redaction."""
+
+    def test_signer_repr_redacts_private_key(self):
+        signer = ApprovalSigner.generate(key_id="test-redaction-key")
+        repr_str = repr(signer)
+        str_str = str(signer)
+        assert signer.private_key_hex not in repr_str
+        assert signer.private_key_hex not in str_str
+        assert "[REDACTED]" in repr_str
+        assert "[REDACTED]" in str_str
+
+    def test_revoked_key_id_rejected(self, test_keypair):
+        signer, verifier = test_keypair
+        ref_dict = signer.create_approved_ref(
+            proposal_id="prop-rev-01",
+            defect_category="UI_DEFECT",
+            source_file="src/index.css",
+            source_file_sha256="0" * 64,
+            reviewed_by="Alice",
+        )
+        proposal_ref = ApprovedProposalRef(**ref_dict)
+
+        # Valid initially
+        valid_before, _ = verifier.verify(proposal_ref)
+        assert valid_before is True
+
+        # Revoke key ID
+        verifier.revoke_key_id(signer.key_id)
+
+        # Rejected after revocation
+        valid_after, msg = verifier.verify(proposal_ref)
+        assert valid_after is False
+        assert "has been revoked" in msg.lower()
+
+    def test_revoked_public_key_hex_rejected(self, test_keypair):
+        signer, verifier = test_keypair
+        ref_dict = signer.create_approved_ref(
+            proposal_id="prop-rev-02",
+            defect_category="UI_DEFECT",
+            source_file="src/index.css",
+            source_file_sha256="0" * 64,
+            reviewed_by="Alice",
+        )
+        proposal_ref = ApprovedProposalRef(**ref_dict)
+
+        # Revoke public key hex
+        verifier.revoke_public_key_hex(signer.public_key_hex)
+
+        valid, msg = verifier.verify(proposal_ref)
+        assert valid is False
+        assert "has been revoked" in msg.lower()
+
+    def test_verifier_loads_revocations_from_env(self, monkeypatch):
+        signer = ApprovalSigner.generate(key_id="compromised-root")
+        monkeypatch.setenv("OMNISIGHT_APPROVAL_PUBLIC_KEY_HEX", signer.public_key_hex)
+        monkeypatch.setenv("OMNISIGHT_REVOKED_KEY_IDS", "compromised-root,old-key")
+
+        verifier = ApprovalVerifier.from_env()
+        assert "compromised-root" in verifier.revoked_key_ids
+
+        ref_dict = signer.create_approved_ref(
+            proposal_id="prop-env-rev",
+            defect_category="UI_DEFECT",
+            source_file="src/index.css",
+            source_file_sha256="0" * 64,
+            reviewed_by="Alice",
+        )
+        proposal_ref = ApprovedProposalRef(**ref_dict)
+        valid, msg = verifier.verify(proposal_ref)
+        assert valid is False
+        assert "has been revoked" in msg.lower()
+
+    def test_malformed_signature_payloads_rejected(self, test_keypair):
+        signer, verifier = test_keypair
+        ref_dict = signer.create_approved_ref(
+            proposal_id="prop-malformed",
+            defect_category="UI_DEFECT",
+            source_file="src/index.css",
+            source_file_sha256="0" * 64,
+            reviewed_by="Alice",
+        )
+
+        # 1. Invalid hex string in signature
+        ref_bad_hex = dict(ref_dict)
+        ref_bad_hex["signature"] = "not-a-valid-hex-signature-string"
+        proposal_bad_hex = ApprovedProposalRef(**ref_bad_hex)
+        valid1, msg1 = verifier.verify(proposal_bad_hex)
+        assert valid1 is False
+        assert "invalid signature format" in msg1.lower()
+
+        # 2. Wrong signature length (32 bytes instead of 64 bytes)
+        ref_short = dict(ref_dict)
+        ref_short["signature"] = "aa" * 32
+        proposal_short = ApprovedProposalRef(**ref_short)
+        valid2, msg2 = verifier.verify(proposal_short)
+        assert valid2 is False
+        assert "expected 64 bytes" in msg2.lower()
+
+        # 3. Malformed expires_at timestamp
+        ref_bad_exp = dict(ref_dict)
+        ref_bad_exp["expires_at"] = "invalid-date-format"
+        proposal_bad_exp = ApprovedProposalRef(**ref_bad_exp)
+        valid3, msg3 = verifier.verify(proposal_bad_exp)
+        assert valid3 is False
+        assert "malformed expires_at timestamp" in msg3.lower()
