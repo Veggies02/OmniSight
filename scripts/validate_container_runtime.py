@@ -374,7 +374,7 @@ def audit_cancellation_and_process_cleanup() -> None:
     headers = {"Authorization": f"Bearer {AUTH_TOKEN}", "Content-Type": "application/json"}
     task_id = f"cancel-task-{int(time.time())}"
 
-    # Submit task with longer timeout
+    # Submit task with longer timeout and diagnostic mock duration to ensure task is active during cancellation
     submit_payload = {
         "task_id": task_id,
         "job_id": f"job-{task_id}",
@@ -382,6 +382,7 @@ def audit_cancellation_and_process_cleanup() -> None:
         "timeout_seconds": 60.0,
         "correlation_id": f"corr-{task_id}",
         "idempotency_key": f"idem-{task_id}",
+        "parameters": {"mock_work_seconds": 15.0},
     }
     req_sub = urllib.request.Request(
         f"{BASE_URL}/api/v1/tasks",
@@ -447,6 +448,7 @@ def audit_timeout_handling() -> None:
         "timeout_seconds": 0.5,
         "correlation_id": f"corr-{task_id}",
         "idempotency_key": f"idem-{task_id}",
+        "parameters": {"mock_work_seconds": 10.0},
     }
     req = urllib.request.Request(
         f"{BASE_URL}/api/v1/tasks",

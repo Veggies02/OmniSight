@@ -783,6 +783,15 @@ class TaskExecutor:
         if self.command_override:
             return list(self.command_override)
 
+        # Controlled diagnostic workload hook: bounded sleep process for cancellation & timeout validation
+        mock_hold = request.parameters.get("mock_work_seconds") or request.parameters.get("simulate_work_seconds")
+        if mock_hold is not None:
+            try:
+                hold_sec = max(0.1, min(float(mock_hold), 60.0))
+                return [sys.executable, "-c", f"import time; time.sleep({hold_sec})"]
+            except (ValueError, TypeError):
+                pass
+
         npm_bin = _resolve_executable("npm")
 
         if request.operation == TaskOperationType.CAPTURE_EVIDENCE:

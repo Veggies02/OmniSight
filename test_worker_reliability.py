@@ -224,6 +224,48 @@ class TestWorkerLifecycleAndRecovery:
         retry_other, _ = TaskRetryPolicy.is_retryable(TaskOperationType.VERIFY_REPAIR)
         assert retry_other is False
 
+    def test_task_cancellation_and_process_cleanup_deterministic(self):
+        app = create_worker_app(auth_token=AUTH_TOKEN)
+        client = TestClient(app)
+
+        task_id = "task-cancel-det-01"
+        submit_payload = {
+            "task_id": task_id,
+            "job_id": "job-cancel-det-01",
+            "operation": "capture_evidence",
+            "timeout_seconds": 30.0,
+            "correlation_id": "corr-cancel-01",
+            "idempotency_key": "idem-cancel-01",
+            "parameters": {"mock_work_seconds": 10.0},
+        }
+
+        # 1. Submit task
+        resp_sub = client.post(
+            "/api/v1/tasks",
+            json=submit_payload,
+            headers={"Authorization": f"Bearer {AUTH_TOKEN}"},
+        )
+        assert resp_sub.status_code == 201
+
+        # Small yield to let lifecycle thread spawn process
+        time.sleep(0.15)
+
+        # 2. Cancel task while active
+        resp_cancel = client.post(
+            f"/api/v1/tasks/{task_id}/cancel",
+            headers={"Authorization": f"Bearer {AUTH_TOKEN}"},
+        )
+        assert resp_cancel.status_code == 200
+        assert resp_cancel.json()["status"] == "cancelled"
+
+        # 3. Confirm GET /tasks/{task_id} reflects CANCELLED state
+        resp_get = client.get(
+            f"/api/v1/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {AUTH_TOKEN}"},
+        )
+        assert resp_get.status_code == 200
+        assert resp_get.json()["status"] == "cancelled"
+
 
 # =========================================================================== #
 # Area 3: Configuration & Secret Safety Invariants
