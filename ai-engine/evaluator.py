@@ -35,7 +35,7 @@ def normalize_category(raw_val: Union[str, DefectCategory, None]) -> DefectCateg
 
     # Check Ajay's seeded defect mapping first
     if cleaned in AJAY_CATEGORY_MAP:
-        return AJAY_CATEGORY_MAP[cleaned]
+        return DefectCategory(AJAY_CATEGORY_MAP[cleaned])
 
     # Check direct match with enum values
     for member in DefectCategory:
@@ -72,6 +72,9 @@ class EvalSample(BaseModel):
     is_match: bool
     confidence: float = 0.0
     notes: Optional[str] = None
+    latency_ms: Optional[float] = None
+    needs_review: bool = False
+    inconclusive: bool = False
 
 
 class CategoryMetrics(BaseModel):
@@ -147,6 +150,16 @@ class BenchmarkEvaluator:
         cat = getattr(top_finding, "defect_category", getattr(top_finding, "category", DefectCategory.OTHER))
         return cat, top_finding.confidence
 
+    @staticmethod
+    def is_inconclusive(response: AnalysisResponse) -> bool:
+        """True when the analyzer could not produce a usable answer.
+
+        The analyzer reports an unparseable model reply with an error message
+        and a placeholder finding while has_defect is False. That is a failure,
+        not a confident "no defect" answer.
+        """
+        return bool(response.error) or (bool(response.findings) and not response.has_defect)
+
     def evaluate_pair(
         self,
         case_id: str,
@@ -157,21 +170,35 @@ class BenchmarkEvaluator:
     ) -> EvalSample:
         """Evaluate a single test case pairing expected vs predicted."""
         expected_cat = normalize_category(expected)
+        latency_ms: Optional[float] = None
+        needs_review = False
+        inconclusive = False
 
         if isinstance(response_or_pred, AnalysisResponse):
-            pred_cat, conf = self.extract_predicted_category(response_or_pred)
+            response = response_or_pred
+            latency_ms = response.analysis_latency_ms
+            if self.is_inconclusive(response):
+                inconclusive = True
+                needs_review = True
+                pred_cat, conf = DefectCategory.OTHER, 0.0
+                notes = notes or "Inconclusive: the model reply could not be parsed."
+            else:
+                pred_cat, conf = self.extract_predicted_category(response)
+                needs_review = any(f.requires_human_review for f in response.findings)
         else:
             pred_cat = normalize_category(response_or_pred)
             conf = confidence if confidence is not None else 1.0
 
-        is_match = (expected_cat == pred_cat)
         return EvalSample(
             case_id=case_id,
             expected_category=expected_cat,
             predicted_category=pred_cat,
-            is_match=is_match,
+            is_match=(expected_cat == pred_cat) and not inconclusive,
             confidence=conf,
             notes=notes,
+            latency_ms=latency_ms,
+            needs_review=needs_review,
+            inconclusive=inconclusive,
         )
 
     def compute_metrics(self, samples: List[EvalSample]) -> EvaluationReport:
@@ -257,9 +284,14 @@ class BenchmarkEvaluator:
         """Evaluate a batch of ground truth cases against prediction dictionary keyed by case_id."""
         samples: List[EvalSample] = []
         for case in cases:
-            case_id = str(case.get("case_id") or case.get("test_id") or case.get("id"))
-            expected = case.get("expected_category") or case.get("category") or "none"
-            pred = predictions.get(case_id, DefectCategory.NONE)
+            case_id = case.get("case_id") or case.get("test_id") or case.get("id")
+            expected = case.get("expected_category") or case.get("category")
+            if not case_id or expected is None:
+                raise ValueError(f"Ground truth case is missing an id or expected category: {case}")
+            case_id = str(case_id)
+            if case_id not in predictions:
+                raise ValueError(f"No prediction for case '{case_id}'")
+            pred = predictions[case_id]
             samples.append(self.evaluate_pair(case_id=case_id, expected=expected, response_or_pred=pred))
 
         return self.compute_metrics(samples)

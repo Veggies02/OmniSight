@@ -191,6 +191,6 @@ class TestBenchmarkEvaluator:
         summary = report.format_summary()
 
         assert "OMNISIGHT VLM BENCHMARK EVALUATION REPORT" in summary
-        assert "Total Samples Evaluated : 2"
+        assert "Total Samples Evaluated : 2" in summary
         assert "Overall Accuracy        : 50.00%"
         assert "modal_overflow" in summary
