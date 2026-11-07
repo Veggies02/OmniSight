@@ -1,7 +1,7 @@
 [
     {
-        "Id": "c812f11897a18cae9f07a5089252b2640d1d1234e4ce24b012ffd01c8fe9e6e6",
-        "Created": "2026-11-07T14:42:23.406322777Z",
+        "Id": "0aefa312161cb2fa02a85ed58a084a46aea6837b25cb03aa23af20c96dd7512c",
+        "Created": "2026-11-07T14:50:23.020584945Z",
         "Path": "/worker_entrypoint.sh",
         "Args": [
             "uvicorn",
@@ -18,29 +18,29 @@
             "Restarting": false,
             "OOMKilled": false,
             "Dead": false,
-            "Pid": 8646,
+            "Pid": 8432,
             "ExitCode": 0,
             "Error": "",
-            "StartedAt": "2026-11-07T14:42:25.238433092Z",
+            "StartedAt": "2026-11-07T14:50:28.791265625Z",
             "FinishedAt": "0001-01-01T00:00:00Z",
             "Health": {
                 "Status": "healthy",
                 "FailingStreak": 0,
                 "Log": [
                     {
-                        "Start": "2026-11-07T14:42:30.613917884Z",
-                        "End": "2026-11-07T14:42:30.883581974Z",
+                        "Start": "2026-11-07T14:50:34.306228399Z",
+                        "End": "2026-11-07T14:50:34.500993535Z",
                         "ExitCode": 0,
                         "Output": ""
                     }
                 ]
             }
         },
-        "Image": "sha256:8c125e4735f0718e73fa68d0920f588c5b0798e891e6ef25fe6c88768b07fbec",
-        "ResolvConfPath": "/var/lib/docker/containers/c812f11897a18cae9f07a5089252b2640d1d1234e4ce24b012ffd01c8fe9e6e6/resolv.conf",
-        "HostnamePath": "/var/lib/docker/containers/c812f11897a18cae9f07a5089252b2640d1d1234e4ce24b012ffd01c8fe9e6e6/hostname",
-        "HostsPath": "/var/lib/docker/containers/c812f11897a18cae9f07a5089252b2640d1d1234e4ce24b012ffd01c8fe9e6e6/hosts",
-        "LogPath": "/var/lib/docker/containers/c812f11897a18cae9f07a5089252b2640d1d1234e4ce24b012ffd01c8fe9e6e6/c812f11897a18cae9f07a5089252b2640d1d1234e4ce24b012ffd01c8fe9e6e6-json.log",
+        "Image": "sha256:12f4e2df745e29b7dd3e7463b09035f38681bf695972acf8e0ec7a1b53af689c",
+        "ResolvConfPath": "/var/lib/docker/containers/0aefa312161cb2fa02a85ed58a084a46aea6837b25cb03aa23af20c96dd7512c/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/0aefa312161cb2fa02a85ed58a084a46aea6837b25cb03aa23af20c96dd7512c/hostname",
+        "HostsPath": "/var/lib/docker/containers/0aefa312161cb2fa02a85ed58a084a46aea6837b25cb03aa23af20c96dd7512c/hosts",
+        "LogPath": "/var/lib/docker/containers/0aefa312161cb2fa02a85ed58a084a46aea6837b25cb03aa23af20c96dd7512c/0aefa312161cb2fa02a85ed58a084a46aea6837b25cb03aa23af20c96dd7512c-json.log",
         "Name": "/omnisight-execution-worker",
         "RestartCount": 0,
         "Driver": "overlayfs",
@@ -98,7 +98,7 @@
             "ReadonlyRootfs": true,
             "SecurityOpt": [
                 "no-new-privileges:true",
-                "seccomp={\"defaultAction\":\"SCMP_ACT_ERRNO\",\"architectures\":[\"SCMP_ARCH_X86_64\",\"SCMP_ARCH_X86\",\"SCMP_ARCH_AARCH64\",\"SCMP_ARCH_ARM\"],\"syscalls\":[{\"names\":[\"read\",\"write\",\"open\",\"openat\",\"close\",\"stat\",\"fstat\",\"lstat\",\"newfstatat\",\"poll\",\"lseek\",\"mmap\",\"mprotect\",\"munmap\",\"brk\",\"rt_sigaction\",\"rt_sigprocmask\",\"rt_sigreturn\",\"ioctl\",\"pread64\",\"pwrite64\",\"readv\",\"writev\",\"access\",\"faccessat\",\"faccessat2\",\"pipe\",\"pipe2\",\"select\",\"pselect6\",\"sched_yield\",\"mremap\",\"mincore\",\"madvise\",\"dup\",\"dup2\",\"dup3\",\"nanosleep\",\"clock_nanosleep\",\"getitimer\",\"setitimer\",\"alarm\",\"getpid\",\"getppid\",\"getuid\",\"geteuid\",\"getgid\",\"getegid\",\"gettid\",\"fork\",\"vfork\",\"clone\",\"clone3\",\"execve\",\"execveat\",\"exit\",\"exit_group\",\"wait4\",\"waitid\",\"kill\",\"tkill\",\"tgkill\",\"uname\",\"semget\",\"semop\",\"semctl\",\"shmget\",\"shmat\",\"shmdt\",\"shmctl\",\"fcntl\",\"flock\",\"fsync\",\"fdatasync\",\"truncate\",\"ftruncate\",\"getdents\",\"getdents64\",\"getcwd\",\"chdir\",\"fchdir\",\"rename\",\"renameat\",\"renameat2\",\"mkdir\",\"mkdirat\",\"rmdir\",\"unlink\",\"unlinkat\",\"symlink\",\"symlinkat\",\"readlink\",\"readlinkat\",\"chmod\",\"fchmod\",\"fchmodat\",\"chown\",\"fchown\",\"lchown\",\"fchownat\",\"umask\",\"gettimeofday\",\"getrlimit\",\"prlimit64\",\"getrusage\",\"sysinfo\",\"times\",\"socket\",\"connect\",\"accept\",\"accept4\",\"sendto\",\"recvfrom\",\"sendmsg\",\"recvmsg\",\"shutdown\",\"bind\",\"listen\",\"getsockname\",\"getpeername\",\"socketpair\",\"setsockopt\",\"getsockopt\",\"epoll_create\",\"epoll_create1\",\"epoll_ctl\",\"epoll_wait\",\"epoll_pwait\",\"epoll_pwait2\",\"futex\",\"eventfd\",\"eventfd2\",\"timerfd_create\",\"timerfd_settime\",\"timerfd_gettime\",\"signalfd\",\"signalfd4\",\"clock_gettime\",\"clock_getres\",\"getrandom\",\"memfd_create\",\"statx\",\"prctl\",\"arch_prctl\",\"rseq\",\"capget\",\"sched_getaffinity\",\"sched_setaffinity\",\"statfs\",\"fstatfs\",\"getresuid\",\"getresgid\",\"sendfile\"],\"action\":\"SCMP_ACT_ALLOW\"},{\"names\":[\"ptrace\",\"process_vm_readv\",\"process_vm_writev\",\"bpf\",\"kexec_load\",\"kexec_file_load\",\"init_module\",\"finit_module\",\"delete_module\",\"reboot\",\"swapon\",\"swapoff\",\"mount\",\"umount\",\"umount2\",\"pivot_root\",\"sysfs\",\"_sysctl\",\"setuid\",\"setgid\",\"setreuid\",\"setregid\",\"setresuid\",\"setresgid\",\"capset\",\"chroot\"],\"action\":\"SCMP_ACT_ERRNO\",\"args\":[],\"comment\":\"Explicitly block dangerous system calls and privilege escalation vectors\"}]}"
+                "seccomp={\"defaultAction\":\"SCMP_ACT_ERRNO\",\"architectures\":[\"SCMP_ARCH_X86_64\",\"SCMP_ARCH_X86\",\"SCMP_ARCH_AARCH64\",\"SCMP_ARCH_ARM\"],\"syscalls\":[{\"names\":[\"read\",\"write\",\"open\",\"openat\",\"close\",\"stat\",\"fstat\",\"lstat\",\"newfstatat\",\"poll\",\"lseek\",\"mmap\",\"mprotect\",\"munmap\",\"brk\",\"rt_sigaction\",\"rt_sigprocmask\",\"rt_sigreturn\",\"ioctl\",\"pread64\",\"pwrite64\",\"readv\",\"writev\",\"access\",\"faccessat\",\"faccessat2\",\"pipe\",\"pipe2\",\"select\",\"pselect6\",\"sched_yield\",\"mremap\",\"mincore\",\"madvise\",\"dup\",\"dup2\",\"dup3\",\"nanosleep\",\"clock_nanosleep\",\"getitimer\",\"setitimer\",\"alarm\",\"getpid\",\"getppid\",\"getuid\",\"geteuid\",\"getgid\",\"getegid\",\"gettid\",\"fork\",\"vfork\",\"clone\",\"clone3\",\"execve\",\"execveat\",\"exit\",\"exit_group\",\"wait4\",\"waitid\",\"kill\",\"tkill\",\"tgkill\",\"uname\",\"semget\",\"semop\",\"semctl\",\"shmget\",\"shmat\",\"shmdt\",\"shmctl\",\"fcntl\",\"flock\",\"fsync\",\"fdatasync\",\"truncate\",\"ftruncate\",\"getdents\",\"getdents64\",\"getcwd\",\"chdir\",\"fchdir\",\"rename\",\"renameat\",\"renameat2\",\"mkdir\",\"mkdirat\",\"rmdir\",\"unlink\",\"unlinkat\",\"symlink\",\"symlinkat\",\"readlink\",\"readlinkat\",\"chmod\",\"fchmod\",\"fchmodat\",\"chown\",\"fchown\",\"lchown\",\"fchownat\",\"umask\",\"gettimeofday\",\"getrlimit\",\"prlimit64\",\"getrusage\",\"sysinfo\",\"times\",\"socket\",\"connect\",\"accept\",\"accept4\",\"sendto\",\"recvfrom\",\"sendmsg\",\"recvmsg\",\"shutdown\",\"bind\",\"listen\",\"getsockname\",\"getpeername\",\"socketpair\",\"setsockopt\",\"getsockopt\",\"epoll_create\",\"epoll_create1\",\"epoll_ctl\",\"epoll_wait\",\"epoll_pwait\",\"epoll_pwait2\",\"futex\",\"eventfd\",\"eventfd2\",\"timerfd_create\",\"timerfd_settime\",\"timerfd_gettime\",\"signalfd\",\"signalfd4\",\"clock_gettime\",\"clock_getres\",\"getrandom\",\"memfd_create\",\"statx\",\"prctl\",\"arch_prctl\",\"rseq\",\"capget\",\"sched_getaffinity\",\"sched_setaffinity\",\"statfs\",\"fstatfs\",\"getresuid\",\"getresgid\",\"sendfile\",\"utimensat\",\"utimes\",\"futimesat\",\"copy_file_range\"],\"action\":\"SCMP_ACT_ALLOW\"},{\"names\":[\"ptrace\",\"process_vm_readv\",\"process_vm_writev\",\"bpf\",\"kexec_load\",\"kexec_file_load\",\"init_module\",\"finit_module\",\"delete_module\",\"reboot\",\"swapon\",\"swapoff\",\"mount\",\"umount\",\"umount2\",\"pivot_root\",\"sysfs\",\"_sysctl\",\"setuid\",\"setgid\",\"setreuid\",\"setregid\",\"setresuid\",\"setresgid\",\"capset\",\"chroot\"],\"action\":\"SCMP_ACT_ERRNO\",\"args\":[],\"comment\":\"Explicitly block dangerous system calls and privilege escalation vectors\"}]}"
             ],
             "Tmpfs": {
                 "/run": "rw,noexec,nosuid,size=64m",
@@ -180,7 +180,7 @@
             }
         ],
         "Config": {
-            "Hostname": "c812f11897a1",
+            "Hostname": "0aefa312161c",
             "Domainname": "",
             "User": "10001:10001",
             "AttachStdin": false,
@@ -193,13 +193,13 @@
             "OpenStdin": false,
             "StdinOnce": false,
             "Env": [
-                "STRICT_CONTAINER_SECURITY=1",
-                "OMNISIGHT_WORKER_HOST=0.0.0.0",
                 "OMNISIGHT_WORKER_PORT=8080",
                 "OMNISIGHT_WORKER_AUTH_TOKEN=worker-auth-secret-token",
                 "OMNISIGHT_WEBHOOK_SECRET=webhook-signing-secret-key",
                 "OMNISIGHT_ENFORCE_SANDBOX=1",
                 "SECURITY_SANDBOX_REQUIRED=1",
+                "STRICT_CONTAINER_SECURITY=1",
+                "OMNISIGHT_WORKER_HOST=0.0.0.0",
                 "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "LANG=C.UTF-8",
                 "GPG_KEY=A035C8C19219BA821ECEA86B64E628F8D684696D",
@@ -238,7 +238,7 @@
                 "com.docker.compose.config-hash": "8aa3597bae972aeb04ffbbcb6a4099e80640771aaadeb6b4c428565c6b777031",
                 "com.docker.compose.container-number": "1",
                 "com.docker.compose.depends_on": "",
-                "com.docker.compose.image": "sha256:8c125e4735f0718e73fa68d0920f588c5b0798e891e6ef25fe6c88768b07fbec",
+                "com.docker.compose.image": "sha256:12f4e2df745e29b7dd3e7463b09035f38681bf695972acf8e0ec7a1b53af689c",
                 "com.docker.compose.oneoff": "False",
                 "com.docker.compose.project": "omnisight",
                 "com.docker.compose.project.config_files": "/home/runner/work/OmniSight/OmniSight/docker-compose.worker.yml",
@@ -248,8 +248,8 @@
             }
         },
         "NetworkSettings": {
-            "SandboxID": "b92dd1a444e88de9988b8e76739fb4878b665b8eb4e6dc270a0f2473e49d977c",
-            "SandboxKey": "/var/run/docker/netns/b92dd1a444e8",
+            "SandboxID": "f548a329d16c0c7cd7d9a2886d1466dfcde551247dc4165bf14eb8097bfdbd99",
+            "SandboxKey": "/var/run/docker/netns/f548a329d16c",
             "Ports": {
                 "8080/tcp": [
                     {
@@ -272,11 +272,11 @@
                     ],
                     "DriverOpts": null,
                     "GwPriority": 0,
-                    "NetworkID": "dd44ecdd807ac19d8bf265ae7f440a01e7f37b330cdd5ecd81d6c50a1a135874",
-                    "EndpointID": "b75fb8af8ffe1787831f6653a4ac7554c171cf73f572e34a73c920dd17839bd2",
+                    "NetworkID": "3e152c3230257230d02299b9b3b1dd241ec83b493fd25731546c9dbdfb6fb8bd",
+                    "EndpointID": "aca508ef7a9b675259f161f9488b023df4be1353e2b3f9597eeaf1a04716b5f0",
                     "Gateway": "172.18.0.1",
                     "IPAddress": "172.18.0.2",
-                    "MacAddress": "fa:b6:58:ca:a0:a7",
+                    "MacAddress": "b6:05:bd:e8:d8:56",
                     "IPPrefixLen": 16,
                     "IPv6Gateway": "",
                     "GlobalIPv6Address": "",
@@ -284,14 +284,14 @@
                     "DNSNames": [
                         "omnisight-execution-worker",
                         "omnisight-worker",
-                        "c812f11897a1"
+                        "0aefa312161c"
                     ]
                 }
             }
         },
         "ImageManifestDescriptor": {
             "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "digest": "sha256:510f0dd81db1cc28879ce4afb7b8958cc88c4dbb25e1c845c2791816f6ad0803",
+            "digest": "sha256:2ba6fad4bde13883f3120e99bb34958541c1440f6a57998244119c087907b672",
             "size": 3523,
             "platform": {
                 "architecture": "amd64",
