@@ -1,6 +1,6 @@
 {
   "milestone": "M3.1",
-  "timestamp": "2026-11-07T18:51:24Z",
+  "timestamp": "2026-11-07T19:01:59Z",
   "container_name": "omnisight-execution-worker",
   "checks": {
     "Container Identity": {
@@ -39,7 +39,7 @@
         "seccomp_filtering_active": true,
         "security_options": [
           "no-new-privileges:true",
-          "seccomp={\"defaultAction\":\"SCMP_ACT_ERRNO\",\"architectures\":[\"SCMP_ARCH_X86_64\",\"SCMP_ARCH_X86\",\"SCMP_ARCH_AARCH64\",\"SCMP_ARCH_ARM\"],\"syscalls\":[{\"names\":[\"read\",\"write\",\"open\",\"openat\",\"close\",\"stat\",\"fstat\",\"lstat\",\"newfstatat\",\"poll\",\"lseek\",\"mmap\",\"mprotect\",\"munmap\",\"brk\",\"rt_sigaction\",\"rt_sigprocmask\",\"rt_sigreturn\",\"ioctl\",\"pread64\",\"pwrite64\",\"readv\",\"writev\",\"access\",\"faccessat\",\"faccessat2\",\"pipe\",\"pipe2\",\"select\",\"pselect6\",\"sched_yield\",\"mremap\",\"mincore\",\"madvise\",\"dup\",\"dup2\",\"dup3\",\"nanosleep\",\"clock_nanosleep\",\"getitimer\",\"setitimer\",\"alarm\",\"getpid\",\"getppid\",\"getuid\",\"geteuid\",\"getgid\",\"getegid\",\"gettid\",\"fork\",\"vfork\",\"clone\",\"clone3\",\"execve\",\"execveat\",\"exit\",\"exit_group\",\"wait4\",\"waitid\",\"kill\",\"tkill\",\"tgkill\",\"uname\",\"semget\",\"semop\",\"semctl\",\"shmget\",\"shmat\",\"shmdt\",\"shmctl\",\"fcntl\",\"flock\",\"fsync\",\"fdatasync\",\"truncate\",\"ftruncate\",\"getdents\",\"getdents64\",\"getcwd\",\"chdir\",\"fchdir\",\"rename\",\"renameat\",\"renameat2\",\"mkdir\",\"mkdirat\",\"rmdir\",\"unlink\",\"unlinkat\",\"symlink\",\"symlinkat\",\"readlink\",\"readlinkat\",\"chmod\",\"fchmod\",\"fchmodat\",\"chown\",\"fchown\",\"lchown\",\"fchownat\",\"umask\",\"gettimeofday\",\"getrlimit\",\"prlimit64\",\"getrusage\",\"sysinfo\",\"times\",\"socket\",\"connect\",\"accept\",\"accept4\",\"sendto\",\"recvfrom\",\"sendmsg\",\"recvmsg\",\"shutdown\",\"bind\",\"listen\",\"getsockname\",\"getpeername\",\"socketpair\",\"setsockopt\",\"getsockopt\",\"epoll_create\",\"epoll_create1\",\"epoll_ctl\",\"epoll_wait\",\"epoll_pwait\",\"epoll_pwait2\",\"futex\",\"eventfd\",\"eventfd2\",\"timerfd_create\",\"timerfd_settime\",\"timerfd_gettime\",\"signalfd\",\"signalfd4\",\"clock_gettime\",\"clock_getres\",\"getrandom\",\"memfd_create\",\"statx\",\"prctl\",\"arch_prctl\",\"rseq\",\"capget\",\"sched_getaffinity\",\"sched_setaffinity\",\"statfs\",\"fstatfs\",\"getresuid\",\"getresgid\",\"sendfile\",\"utimensat\",\"utimes\",\"futimesat\",\"copy_file_range\"],\"action\":\"SCMP_ACT_ALLOW\"},{\"names\":[\"ptrace\",\"process_vm_readv\",\"process_vm_writev\",\"bpf\",\"kexec_load\",\"kexec_file_load\",\"init_module\",\"finit_module\",\"delete_module\",\"reboot\",\"swapon\",\"swapoff\",\"mount\",\"umount\",\"umount2\",\"pivot_root\",\"sysfs\",\"_sysctl\",\"setuid\",\"setgid\",\"setreuid\",\"setregid\",\"setresuid\",\"setresgid\",\"capset\",\"chroot\"],\"action\":\"SCMP_ACT_ERRNO\",\"args\":[],\"comment\":\"Explicitly block dangerous system calls and privilege escalation vectors\"}]}"
+          "seccomp={\"defaultAction\":\"SCMP_ACT_ERRNO\",\"architectures\":[\"SCMP_ARCH_X86_64\",\"SCMP_ARCH_X86\",\"SCMP_ARCH_AARCH64\",\"SCMP_ARCH_ARM\"],\"syscalls\":[{\"names\":[\"read\",\"write\",\"open\",\"openat\",\"close\",\"stat\",\"fstat\",\"lstat\",\"newfstatat\",\"poll\",\"lseek\",\"mmap\",\"mprotect\",\"munmap\",\"brk\",\"rt_sigaction\",\"rt_sigprocmask\",\"rt_sigreturn\",\"ioctl\",\"pread64\",\"pwrite64\",\"readv\",\"writev\",\"access\",\"faccessat\",\"faccessat2\",\"pipe\",\"pipe2\",\"select\",\"pselect6\",\"sched_yield\",\"mremap\",\"mincore\",\"madvise\",\"dup\",\"dup2\",\"dup3\",\"nanosleep\",\"clock_nanosleep\",\"getitimer\",\"setitimer\",\"alarm\",\"getpid\",\"getppid\",\"getuid\",\"geteuid\",\"getgid\",\"getegid\",\"gettid\",\"fork\",\"vfork\",\"clone\",\"clone3\",\"execve\",\"execveat\",\"exit\",\"exit_group\",\"wait4\",\"waitid\",\"kill\",\"tkill\",\"tgkill\",\"uname\",\"semget\",\"semop\",\"semctl\",\"shmget\",\"shmat\",\"shmdt\",\"shmctl\",\"fcntl\",\"flock\",\"fsync\",\"fdatasync\",\"truncate\",\"ftruncate\",\"getdents\",\"getdents64\",\"getcwd\",\"chdir\",\"fchdir\",\"rename\",\"renameat\",\"renameat2\",\"mkdir\",\"mkdirat\",\"rmdir\",\"unlink\",\"unlinkat\",\"symlink\",\"symlinkat\",\"readlink\",\"readlinkat\",\"chmod\",\"fchmod\",\"fchmodat\",\"chown\",\"fchown\",\"lchown\",\"fchownat\",\"umask\",\"gettimeofday\",\"getrlimit\",\"prlimit64\",\"getrusage\",\"sysinfo\",\"times\",\"setsid\",\"getsid\",\"setpgid\",\"getpgid\",\"getpgrp\",\"socket\",\"connect\",\"accept\",\"accept4\",\"sendto\",\"recvfrom\",\"sendmsg\",\"recvmsg\",\"shutdown\",\"bind\",\"listen\",\"getsockname\",\"getpeername\",\"socketpair\",\"setsockopt\",\"getsockopt\",\"epoll_create\",\"epoll_create1\",\"epoll_ctl\",\"epoll_wait\",\"epoll_pwait\",\"epoll_pwait2\",\"futex\",\"eventfd\",\"eventfd2\",\"timerfd_create\",\"timerfd_settime\",\"timerfd_gettime\",\"signalfd\",\"signalfd4\",\"clock_gettime\",\"clock_getres\",\"getrandom\",\"memfd_create\",\"statx\",\"prctl\",\"arch_prctl\",\"rseq\",\"capget\",\"sched_getaffinity\",\"sched_setaffinity\",\"statfs\",\"fstatfs\",\"getresuid\",\"getresgid\",\"sendfile\",\"utimensat\",\"utimes\",\"futimesat\",\"copy_file_range\"],\"action\":\"SCMP_ACT_ALLOW\"},{\"names\":[\"ptrace\",\"process_vm_readv\",\"process_vm_writev\",\"bpf\",\"kexec_load\",\"kexec_file_load\",\"init_module\",\"finit_module\",\"delete_module\",\"reboot\",\"swapon\",\"swapoff\",\"mount\",\"umount\",\"umount2\",\"pivot_root\",\"sysfs\",\"_sysctl\",\"setuid\",\"setgid\",\"setreuid\",\"setregid\",\"setresuid\",\"setresgid\",\"capset\",\"chroot\"],\"action\":\"SCMP_ACT_ERRNO\",\"args\":[],\"comment\":\"Explicitly block dangerous system calls and privilege escalation vectors\"}]}"
         ],
         "summary": "CapEff=0000000000000000, NoNewPrivs=1, SeccompMode=2"
       }
@@ -60,7 +60,7 @@
         "cgroup_cpu_quota": "200000 100000",
         "nano_cpus": "2000000000",
         "quota_verified": true,
-        "bounded_computation_output": "calc_ok 0.025",
+        "bounded_computation_output": "calc_ok 0.0153",
         "summary": "CPU Quota=200000 100000, Bounded Stress OK=True"
       }
     },
@@ -101,14 +101,15 @@
       }
     },
     "Cancellation & Process Cleanup": {
-      "status": "FAILED",
+      "status": "PASSED",
       "details": {
         "task_submitted": true,
         "cancellation_accepted": true,
-        "status_cancelled": false,
-        "cancel_endpoint_status": "failed",
-        "poll_status": "failed",
-        "summary": "Submit=True, Cancel=True, State=failed"
+        "status_cancelled": true,
+        "cancel_endpoint_status": "cancelled",
+        "poll_status": "cancelled",
+        "poll_error": "",
+        "summary": "Submit=True, Cancel=True, State=cancelled"
       }
     },
     "Task Timeout Handling": {
@@ -123,7 +124,7 @@
       "status": "PASSED",
       "details": {
         "artifacts_mount_verified": true,
-        "mount_details": "drwxrwxrwx 2 omnisight omnisight 4096 Nov  7 18:51 /app/artifacts",
+        "mount_details": "drwxrwxrwx 2 omnisight omnisight 4096 Nov  7 19:02 /app/artifacts",
         "summary": "Volume mounted strictly at /app/artifacts with nosuid"
       }
     },
@@ -164,11 +165,11 @@
         "task_submission": true,
         "idempotency_deduplication": true,
         "webhook_hmac_sha256_verified": true,
-        "correlation_id": "corr-e2e-task-1794077496",
+        "correlation_id": "corr-e2e-task-1794078127",
         "summary": "Submission=True, Idempotent Deduplication=True, HMAC=True"
       }
     }
   },
   "api_tests": {},
-  "verdict": "M3.1 FAILED"
+  "verdict": "M3.1 PASSED"
 }
