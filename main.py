@@ -1,8 +1,9 @@
 """OmniSight Production Entry Point & Hardened Application Integration.
 
-Initializes the OS-level Linux seccomp security sandbox at startup,
-enforcing fail-closed behavior in production while exposing health and security
-diagnostic telemetry for operators and automated audit suites.
+Initializes the decoupled API security context at startup (Milestone M1),
+ensuring that the FastAPI web server process is not restricted by execution-worker
+seccomp filters, while verifying worker seccomp capabilities and exposing rich
+security telemetry for operators and automated audit suites.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from security_sandbox import (
     SecuritySandboxError,
     SecuritySandboxInitializationError,
     get_sandbox_status,
+    initialize_api_security,
     initialize_security_sandbox,
     is_enforcement_required,
     verify_sandbox_active,
@@ -43,22 +45,25 @@ logger = logging.getLogger("omnisight.main")
 
 @asynccontextmanager
 async def security_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """FastAPI application lifespan managing security sandbox initialization."""
+    """FastAPI application lifespan managing decoupled security initialization (M1)."""
     enforce = getattr(app.state, "enforce_sandbox", None)
     if enforce is None:
         enforce = is_enforcement_required()
 
-    logger.info("[SECURITY-STARTUP] Initializing security sandbox (enforce=%s)...", enforce)
+    logger.info("[SECURITY-STARTUP] Initializing decoupled security context (enforce_worker=%s)...", enforce)
     try:
-        sandbox_state = initialize_security_sandbox(enforce=enforce)
-        app.state.sandbox_state = sandbox_state
+        # M1 Decoupling: FastAPI process is NOT locked down by execution seccomp filters
+        security_state = initialize_api_security(enforce_worker_readiness=enforce)
+        app.state.security_state = security_state
+        app.state.sandbox_state = security_state  # Backward compatibility
         logger.info(
-            "[SECURITY-STARTUP] Sandbox initialized successfully (status=%s, platform=%s)",
-            sandbox_state.get("status"),
-            sandbox_state.get("platform"),
+            "[SECURITY-STARTUP] Security context initialized (api_role=%s, worker_seccomp=%s, platform=%s)",
+            security_state.get("api_process", {}).get("role"),
+            security_state.get("worker_security", {}).get("seccomp_available"),
+            security_state.get("platform"),
         )
     except SecuritySandboxInitializationError as exc:
-        logger.critical("[SECURITY-STARTUP] FATAL: Sandbox initialization failed in enforcing mode: %s", exc)
+        logger.critical("[SECURITY-STARTUP] FATAL: Security verification failed in enforcing mode: %s", exc)
         # Fail closed: Abort application startup immediately
         raise
 
@@ -75,10 +80,10 @@ def create_hardened_app(
     operator_token: Optional[str] = None,
     github_client: Any = None,
 ) -> FastAPI:
-    """Factory creating an OmniSight FastAPI application with security sandbox integration.
+    """Factory creating an OmniSight FastAPI application with decoupled security integration.
 
     Args:
-        enforce_sandbox: If True, sandbox initialization failure prevents startup.
+        enforce_sandbox: If True, worker seccomp unreadiness prevents startup.
         db_path: Optional custom SQLite path for job storage.
         runner: Optional browser runner instance.
         repair_runner: Optional repair runner instance.
@@ -86,7 +91,7 @@ def create_hardened_app(
         github_client: Optional GitHub client instance.
 
     Returns:
-        Configured FastAPI application instance.
+        Configured FastAPI application instance with unrestricted subprocess dispatch.
     """
     # Attempt to load Shilpa's backend create_app factory if present
     backend_app: Optional[FastAPI] = None
@@ -105,8 +110,8 @@ def create_hardened_app(
 
     app = backend_app or FastAPI(
         title="OmniSight Hardened Backend",
-        version="1.0.0-security",
-        description="OmniSight backend service hardened with OS-level seccomp sandbox.",
+        version="1.1.0-decoupled",
+        description="OmniSight backend service decoupled from execution-worker seccomp.",
     )
 
     # Attach security lifespan and state
@@ -121,9 +126,10 @@ def create_hardened_app(
             "status": "ok",
             "service": "omnisight-backend",
             "security": {
-                "sandbox_active": sandbox_info.get("status") == SandboxStatus.ACTIVE.value,
-                "sandbox_status": sandbox_info.get("status"),
-                "enforced": sandbox_info.get("enforced"),
+                "api_decoupled": True,
+                "subprocess_dispatch_ready": sandbox_info.get("api_process", {}).get("subprocess_dispatch_ready", True),
+                "worker_seccomp_available": sandbox_info.get("worker_security", {}).get("seccomp_available", False),
+                "enforced": sandbox_info.get("enforced", False),
             },
             "sandbox": sandbox_info,
         }
@@ -131,26 +137,28 @@ def create_hardened_app(
     # Security diagnostic status endpoint
     @app.get("/security/sandbox/status", tags=["Health & Security"])
     def security_sandbox_status() -> Dict[str, Any]:
-        """Returns detailed system call sandbox diagnostic state."""
+        """Returns detailed system call and process isolation diagnostic state."""
         return get_sandbox_status()
 
     # Pre-flight / audit verification endpoint
     @app.post("/security/sandbox/verify", tags=["Health & Security"])
     def security_sandbox_verify() -> Dict[str, Any]:
-        """Validates that the sandbox is enforcing policies without violations."""
+        """Validates that worker security capabilities are ready and policy is enforced."""
         status_info = get_sandbox_status()
-        is_active = status_info.get("status") == SandboxStatus.ACTIVE.value
+        is_ready = status_info.get("status") in (SandboxStatus.READY.value, SandboxStatus.ACTIVE.value)
         is_enforced = status_info.get("enforced", False)
 
-        if is_enforced and not is_active:
+        if is_enforced and not is_ready:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Security sandbox is required but not active: {status_info.get('message')}",
+                detail=f"Worker security protection is mandatory but unready: {status_info.get('message')}",
             )
 
         return {
             "verified": True,
             "status": status_info.get("status"),
+            "api_decoupled": True,
+            "worker_security": status_info.get("worker_security"),
             "details": status_info,
         }
 

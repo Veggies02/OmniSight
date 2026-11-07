@@ -1,18 +1,19 @@
 """OmniSight Production Security Sandbox - Automated Regression Test Suite.
 
 Comprehensive validation covering:
-1. Sandbox initialization and C-level binding detection.
-2. Least-privilege seccomp syscall whitelist and dangerous syscall blocklist.
-3. Fail-closed security initialization under strict enforcement mode.
-4. Permissive / development bypass behavior on non-Linux hosts.
-5. Container hardening: entrypoint signal forwarding, non-root user, and Dockerfile invariants.
-6. Application-level integration with FastAPI lifespan and diagnostics endpoints.
-7. Compatibility with existing OmniSight backend job services.
+1. M1 Decoupling: FastAPI startup does NOT install restrictive seccomp filters.
+2. Unrestricted Subprocess Execution: Playwright and Git subprocesses function cleanly.
+3. Worker Security Foundation: Seccomp-BPF implementation preserved for execution workers.
+4. Fail-Closed Enforcement: Mandatory worker protection configuration is strictly enforced.
+5. Honest Status Separation: Distinct API vs. Worker security reporting without premature isolation claims.
+6. Container Hardening: entrypoint signal forwarding, non-root user, and Dockerfile invariants.
+7. Application Integration: FastAPI health, diagnostics endpoints, and backward compatibility.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -42,7 +43,9 @@ from security_sandbox import (
     SecuritySandboxInitializationError,
     SecuritySandboxViolationError,
     get_sandbox_status,
+    initialize_api_security,
     initialize_security_sandbox,
+    initialize_worker_security_sandbox,
     is_enforcement_required,
     test_restricted_syscall as run_restricted_syscall_probe,
     verify_sandbox_active,
@@ -50,13 +53,15 @@ from security_sandbox import (
 
 
 # ==============================================================================
-# 1. Module Exports & State Verification
+# 1. Module Exports & Decoupled State Verification (M1)
 # ==============================================================================
 
 
 def test_security_sandbox_module_exports() -> None:
     """Verifies that all required functions, exceptions, and classes are exported."""
     assert callable(initialize_security_sandbox)
+    assert callable(initialize_api_security)
+    assert callable(initialize_worker_security_sandbox)
     assert callable(get_sandbox_status)
     assert callable(verify_sandbox_active)
     assert callable(security_sandbox.test_restricted_syscall)
@@ -64,15 +69,52 @@ def test_security_sandbox_module_exports() -> None:
     assert issubclass(SecuritySandboxInitializationError, SecuritySandboxError)
     assert issubclass(SecuritySandboxViolationError, SecuritySandboxError)
     assert SandboxStatus.ACTIVE.value == "active"
+    assert SandboxStatus.READY.value == "ready"
     assert SandboxStatus.UNSUPPORTED.value == "unsupported"
     assert SandboxStatus.FAILED.value == "failed"
     assert SandboxStatus.DISABLED.value == "disabled"
 
 
-def test_sandbox_initialization_status_schema() -> None:
-    """Verifies the schema and metadata of the sandbox status report."""
-    status_data = initialize_security_sandbox(enforce=False)
+def test_fastapi_process_is_decoupled_from_seccomp() -> None:
+    """M1 Requirement: FastAPI process does NOT apply restrictive seccomp filters."""
+    status_data = initialize_api_security(enforce_worker_readiness=False)
     assert isinstance(status_data, dict)
+    assert "api_process" in status_data
+
+    api_profile = status_data["api_process"]
+    assert api_profile["role"] == "web_api_gateway"
+    assert api_profile["seccomp_applied"] is False, (
+        "FastAPI main process must NOT have restrictive seccomp filters applied"
+    )
+    assert api_profile["subprocess_dispatch_ready"] is True
+    assert api_profile["status"] == "ready"
+
+
+def test_worker_security_profile_preserved_and_isolated() -> None:
+    """M1 Requirement: Worker seccomp capability is preserved and tracked separately."""
+    status_data = initialize_api_security(enforce_worker_readiness=False)
+    assert "worker_security" in status_data
+
+    worker_profile = status_data["worker_security"]
+    assert worker_profile["role"] == "execution_worker"
+    assert worker_profile["blocked_syscalls"] >= 25
+    assert worker_profile["allowed_syscalls"] >= 80
+
+
+def test_worker_isolation_honestly_disclosed_not_claimed_prematurely() -> None:
+    """M1 Requirement: Do NOT claim worker isolation until dedicated worker service exists."""
+    status_data = initialize_api_security(enforce_worker_readiness=False)
+    worker_profile = status_data["worker_security"]
+
+    # Explicitly verify we do not claim full worker container isolation in M1
+    assert worker_profile["worker_isolation_verified"] is False
+    assert worker_profile["isolation_model"] == "in_process_decoupled"
+    assert worker_profile["worker_service_status"] == "pending_m3_worker_service"
+
+
+def test_sandbox_initialization_status_schema() -> None:
+    """Verifies backward compatibility of top-level status report fields."""
+    status_data = initialize_security_sandbox(enforce=False)
     required_keys = {
         "status",
         "platform",
@@ -84,26 +126,75 @@ def test_sandbox_initialization_status_schema() -> None:
         "blocked_syscalls",
         "allowed_syscalls",
         "policy_version",
+        "api_process",
+        "worker_security",
     }
     assert required_keys.issubset(status_data.keys())
-    assert status_data["policy_version"] == "1.0.0-hardened"
-    assert status_data["blocked_syscalls"] >= 25
-    assert status_data["allowed_syscalls"] >= 80
+    assert status_data["policy_version"] == "1.1.0-decoupled"
 
 
 # ==============================================================================
-# 2. Syscall Table & C Implementation Verification
+# 2. Subprocess & Tooling Execution Compatibility (Integration Tests)
+# ==============================================================================
+
+
+def test_subprocess_execution_functional_from_fastapi_process() -> None:
+    """M1 Requirement: FastAPI process retains unrestricted subprocess functionality."""
+    # Ensure API security is initialized
+    initialize_api_security(enforce_worker_readiness=False)
+
+    # Spawn an actual Python subprocess to verify execve / fork are not blocked
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.exit(42)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout, stderr = proc.communicate(timeout=5)
+    assert proc.returncode == 42, f"Subprocess execution failed: {stderr.decode()}"
+
+
+def test_git_operations_functional_from_fastapi_process() -> None:
+    """M1 Requirement: Git commands are not blocked by inherited seccomp restrictions."""
+    initialize_api_security(enforce_worker_readiness=False)
+
+    git_bin = shutil.which("git")
+    if not git_bin:
+        pytest.skip("git not installed on host")
+
+    proc = subprocess.Popen(
+        [git_bin, "status", "--porcelain"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout, stderr = proc.communicate(timeout=5)
+    assert proc.returncode == 0, f"Git status execution failed: {stderr}"
+
+
+def test_playwright_runner_importable_and_dispatchable() -> None:
+    """M1 Requirement: Playwright runner components in backend remain functional."""
+    try:
+        from browser_runner import PlaywrightCliRunner
+        runner = PlaywrightCliRunner(repo_root=REPO_ROOT, base_url="http://127.0.0.1:5173", check_app=False)
+        assert runner.mode == "playwright"
+        command = runner._resolve_command()
+        assert len(command) >= 2
+    except ImportError:
+        pytest.skip("browser_runner not in path")
+
+
+# ==============================================================================
+# 3. Worker Seccomp Filter & C Implementation Verification
 # ==============================================================================
 
 
 def test_seccomp_c_source_blocks_dangerous_syscalls() -> None:
     """Inspects seccomp_sandbox.c to verify explicit blocking of high-risk syscalls."""
     c_source_path = REPO_ROOT / "seccomp_sandbox.c"
-    assert c_source_path.exists(), "seccomp_sandbox.c must exist in the repository root"
+    assert c_source_path.exists(), "seccomp_sandbox.c must exist in repository root"
 
     content = c_source_path.read_text(encoding="utf-8")
 
-    # High-risk syscalls that must be explicitly blocked
     critical_blocked_syscalls = [
         "__NR_ptrace",
         "__NR_kexec_load",
@@ -122,7 +213,6 @@ def test_seccomp_c_source_blocks_dangerous_syscalls() -> None:
     for syscall_macro in critical_blocked_syscalls:
         assert syscall_macro in content, f"Missing critical dangerous syscall check: {syscall_macro}"
 
-    # Verifies PR_SET_NO_NEW_PRIVS is set before installing filter
     assert "PR_SET_NO_NEW_PRIVS" in content, "Filter must enforce PR_SET_NO_NEW_PRIVS"
     assert "init_seccomp_sandbox" in content, "Must export init_seccomp_sandbox C ABI function"
     assert "is_seccomp_supported" in content, "Must export is_seccomp_supported C ABI function"
@@ -154,28 +244,24 @@ def test_seccomp_c_source_whitelists_runtime_syscalls() -> None:
         assert sc in content, f"Missing essential runtime syscall in whitelist: {sc}"
 
 
-def test_seccomp_filter_installation_mocked_success() -> None:
-    """Verifies filter installation logic using mocked Linux C-library bindings."""
+def test_worker_seccomp_filter_installation_mocked_success() -> None:
+    """Verifies worker filter installation logic using mocked Linux C-library bindings."""
     mock_lib = MagicMock()
     mock_lib.is_seccomp_supported.return_value = 1
     mock_lib.init_seccomp_sandbox.return_value = 0
-    mock_lib.get_sandbox_status_msg.return_value = b"Mocked seccomp active"
+    mock_lib.get_sandbox_status_msg.return_value = b"Mocked worker seccomp active"
     mock_lib.get_blocked_syscall_count.return_value = 27
     mock_lib.get_allowed_syscall_count.return_value = 85
 
     with patch("security_sandbox._get_c_bindings", return_value=mock_lib), \
          patch("sys.platform", "linux"):
-        result = initialize_security_sandbox(enforce=True)
+        result = initialize_worker_security_sandbox(enforce=True)
         assert result["status"] == SandboxStatus.ACTIVE.value
-        assert result["initialized"] is True
-        assert result["kernel_supported"] is True
-        assert result["blocked_syscalls"] == 27
-        assert result["allowed_syscalls"] == 85
-        assert verify_sandbox_active() is True
+        assert result["seccomp_applied"] is True
 
 
-def test_seccomp_filter_installation_mocked_failure() -> None:
-    """Verifies fail-closed behavior when seccomp initialization returns an error code."""
+def test_worker_seccomp_filter_installation_mocked_failure() -> None:
+    """Verifies fail-closed behavior when worker seccomp initialization returns an error code."""
     mock_lib = MagicMock()
     mock_lib.is_seccomp_supported.return_value = 1
     mock_lib.init_seccomp_sandbox.return_value = -5  # SECCOMP_STATUS_ERR_LOAD
@@ -185,38 +271,35 @@ def test_seccomp_filter_installation_mocked_failure() -> None:
 
     with patch("security_sandbox._get_c_bindings", return_value=mock_lib), \
          patch("sys.platform", "linux"):
-        # Enforcing mode: must raise SecuritySandboxInitializationError
-        with pytest.raises(SecuritySandboxInitializationError, match="Seccomp initialization failed"):
-            initialize_security_sandbox(enforce=True)
+        with pytest.raises(SecuritySandboxInitializationError, match="Worker seccomp installation failed"):
+            initialize_worker_security_sandbox(enforce=True)
 
-        # Permissive mode: should record failure without raising
-        result = initialize_security_sandbox(enforce=False)
+        result = initialize_worker_security_sandbox(enforce=False)
         assert result["status"] == SandboxStatus.FAILED.value
-        assert result["initialized"] is False
 
 
 def test_restricted_syscall_blocked_behavior() -> None:
-    """Verifies behavior of test_restricted_syscall."""
+    """Verifies probe behavior of test_restricted_syscall."""
     code = run_restricted_syscall_probe()
-    # On non-Linux (macOS Darwin), should return ENOSYS (78 on Darwin) or -1
-    # On Linux with sandbox active, it would return EPERM (1)
     assert isinstance(code, int)
 
 
 # ==============================================================================
-# 3. Fail-Closed & Policy Enforcement Logic
+# 4. Fail-Closed & Policy Enforcement Logic
 # ==============================================================================
 
 
-def test_fail_closed_on_unsupported_host_without_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
-    """In enforcing mode, an unsupported host must raise SecuritySandboxInitializationError."""
+def test_worker_enforcement_fail_closed_on_unsupported_host_without_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M1 Requirement: In enforcing mode, lack of worker protection fails closed."""
     monkeypatch.delenv("OMNISIGHT_ALLOW_DEV_SANDBOX_BYPASS", raising=False)
     monkeypatch.setenv("OMNISIGHT_ENFORCE_SANDBOX", "1")
 
-    # On macOS host (non-Linux), enforcing mode must fail closed
+    # On macOS host (non-Linux), enforcing worker protection must fail closed
     if not sys.platform.startswith("linux"):
-        with pytest.raises(SecuritySandboxInitializationError, match="does not support Linux seccomp-BPF"):
-            initialize_security_sandbox(enforce=True)
+        with pytest.raises(SecuritySandboxInitializationError, match="Worker seccomp protection mandatory"):
+            initialize_api_security(enforce_worker_readiness=True)
 
 
 def test_dev_bypass_allows_unsupported_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -224,27 +307,29 @@ def test_dev_bypass_allows_unsupported_host(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("OMNISIGHT_ALLOW_DEV_SANDBOX_BYPASS", "1")
     monkeypatch.setenv("OMNISIGHT_ENFORCE_SANDBOX", "1")
 
-    result = initialize_security_sandbox(enforce=True)
+    result = initialize_api_security(enforce_worker_readiness=True)
     assert result["status"] == SandboxStatus.UNSUPPORTED.value
     assert result["enforced"] is True
+    assert result["api_process"]["subprocess_dispatch_ready"] is True
 
 
 def test_is_enforcement_required_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verifies parsing of enforcement environment flags."""
     monkeypatch.delenv("OMNISIGHT_ENFORCE_SANDBOX", raising=False)
+    monkeypatch.delenv("OMNISIGHT_ENFORCE_WORKER_SANDBOX", raising=False)
     monkeypatch.delenv("SECURITY_SANDBOX_REQUIRED", raising=False)
     assert is_enforcement_required() is False
 
-    monkeypatch.setenv("OMNISIGHT_ENFORCE_SANDBOX", "1")
+    monkeypatch.setenv("OMNISIGHT_ENFORCE_WORKER_SANDBOX", "1")
     assert is_enforcement_required() is True
 
-    monkeypatch.setenv("OMNISIGHT_ENFORCE_SANDBOX", "false")
+    monkeypatch.setenv("OMNISIGHT_ENFORCE_WORKER_SANDBOX", "0")
     monkeypatch.setenv("SECURITY_SANDBOX_REQUIRED", "true")
     assert is_enforcement_required() is True
 
 
 # ==============================================================================
-# 4. Container Hardening (entrypoint.sh & Dockerfile)
+# 5. Container Hardening (entrypoint.sh & Dockerfile)
 # ==============================================================================
 
 
@@ -285,7 +370,7 @@ def test_dockerfile_security_invariants() -> None:
 
 
 # ==============================================================================
-# 5. Application Integration & FastAPI Compatibility
+# 6. Application Integration & FastAPI Compatibility
 # ==============================================================================
 
 
@@ -300,7 +385,7 @@ def test_hardened_app_health_endpoint() -> None:
 
 
 def test_hardened_app_security_status_endpoint() -> None:
-    """Verifies that the /security/sandbox/status endpoint returns complete diagnostic info."""
+    """Verifies that the /security/sandbox/status endpoint returns decoupled diagnostic info."""
     app = main.create_hardened_app(enforce_sandbox=False)
     with TestClient(app) as client:
         response = client.get("/security/sandbox/status")
@@ -308,8 +393,12 @@ def test_hardened_app_security_status_endpoint() -> None:
         data = response.json()
         assert "status" in data
         assert "policy_version" in data
-        assert "blocked_syscalls" in data
-        assert "allowed_syscalls" in data
+        assert "api_process" in data
+        assert "worker_security" in data
+
+        # Verify decoupled API assertions
+        assert data["api_process"]["seccomp_applied"] is False
+        assert data["api_process"]["subprocess_dispatch_ready"] is True
 
 
 def test_hardened_app_security_verify_endpoint() -> None:
@@ -320,7 +409,7 @@ def test_hardened_app_security_verify_endpoint() -> None:
         assert response.status_code == 200
         data = response.json()
         assert data["verified"] is True
-        assert "status" in data
+        assert data["api_decoupled"] is True
 
 
 def test_hardened_app_lifespan_fail_closed_when_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -332,14 +421,13 @@ def test_hardened_app_lifespan_fail_closed_when_enforced(monkeypatch: pytest.Mon
         app = main.create_hardened_app(enforce_sandbox=True)
         with pytest.raises(SecuritySandboxInitializationError):
             with TestClient(app):
-                pass  # Should not reach here because lifespan will fail during startup
+                pass
 
 
 def test_backend_jobs_api_routes_preserved() -> None:
     """Verifies that existing backend routes (/jobs) remain registered and accessible."""
     app = main.create_hardened_app(enforce_sandbox=False)
     with TestClient(app) as client:
-        # GET /jobs list endpoint
         response = client.get("/jobs")
         assert response.status_code == 200
         data = response.json()
