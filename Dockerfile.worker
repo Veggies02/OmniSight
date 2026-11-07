@@ -71,9 +71,13 @@ RUN chmod 0644 /usr/local/lib/seccomp_sandbox.so && \
 
 WORKDIR /app
 
-# Install Python production dependencies
-COPY requirements-worker.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python production dependencies (prefer reproducible lockfile)
+COPY requirements-worker.txt requirements-worker.lock* /app/
+RUN if [ -f /app/requirements-worker.lock ]; then \
+        pip install --no-cache-dir -r /app/requirements-worker.lock; \
+    else \
+        pip install --no-cache-dir -r /app/requirements-worker.txt; \
+    fi
 
 # Copy entrypoint script and configure permissions
 COPY worker_entrypoint.sh /worker_entrypoint.sh

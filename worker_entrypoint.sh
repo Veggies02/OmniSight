@@ -25,6 +25,13 @@ else
     echo "[WORKER-ENTRYPOINT] Verified unprivileged execution (UID: $CURRENT_UID, GID: $(id -g))"
 fi
 
+# 1b. Private signing key isolation check (Strict Fail-Closed)
+if [ -n "${OMNISIGHT_APPROVAL_PRIVATE_KEY_HEX:-}" ]; then
+    echo "[WORKER-ENTRYPOINT] CRITICAL SECURITY VIOLATION: OMNISIGHT_APPROVAL_PRIVATE_KEY_HEX detected in worker environment!" >&2
+    echo "[WORKER-ENTRYPOINT] Worker nodes must NEVER possess private signing keys. Aborting startup immediately." >&2
+    exit 1
+fi
+
 # 2. Seccomp shared library integrity check
 SECCOMP_LIB="/usr/local/lib/seccomp_sandbox.so"
 if [ ! -f "$SECCOMP_LIB" ] && [ -f "./seccomp_sandbox.so" ]; then

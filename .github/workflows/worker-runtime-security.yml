@@ -45,6 +45,7 @@ jobs:
           python -m pytest test_execution_runner.py -v
           python -m pytest test_worker_service.py -v
           python -m pytest test_adversarial_security.py -v
+          python -m pytest test_worker_reliability.py -v
 
       - name: Generate authoritative approval signing keypair and enforce key rotation
         run: |
@@ -101,6 +102,10 @@ jobs:
         run: |
           python scripts/validate_container_runtime.py
 
+      - name: Execute worker performance benchmark
+        run: |
+          python scripts/benchmark_worker.py --url http://127.0.0.1:8080 --out docs/runtime-evidence/worker_benchmark_report.json
+
       - name: Display runtime security evidence
         if: always()
         run: |
@@ -116,6 +121,7 @@ jobs:
           path: |
             m3_1_runtime_security_evidence.json
             container_inspect.json
+            docs/runtime-evidence/worker_benchmark_report.json
 
       - name: Commit and push runtime security evidence
         if: always()

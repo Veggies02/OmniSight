@@ -18,6 +18,8 @@ Key Capabilities:
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import hashlib
 import hmac
 import json
@@ -34,11 +36,17 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, Union
+
+try:
+    import resource
+except ImportError:
+    resource = None  # type: ignore[assignment]
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Security, status
 from fastapi.responses import JSONResponse
@@ -61,6 +69,223 @@ from execution_schemas import (
 from crypto_approval import ApprovalVerifier
 
 logger = logging.getLogger("omnisight.worker_service")
+
+# Context variables for request tracing & structured log correlation
+correlation_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "correlation_id", default=None
+)
+task_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "task_id", default=None
+)
+
+
+# =========================================================================== #
+# Structured Observability & Metrics Telemetry
+# =========================================================================== #
+class OmniSightJsonFormatter(logging.Formatter):
+    """Structured JSON formatter for machine-parseable log aggregation."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_obj: Dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "service": "omnisight-execution-worker",
+            "correlation_id": correlation_id_var.get() or getattr(record, "correlation_id", None),
+            "task_id": task_id_var.get() or getattr(record, "task_id", None),
+        }
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+        for key, val in record.__dict__.items():
+            if key not in (
+                "args", "asctime", "created", "exc_info", "exc_text", "filename",
+                "funcName", "id", "levelname", "levelno", "lineno", "module",
+                "msecs", "message", "msg", "name", "pathname", "process",
+                "processName", "relativeCreated", "stack_info", "thread",
+                "threadName", "correlation_id", "task_id",
+            ):
+                if not key.startswith("_"):
+                    try:
+                        json.dumps(val)
+                        log_obj[key] = val
+                    except (TypeError, OverflowError):
+                        log_obj[key] = str(val)
+        return json.dumps(log_obj)
+
+
+def setup_worker_logging(log_format: Optional[str] = None) -> None:
+    """Configures structured JSON or human-readable logging for the worker."""
+    effective_format = log_format or os.environ.get("LOG_FORMAT", "text").lower()
+    handler = logging.StreamHandler(sys.stdout)
+    if effective_format == "json":
+        handler.setFormatter(OmniSightJsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"))
+    root = logging.getLogger("omnisight")
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
+
+
+class WorkerMetricsCollector:
+    """Thread-safe operational and security telemetry metrics collector."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.start_time = time.time()
+        self.total_requests = 0
+        self.total_tasks_submitted = 0
+        self.tasks_completed = 0
+        self.tasks_failed = 0
+        self.tasks_cancelled = 0
+        self.tasks_timed_out = 0
+        self.task_durations: List[float] = []
+        # Security audit event counters
+        self.auth_failures = 0
+        self.replay_attacks_blocked = 0
+        self.invalid_signatures_blocked = 0
+        self.revoked_keys_blocked = 0
+        self.payload_size_rejections = 0
+
+    def record_request(self) -> None:
+        with self._lock:
+            self.total_requests += 1
+
+    def record_task_submission(self) -> None:
+        with self._lock:
+            self.total_tasks_submitted += 1
+
+    def record_task_completion(self, duration_seconds: float) -> None:
+        with self._lock:
+            self.tasks_completed += 1
+            self.task_durations.append(duration_seconds)
+            if len(self.task_durations) > 2000:
+                self.task_durations = self.task_durations[-1000:]
+
+    def record_task_failure(self, is_timeout: bool = False) -> None:
+        with self._lock:
+            self.tasks_failed += 1
+            if is_timeout:
+                self.tasks_timed_out += 1
+
+    def record_task_cancellation(self) -> None:
+        with self._lock:
+            self.tasks_cancelled += 1
+
+    def record_security_event(self, event_type: str) -> None:
+        with self._lock:
+            if event_type == "auth_failure":
+                self.auth_failures += 1
+            elif event_type == "replay_attack":
+                self.replay_attacks_blocked += 1
+            elif event_type == "invalid_signature":
+                self.invalid_signatures_blocked += 1
+            elif event_type == "revoked_key":
+                self.revoked_keys_blocked += 1
+            elif event_type == "payload_too_large":
+                self.payload_size_rejections += 1
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            uptime = time.time() - self.start_time
+            avg_dur = sum(self.task_durations) / len(self.task_durations) if self.task_durations else 0.0
+            min_dur = min(self.task_durations) if self.task_durations else 0.0
+            max_dur = max(self.task_durations) if self.task_durations else 0.0
+
+            rss_mb = 0.0
+            if resource is not None:
+                try:
+                    usage = resource.getrusage(resource.RUSAGE_SELF)
+                    rss_mb = (usage.ru_maxrss / 1024.0) if sys.platform != "darwin" else (usage.ru_maxrss / (1024.0 * 1024.0))
+                except Exception:
+                    pass
+
+            return {
+                "uptime_seconds": round(uptime, 2),
+                "total_requests": self.total_requests,
+                "tasks": {
+                    "submitted": self.total_tasks_submitted,
+                    "completed": self.tasks_completed,
+                    "failed": self.tasks_failed,
+                    "cancelled": self.tasks_cancelled,
+                    "timed_out": self.tasks_timed_out,
+                    "duration_seconds": {
+                        "average": round(avg_dur, 3),
+                        "min": round(min_dur, 3),
+                        "max": round(max_dur, 3),
+                    },
+                },
+                "security_events": {
+                    "auth_failures": self.auth_failures,
+                    "replay_attacks_blocked": self.replay_attacks_blocked,
+                    "invalid_signatures_blocked": self.invalid_signatures_blocked,
+                    "revoked_keys_blocked": self.revoked_keys_blocked,
+                    "payload_size_rejections": self.payload_size_rejections,
+                },
+                "resources": {
+                    "memory_rss_mb": round(rss_mb, 2),
+                    "active_threads": threading.active_count(),
+                },
+            }
+
+
+class TaskRetryPolicy:
+    """Formal classification of execution task retryability."""
+
+    @staticmethod
+    def is_retryable(operation: Union[TaskOperationType, str]) -> Tuple[bool, str]:
+        """Determines whether a task operation can safely be retried automatically.
+
+        Returns:
+            Tuple of (can_retry: bool, reason: str).
+        """
+        op_val = operation.value if isinstance(operation, TaskOperationType) else str(operation)
+        if op_val in (TaskOperationType.CAPTURE_EVIDENCE.value, "inspect"):
+            return True, "Read-only inspection operation; idempotent and safe to retry automatically."
+        elif op_val == TaskOperationType.EXECUTE_REPAIR.value:
+            return False, "Code repair operation consumes a cryptographic approval nonce; requires human review or fresh approval."
+        return False, "Non-idempotent or unknown operation; requires operator intervention."
+
+
+def verify_worker_environment_security() -> None:
+    """Validates runtime configuration security before worker startup.
+
+    1. Enforces that private signing keys NEVER enter the worker process (Fail-Closed).
+    2. Enforces that production environments do not use default fallback secrets.
+    """
+    if os.environ.get("OMNISIGHT_APPROVAL_PRIVATE_KEY_HEX"):
+        logger.critical(
+            "[SECURITY-AUDIT] FATAL: OMNISIGHT_APPROVAL_PRIVATE_KEY_HEX detected in worker environment! "
+            "Worker nodes must NEVER possess private signing keys. Aborting startup immediately."
+        )
+        raise RuntimeError(
+            "CRITICAL SECURITY VIOLATION: Private signing key found in worker environment. "
+            "Execution worker must only hold public verification keys."
+        )
+
+    env_mode = os.environ.get("OMNISIGHT_ENVIRONMENT", os.environ.get("ENVIRONMENT", "")).lower()
+    is_production = env_mode in ("production", "prod") or os.environ.get("PRODUCTION") == "1"
+
+    if is_production:
+        token = os.environ.get("OMNISIGHT_WORKER_AUTH_TOKEN", "").strip()
+        if not token or token == "worker-auth-secret-token":
+            logger.critical(
+                "[SECURITY-AUDIT] FATAL: Production mode requires a secure, non-default OMNISIGHT_WORKER_AUTH_TOKEN."
+            )
+            raise RuntimeError(
+                "Production configuration error: OMNISIGHT_WORKER_AUTH_TOKEN is missing or set to default insecure placeholder."
+            )
+
+        secret = os.environ.get("OMNISIGHT_WEBHOOK_SECRET", "").strip()
+        if not secret or secret == "webhook-signing-secret-key":
+            logger.critical(
+                "[SECURITY-AUDIT] FATAL: Production mode requires a secure, non-default OMNISIGHT_WEBHOOK_SECRET."
+            )
+            raise RuntimeError(
+                "Production configuration error: OMNISIGHT_WEBHOOK_SECRET is missing or set to default insecure placeholder."
+            )
+
 
 # Default service configuration
 DEFAULT_WORKER_PORT = 8080
@@ -196,6 +421,35 @@ class WorkspaceManager:
         except ValueError:
             raise ValueError(f"Path {resolved} escapes allocated workspace {workspace}")
         return resolved
+
+    def cleanup_abandoned_workspaces(self, max_age_seconds: float = 3600.0) -> int:
+        """Reclaims abandoned ephemeral workspaces left behind from previous crashes or ungraceful exits.
+
+        Args:
+            max_age_seconds: Threshold age in seconds before a directory is considered abandoned.
+
+        Returns:
+            Number of reclaimed workspace directories.
+        """
+        reclaimed = 0
+        if not self.base_dir.exists():
+            return reclaimed
+
+        now = time.time()
+        try:
+            for item in self.base_dir.iterdir():
+                if item.is_dir():
+                    try:
+                        mtime = item.stat().st_mtime
+                        if (now - mtime) >= max_age_seconds:
+                            shutil.rmtree(item, ignore_errors=True)
+                            reclaimed += 1
+                            logger.info("[WORKSPACE-JANITOR] Reclaimed abandoned workspace: %s", item.name)
+                    except Exception as exc:
+                        logger.warning("[WORKSPACE-JANITOR] Failed to reclaim %s: %s", item, exc)
+        except Exception as exc:
+            logger.warning("[WORKSPACE-JANITOR] Error scanning workspace directory: %s", exc)
+        return reclaimed
 
 
 class WorkerTaskRegistry:
@@ -489,6 +743,7 @@ class TaskExecutor:
         repo_root: Optional[Path] = None,
         command_override: Optional[Sequence[str]] = None,
         approval_verifier: Optional[ApprovalVerifier] = None,
+        metrics: Optional[WorkerMetricsCollector] = None,
     ) -> None:
         self.registry = registry
         self.workspace_mgr = workspace_mgr
@@ -496,6 +751,7 @@ class TaskExecutor:
         self.repo_root = Path(repo_root).resolve() if repo_root else Path.cwd().resolve()
         self.command_override = list(command_override) if command_override else None
         self.approval_verifier = approval_verifier
+        self.metrics = metrics
 
     def sanitize_environment(
         self, extra_env: Optional[Dict[str, str]] = None
@@ -569,10 +825,16 @@ class TaskExecutor:
 
     def _run_task_lifecycle(self, request: ExecutionTaskRequest) -> None:
         """Orchestrates complete task lifecycle: prepare, execute, collect, notify, clean."""
+        task_id_var.set(request.task_id)
+        if request.correlation_id:
+            correlation_id_var.set(request.correlation_id)
+
         # Check if task was cancelled before lifecycle thread started
         current = self.registry.get_task(request.task_id)
         if current and current.status == TaskExecutionStatus.CANCELLED:
             logger.info("[WORKER] Task %s was cancelled before execution started", request.task_id)
+            if self.metrics:
+                self.metrics.record_task_cancellation()
             return
 
         started_at = datetime.now(timezone.utc).isoformat()
@@ -658,9 +920,13 @@ class TaskExecutor:
             current = self.registry.get_task(request.task_id)
             if current and current.status == TaskExecutionStatus.CANCELLED:
                 logger.info("[WORKER] Task %s was cancelled during execution", request.task_id)
+                if self.metrics:
+                    self.metrics.record_task_cancellation()
                 return
 
             if timed_out:
+                if self.metrics:
+                    self.metrics.record_task_failure(is_timeout=True)
                 final_status = TaskExecutionStatus.FAILED
                 error_payload = ExecutionError(
                     code="timeout",
@@ -718,6 +984,11 @@ class TaskExecutor:
                     code=f"exit_code_{exit_code}",
                     message=stderr[-500:] if stderr else f"Process failed with exit code {exit_code}",
                 )
+                if self.metrics:
+                    if passed:
+                        self.metrics.record_task_completion(duration)
+                    else:
+                        self.metrics.record_task_failure(is_timeout=False)
 
             # Update registry
             self.registry.update_task_status(
@@ -749,6 +1020,8 @@ class TaskExecutor:
         except Exception as exc:
             duration = time.monotonic() - start_time
             logger.exception("[WORKER] Unhandled exception in task %s: %s", request.task_id, exc)
+            if self.metrics:
+                self.metrics.record_task_failure(is_timeout=False)
             self.registry.remove_process(request.task_id)
             self.registry.update_task_status(
                 task_id=request.task_id,
@@ -834,11 +1107,13 @@ def create_worker_app(
     command_override: Optional[Sequence[str]] = None,
     enforce_seccomp: bool = False,
     approval_verifier: Optional[ApprovalVerifier] = None,
+    metrics: Optional[WorkerMetricsCollector] = None,
 ) -> FastAPI:
     """Creates the OmniSight Isolated Execution Worker FastAPI application."""
     effective_token = auth_token or os.environ.get("OMNISIGHT_WORKER_AUTH_TOKEN")
     effective_secret = webhook_secret or os.environ.get("OMNISIGHT_WEBHOOK_SECRET")
     effective_verifier = approval_verifier or ApprovalVerifier.from_env()
+    effective_metrics = metrics or WorkerMetricsCollector()
 
     registry = WorkerTaskRegistry()
     workspace_mgr = WorkspaceManager()
@@ -850,17 +1125,28 @@ def create_worker_app(
         repo_root=repo_root,
         command_override=command_override,
         approval_verifier=effective_verifier,
+        metrics=effective_metrics,
     )
 
     @asynccontextmanager
     async def worker_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        # Pre-flight environment security audit
+        verify_worker_environment_security()
+
         logger.info("[WORKER-LIFESPAN] Starting OmniSight Execution Worker Service...")
         app.state.registry = registry
         app.state.workspace_mgr = workspace_mgr
         app.state.executor = executor
         app.state.webhook_dispatcher = webhook_dispatcher
         app.state.approval_verifier = effective_verifier
+        app.state.metrics = effective_metrics
+        app.state.is_draining = False
         app.state.start_time = time.time()
+
+        # Startup Janitor: Scavenge abandoned workspaces from previous crashes
+        reclaimed = workspace_mgr.cleanup_abandoned_workspaces(max_age_seconds=3600.0)
+        if reclaimed > 0:
+            logger.info("[WORKER-LIFESPAN] Startup janitor cleaned up %d abandoned workspaces", reclaimed)
 
         # Optional Linux Seccomp Sandbox Initialization
         if enforce_seccomp and sys.platform.startswith("linux"):
@@ -875,7 +1161,26 @@ def create_worker_app(
 
         yield
 
-        logger.info("[WORKER-LIFESPAN] Shutting down OmniSight Execution Worker Service.")
+        # Graceful Draining & Shutdown
+        logger.info("[WORKER-LIFESPAN] Draining OmniSight Execution Worker Service...")
+        app.state.is_draining = True
+
+        active_count = registry.count_active()
+        if active_count > 0:
+            logger.warning("[WORKER-LIFESPAN] Worker shutting down with %d active tasks. Draining...", active_count)
+            drain_deadline = time.time() + 3.0
+            while registry.count_active() > 0 and time.time() < drain_deadline:
+                await asyncio.sleep(0.2)
+
+            for task in registry.list_tasks():
+                if task.status in (TaskExecutionStatus.QUEUED, TaskExecutionStatus.RUNNING):
+                    logger.warning("[WORKER-LIFESPAN] Force-cancelling remaining active task: %s", task.task_id)
+                    registry.cancel_task(task.task_id)
+                    effective_metrics.record_task_cancellation()
+
+        # Cleanup all ephemeral workspaces on final shutdown
+        workspace_mgr.cleanup_abandoned_workspaces(max_age_seconds=0.0)
+        logger.info("[WORKER-LIFESPAN] OmniSight Execution Worker shutdown complete.")
 
     app = FastAPI(
         title="OmniSight Isolated Execution Worker Service",
@@ -883,6 +1188,27 @@ def create_worker_app(
         description="Dedicated execution worker service providing isolated task processing.",
         lifespan=worker_lifespan,
     )
+
+    @app.middleware("http")
+    async def request_correlation_and_draining_middleware(request: Request, call_next: Any) -> Any:
+        # Check draining status for task submission
+        if request.url.path.startswith("/api/v1/tasks") and request.method == "POST":
+            if getattr(request.app.state, "is_draining", False):
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={"detail": "Worker service is draining for shutdown and cannot accept new tasks."},
+                )
+
+        raw_corr_id = request.headers.get("x-correlation-id")
+        corr_id = raw_corr_id.strip() if raw_corr_id else str(uuid.uuid4())
+        correlation_id_var.set(corr_id)
+
+        # Record operational request telemetry
+        effective_metrics.record_request()
+
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = corr_id
+        return response
 
     MAX_REQUEST_BODY_SIZE = 2 * 1024 * 1024  # 2MB maximum payload size
 
@@ -892,6 +1218,11 @@ def create_worker_app(
         if content_length:
             try:
                 if int(content_length) > MAX_REQUEST_BODY_SIZE:
+                    effective_metrics.record_security_event("payload_too_large")
+                    logger.warning(
+                        "[SECURITY-AUDIT] Request payload size (%s bytes) exceeds 2MB limit from client",
+                        content_length,
+                    )
                     return JSONResponse(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         content={"detail": "Request payload exceeds maximum allowed size (2MB)."},
@@ -911,6 +1242,8 @@ def create_worker_app(
             return  # No authentication required if token not configured
 
         if not credentials or not credentials.credentials:
+            effective_metrics.record_security_event("auth_failure")
+            logger.warning("[SECURITY-AUDIT] Unauthorized access attempt: missing Bearer authorization credentials")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Missing Authorization: Bearer <token> header.",
@@ -919,6 +1252,8 @@ def create_worker_app(
 
         # Constant-time comparison to prevent timing attacks
         if not hmac.compare_digest(credentials.credentials, effective_token):
+            effective_metrics.record_security_event("auth_failure")
+            logger.warning("[SECURITY-AUDIT] Unauthorized access attempt: invalid Bearer token provided")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid worker authentication token.",
@@ -934,16 +1269,22 @@ def create_worker_app(
         uptime = time.time() - getattr(app.state, "start_time", time.time())
         npm_available = shutil.which("npm") is not None
         node_available = shutil.which("node") is not None
+        is_draining = getattr(app.state, "is_draining", False)
 
         return {
-            "status": "healthy" if npm_available else "degraded",
+            "status": "draining" if is_draining else ("healthy" if npm_available else "degraded"),
             "service": "omnisight-execution-worker",
             "version": "1.0.0",
             "mode": RunnerMode.WORKER_SERVICE.value,
             "deployed": True,
-            "available": True,
+            "available": not is_draining,
+            "draining": is_draining,
             "uptime_seconds": round(uptime, 2),
             "active_tasks": registry.count_active(),
+            "metrics_summary": effective_metrics.snapshot(),
+            "retry_policies": {
+                op.value: TaskRetryPolicy.is_retryable(op)[0] for op in TaskOperationType
+            },
             "capabilities": {
                 "operations": [op.value for op in TaskOperationType],
                 "npm_available": npm_available,
@@ -953,6 +1294,12 @@ def create_worker_app(
                 "platform": sys.platform,
             },
         }
+
+    @app.get("/metrics", tags=["Diagnostic"])
+    @app.get("/api/v1/metrics", tags=["Diagnostic"])
+    def get_metrics() -> Dict[str, Any]:
+        """Exposes operational, security, and resource utilization metrics."""
+        return effective_metrics.snapshot()
 
     @app.post(
         "/api/v1/tasks",
@@ -989,8 +1336,16 @@ def create_worker_app(
             # Cryptographic Human Approval Verification Gate
             is_valid, reason = effective_verifier.verify(request.proposal_ref)
             if not is_valid:
+                reason_lower = reason.lower()
+                if "replay" in reason_lower:
+                    effective_metrics.record_security_event("replay_attack")
+                elif "revoked" in reason_lower:
+                    effective_metrics.record_security_event("revoked_key")
+                else:
+                    effective_metrics.record_security_event("invalid_signature")
+
                 logger.warning(
-                    "[APPROVAL-GATE] Cryptographic approval verification rejected for task %s: %s",
+                    "[SECURITY-AUDIT] Cryptographic approval verification rejected for task %s: %s",
                     request.task_id,
                     reason,
                 )
@@ -1009,6 +1364,7 @@ def create_worker_app(
         task_status, is_new = registry.register_task(request_copy)
 
         if is_new:
+            effective_metrics.record_task_submission()
             logger.info(
                 "[WORKER-API] Received new task %s (operation=%s, job=%s, corr=%s)",
                 request_copy.task_id,
@@ -1064,6 +1420,7 @@ def create_worker_app(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Task {task_id!r} not found in worker registry.",
             )
+        effective_metrics.record_task_cancellation()
         return status_entry
 
     @app.get(
@@ -1086,6 +1443,7 @@ app = create_worker_app()
 if __name__ == "__main__":
     import uvicorn
 
+    setup_worker_logging()
     host = os.environ.get("OMNISIGHT_WORKER_HOST", "0.0.0.0")
     port = int(os.environ.get("OMNISIGHT_WORKER_PORT", str(DEFAULT_WORKER_PORT)))
     uvicorn.run("worker_service:app", host=host, port=port, reload=False)
