@@ -161,7 +161,11 @@
         "fstatfs",
         "getresuid",
         "getresgid",
-        "sendfile"
+        "sendfile",
+        "utimensat",
+        "utimes",
+        "futimesat",
+        "copy_file_range"
       ],
       "action": "SCMP_ACT_ALLOW"
     },

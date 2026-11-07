@@ -104,10 +104,16 @@ def audit_filesystem_immutability() -> None:
 
     # 3. Attempt to write to /tmp (should succeed as tmpfs)
     code_tmp, out_tmp, err_tmp = run_docker_exec("touch /tmp/test_tmp && rm /tmp/test_tmp")
+    if code_tmp != 0:
+        # Fallback test with echo redirection in case touch utility is unavailable
+        code_tmp, out_tmp, err_tmp = run_docker_exec("echo 1 > /tmp/test_tmp && rm /tmp/test_tmp")
     tmp_writable = (code_tmp == 0)
 
     # 4. Attempt to write to /app/artifacts (should succeed as volume)
     code_art, out_art, err_art = run_docker_exec("touch /app/artifacts/test_art && rm /app/artifacts/test_art")
+    if code_art != 0:
+        # Fallback test with echo redirection in case touch utility is unavailable
+        code_art, out_art, err_art = run_docker_exec("echo 1 > /app/artifacts/test_art && rm /app/artifacts/test_art")
     art_writable = (code_art == 0)
 
     passed = ro_enforced and app_ro_enforced and tmp_writable and art_writable
@@ -120,7 +126,9 @@ def audit_filesystem_immutability() -> None:
             "tmp_writable": tmp_writable,
             "artifacts_writable": art_writable,
             "root_error": err_ro,
-            "summary": f"Root RO={ro_enforced}, App RO={app_ro_enforced}, Tmpfs writable={tmp_writable}",
+            "tmp_error": err_tmp,
+            "art_error": err_art,
+            "summary": f"Root RO={ro_enforced}, App RO={app_ro_enforced}, Tmpfs writable={tmp_writable}, Artifacts writable={art_writable}",
         },
     )
 
