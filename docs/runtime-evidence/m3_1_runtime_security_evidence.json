@@ -1,0 +1,90 @@
+{
+  "milestone": "M3.1",
+  "timestamp": "2026-11-07T14:42:31Z",
+  "container_name": "omnisight-execution-worker",
+  "checks": {
+    "Container Identity": {
+      "status": "PASSED",
+      "details": {
+        "uid": "10001",
+        "gid": "10001",
+        "user": "omnisight",
+        "expected_uid": "10001",
+        "expected_gid": "10001",
+        "is_non_root": true,
+        "summary": "User=omnisight (UID=10001, GID=10001)"
+      }
+    },
+    "Filesystem Immutability": {
+      "status": "FAILED",
+      "details": {
+        "root_read_only": true,
+        "app_read_only": true,
+        "tmp_writable": false,
+        "artifacts_writable": false,
+        "root_error": "touch: cannot touch '/test_file_root': Read-only file system",
+        "summary": "Root RO=True, App RO=True, Tmpfs writable=False"
+      }
+    },
+    "Linux Security Invariants": {
+      "status": "PASSED",
+      "details": {
+        "all_capabilities_dropped": true,
+        "cap_effective": "0000000000000000",
+        "cap_permitted": "0000000000000000",
+        "no_new_privileges": true,
+        "seccomp_mode": "2",
+        "seccomp_filtering_active": true,
+        "security_options": [
+          "no-new-privileges:true",
+          "seccomp={\"defaultAction\":\"SCMP_ACT_ERRNO\",\"architectures\":[\"SCMP_ARCH_X86_64\",\"SCMP_ARCH_X86\",\"SCMP_ARCH_AARCH64\",\"SCMP_ARCH_ARM\"],\"syscalls\":[{\"names\":[\"read\",\"write\",\"open\",\"openat\",\"close\",\"stat\",\"fstat\",\"lstat\",\"newfstatat\",\"poll\",\"lseek\",\"mmap\",\"mprotect\",\"munmap\",\"brk\",\"rt_sigaction\",\"rt_sigprocmask\",\"rt_sigreturn\",\"ioctl\",\"pread64\",\"pwrite64\",\"readv\",\"writev\",\"access\",\"faccessat\",\"faccessat2\",\"pipe\",\"pipe2\",\"select\",\"pselect6\",\"sched_yield\",\"mremap\",\"mincore\",\"madvise\",\"dup\",\"dup2\",\"dup3\",\"nanosleep\",\"clock_nanosleep\",\"getitimer\",\"setitimer\",\"alarm\",\"getpid\",\"getppid\",\"getuid\",\"geteuid\",\"getgid\",\"getegid\",\"gettid\",\"fork\",\"vfork\",\"clone\",\"clone3\",\"execve\",\"execveat\",\"exit\",\"exit_group\",\"wait4\",\"waitid\",\"kill\",\"tkill\",\"tgkill\",\"uname\",\"semget\",\"semop\",\"semctl\",\"shmget\",\"shmat\",\"shmdt\",\"shmctl\",\"fcntl\",\"flock\",\"fsync\",\"fdatasync\",\"truncate\",\"ftruncate\",\"getdents\",\"getdents64\",\"getcwd\",\"chdir\",\"fchdir\",\"rename\",\"renameat\",\"renameat2\",\"mkdir\",\"mkdirat\",\"rmdir\",\"unlink\",\"unlinkat\",\"symlink\",\"symlinkat\",\"readlink\",\"readlinkat\",\"chmod\",\"fchmod\",\"fchmodat\",\"chown\",\"fchown\",\"lchown\",\"fchownat\",\"umask\",\"gettimeofday\",\"getrlimit\",\"prlimit64\",\"getrusage\",\"sysinfo\",\"times\",\"socket\",\"connect\",\"accept\",\"accept4\",\"sendto\",\"recvfrom\",\"sendmsg\",\"recvmsg\",\"shutdown\",\"bind\",\"listen\",\"getsockname\",\"getpeername\",\"socketpair\",\"setsockopt\",\"getsockopt\",\"epoll_create\",\"epoll_create1\",\"epoll_ctl\",\"epoll_wait\",\"epoll_pwait\",\"epoll_pwait2\",\"futex\",\"eventfd\",\"eventfd2\",\"timerfd_create\",\"timerfd_settime\",\"timerfd_gettime\",\"signalfd\",\"signalfd4\",\"clock_gettime\",\"clock_getres\",\"getrandom\",\"memfd_create\",\"statx\",\"prctl\",\"arch_prctl\",\"rseq\",\"capget\",\"sched_getaffinity\",\"sched_setaffinity\",\"statfs\",\"fstatfs\",\"getresuid\",\"getresgid\",\"sendfile\"],\"action\":\"SCMP_ACT_ALLOW\"},{\"names\":[\"ptrace\",\"process_vm_readv\",\"process_vm_writev\",\"bpf\",\"kexec_load\",\"kexec_file_load\",\"init_module\",\"finit_module\",\"delete_module\",\"reboot\",\"swapon\",\"swapoff\",\"mount\",\"umount\",\"umount2\",\"pivot_root\",\"sysfs\",\"_sysctl\",\"setuid\",\"setgid\",\"setreuid\",\"setregid\",\"setresuid\",\"setresgid\",\"capset\",\"chroot\"],\"action\":\"SCMP_ACT_ERRNO\",\"args\":[],\"comment\":\"Explicitly block dangerous system calls and privilege escalation vectors\"}]}"
+        ],
+        "summary": "CapEff=0000000000000000, NoNewPrivs=1, SeccompMode=2"
+      }
+    },
+    "Seccomp Blocked Syscalls": {
+      "status": "PASSED",
+      "details": {
+        "reboot_blocked": true,
+        "reboot_returncode": 1,
+        "chroot_blocked": true,
+        "chroot_returncode": 1,
+        "summary": "Reboot blocked=True, Chroot blocked=True"
+      }
+    },
+    "Resource & PID Limits": {
+      "status": "PASSED",
+      "details": {
+        "nano_cpus": 2000000000,
+        "memory_bytes": 2147483648,
+        "pids_limit": 100,
+        "cpu_limit_enforced": true,
+        "mem_limit_enforced": true,
+        "pids_limit_enforced": true,
+        "summary": "Memory=2048MB, PidsLimit=100"
+      }
+    },
+    "Host & Socket Isolation": {
+      "status": "PASSED",
+      "details": {
+        "docker_socket_excluded": true,
+        "root_home_denied": true,
+        "summary": "Docker socket exposed=False, Root home restricted=True"
+      }
+    },
+    "Live Worker REST API Endpoints": {
+      "status": "PASSED",
+      "details": {
+        "health_ok": true,
+        "unauthorized_rejected_401": true,
+        "traversal_rejected_422": true,
+        "unapproved_rejected_400": true,
+        "task_submission_201": true,
+        "task_status_polling_ok": true,
+        "summary": "Health=True, 401=True, 422=True, 400=True, Submit=True"
+      }
+    }
+  },
+  "api_tests": {},
+  "verdict": "M3.1 FAILED"
+}
