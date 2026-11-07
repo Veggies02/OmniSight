@@ -14,6 +14,8 @@ jobs:
     name: Linux Container Runtime Security Audit
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -90,6 +92,17 @@ jobs:
           path: |
             m3_1_runtime_security_evidence.json
             container_inspect.json
+
+      - name: Commit and push runtime security evidence
+        if: always()
+        run: |
+          mkdir -p docs/runtime-evidence
+          cp m3_1_runtime_security_evidence.json docs/runtime-evidence/ 2>/dev/null || true
+          cp container_inspect.json docs/runtime-evidence/ 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/runtime-evidence/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore(ci): capture container runtime security evidence from Linux runner" && git push)
 
       - name: Container teardown
         if: always()

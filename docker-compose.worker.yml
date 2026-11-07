@@ -43,6 +43,9 @@ services:
       - /run:rw,noexec,nosuid,size=64m
     volumes:
       - worker_artifacts:/app/artifacts:rw,nosuid
+    mem_limit: 2048m
+    cpus: 2.0
+    pids_limit: 100
     deploy:
       resources:
         limits:

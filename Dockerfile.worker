@@ -84,6 +84,7 @@ RUN chown -R omnisight:omnisight /app
 
 # Ensure workspace and artifact mount points exist with non-root ownership
 RUN mkdir -p /tmp/omnisight_worker_workspaces /app/artifacts && \
+    chmod 0777 /app/artifacts && \
     chown -R omnisight:omnisight /tmp/omnisight_worker_workspaces /app/artifacts
 
 # Switch to dedicated unprivileged user
