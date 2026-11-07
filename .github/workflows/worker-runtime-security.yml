@@ -1,0 +1,91 @@
+name: M3.1 Container Runtime Security Validation
+
+on:
+  push:
+    branches:
+      - feature/ajay-security-sandbox
+  pull_request:
+    branches:
+      - feature/ajay-security-sandbox
+  workflow_dispatch:
+
+jobs:
+  validate-container-runtime:
+    name: Linux Container Runtime Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r artifacts/integration-backend/backend/requirements.txt pytest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Run worker service automated tests
+        run: |
+          python -m pytest test_security_sandbox.py -v
+          python -m pytest test_execution_runner.py -v
+          python -m pytest test_worker_service.py -v
+
+      - name: Build hardened worker container image
+        run: |
+          docker compose -f docker-compose.worker.yml build
+
+      - name: Launch isolated worker container
+        run: |
+          docker compose -f docker-compose.worker.yml up -d
+          echo "Waiting for container health check..."
+          for i in $(seq 1 30); do
+            HEALTH=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' omnisight-execution-worker 2>/dev/null || echo "not_running")
+            echo "Attempt $i/30: Container health = $HEALTH"
+            if [ "$HEALTH" = "healthy" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Inspect running container configuration
+        run: |
+          docker inspect omnisight-execution-worker > container_inspect.json
+          docker ps -a --filter "name=omnisight-execution-worker"
+
+      - name: Execute live container runtime security auditor
+        run: |
+          python scripts/validate_container_runtime.py
+
+      - name: Display runtime security evidence
+        if: always()
+        run: |
+          if [ -f m3_1_runtime_security_evidence.json ]; then
+            cat m3_1_runtime_security_evidence.json
+          fi
+
+      - name: Upload runtime security audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m3-1-runtime-security-evidence
+          path: |
+            m3_1_runtime_security_evidence.json
+            container_inspect.json
+
+      - name: Container teardown
+        if: always()
+        run: |
+          docker compose -f docker-compose.worker.yml down -v
