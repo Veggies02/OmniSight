@@ -37,6 +37,10 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 CONTAINER_NAME = "omnisight-execution-worker"
 WORKER_PORT = 8080
 BASE_URL = f"http://127.0.0.1:{WORKER_PORT}"
@@ -866,27 +870,37 @@ def main() -> int:
 
     print(f"Container {CONTAINER_NAME} is running. Executing comprehensive security audit checks...\n")
 
-    # Priority 2: Runtime Isolation & Hardening Checks
-    audit_container_identity()
-    audit_filesystem_immutability()
-    audit_capabilities_and_privileges()
-    audit_custom_seccomp_profile()
-    audit_cpu_enforcement()
-    audit_memory_enforcement()
-    audit_pid_limit_enforcement()
-    audit_outbound_network_restrictions()
-    audit_concurrent_workspace_isolation()
-    audit_cancellation_and_process_cleanup()
-    audit_timeout_handling()
-    audit_artifact_isolation()
-    audit_host_and_socket_isolation()
-    audit_live_worker_api()
+    audit_steps = [
+        ("Container Identity", audit_container_identity),
+        ("Filesystem Immutability", audit_filesystem_immutability),
+        ("Linux Security Invariants", audit_capabilities_and_privileges),
+        ("Custom Seccomp Profile Syscall Interception", audit_custom_seccomp_profile),
+        ("Actual CPU Enforcement", audit_cpu_enforcement),
+        ("Actual Memory Enforcement", audit_memory_enforcement),
+        ("Actual PID Limit Enforcement", audit_pid_limit_enforcement),
+        ("Outbound Network Restrictions", audit_outbound_network_restrictions),
+        ("Concurrent Workspace Isolation", audit_concurrent_workspace_isolation),
+        ("Cancellation & Process Cleanup", audit_cancellation_and_process_cleanup),
+        ("Task Timeout Handling", audit_timeout_handling),
+        ("Artifact Volume Isolation", audit_artifact_isolation),
+        ("Host & Socket Isolation", audit_host_and_socket_isolation),
+        ("Live Worker REST API Endpoints", audit_live_worker_api),
+        ("Cryptographic Human Approval Verification", audit_cryptographic_human_approval),
+        ("End-to-End Task Lifecycle & Webhook Verification", audit_end_to_end_lifecycle),
+    ]
 
-    # Priority 1: Cryptographic Human Approval Verification
-    audit_cryptographic_human_approval()
-
-    # Priority 3: End-to-End Lifecycle & Webhook Verification
-    audit_end_to_end_lifecycle()
+    for check_name, fn in audit_steps:
+        try:
+            fn()
+        except Exception as exc:
+            log_check(
+                check_name,
+                False,
+                {
+                    "error": f"Unhandled exception: {exc}",
+                    "summary": f"Check raised exception: {exc}",
+                },
+            )
 
     # Calculate overall verdict
     all_passed = all(check["status"] == "PASSED" for check in EVIDENCE["checks"].values())
