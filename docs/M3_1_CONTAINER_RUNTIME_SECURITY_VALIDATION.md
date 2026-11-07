@@ -4,9 +4,9 @@
 **Target Repository:** `Veggies02/OmniSight`
 **Target Branch:** `feature/ajay-security-sandbox`
 **Base M3 Commit Baseline:** `b83ac15` (`feat(worker): implement isolated execution worker service and container hardening`)
-**Verified CI Commit:** `80ac2b9` (`chore(ci): capture container runtime security evidence from Linux runner`)
-**CI Runtime Execution Run:** GitHub Actions Run ID `42389161099` (Workflow `.github/workflows/worker-runtime-security.yml`)
-**Target Architecture:** Linux x86_64 (`ubuntu-latest` / Linux 6.8.0-1017-azure / Docker 27.5.1 / runc 1.2.4 / libseccomp 2.5.5)  
+**Verified CI Commit:** `2b1c30e` (`chore(ci): capture container runtime security evidence from Linux runner`)
+**CI Runtime Execution Run:** GitHub Actions Run ID `42390269572` (Workflow `.github/workflows/worker-runtime-security.yml`)
+**Target Architecture:** Linux x86_64 (`ubuntu-latest` / Linux 6.8.0-1017-azure / Docker 27.5.1 / runc 1.2.4 / libseccomp 2.5.5)
 **Overall Validation Verdict:** **`M3.1 PASSED`** (16 of 16 Live Linux Container Security Checks Passed)
 
 ---
@@ -24,7 +24,7 @@ While earlier checkpoints validated the configuration statically, **Milestone M3
 2. **Priority 2 — Complete Runtime Security Verification:** Expanded the live Linux container runtime auditor (`scripts/validate_container_runtime.py`) from 7 basic checks to 16 exhaustive security invariant assertions. Empirical evidence proves active enforcement of UID/GID 10001, immutable read-only rootfs, zero Linux capabilities (`CapEff=0`), `NoNewPrivileges=1`, Seccomp Mode 2 with dangerous syscall interception, actual CPU cgroup quota (2.0 CPUs), actual physical memory cgroup limits (2048MB RAM with disabled swap), cgroup PID limits (100 PIDs preventing fork bombs), outbound DNS exfiltration restrictions, concurrent workspace isolation (0700 permissions), task cancellation with process-group signal termination, task timeout enforcement, artifact volume isolation, and host socket exclusion.
 3. **Priority 3 — End-to-End Verification:** Validated the complete execution lifecycle across orchestrator dispatch, worker task queuing, execution status polling, idempotent deduplication, and HMAC-SHA256 signed status callback delivery.
 
-In GitHub Actions Run ID **`42389161099`**, all **16 out of 16 live container security checks PASSED**.
+In GitHub Actions Run ID **`42390269572`**, all **16 out of 16 live container security checks PASSED**.
 
 ---
 
@@ -222,7 +222,7 @@ All local unit, integration, and security tests pass cleanly without regression:
 ========================================================================================
 Test Suite                                  Scope                        Passed  Skipped
 ========================================================================================
-test_crypto_approval.py                     Ed25519 Asymmetric Approval      15        0
+test_crypto_approval.py                     Ed25519 Asymmetric Approval      20        0
 test_worker_service.py                      Worker Service & Hardening       26        0
 test_execution_runner.py                    M2 Adapters & Schemas            33        2
 test_security_sandbox.py                    M1 Sandbox & Decoupling          24        0
@@ -230,7 +230,7 @@ npm run build                               TypeScript Production Build    PASS 
 tests/backend-repair-client.spec.ts         Playwright Repair Client         16        0
 tests/repair-proposals.spec.ts & run-repair Playwright Worktree Repair       50        0
 ----------------------------------------------------------------------------------------
-Total Automated Tests                                                       164        2
+Total Automated Tests                                                       169        2
 ========================================================================================
 ```
 *(The 2 skipped tests in `test_execution_runner.py` are live socket integration tests properly skipped when executing within an offline local development sandbox).*
@@ -242,7 +242,7 @@ Total Automated Tests                                                       164 
 The runtime evidence generated on the Linux host has been committed to the repository:
 - **Evidence JSON:** `docs/runtime-evidence/m3_1_runtime_security_evidence.json`
 - **Container Inspect JSON:** `docs/runtime-evidence/container_inspect.json`
-- **GitHub Actions Workflow Run:** Run ID `42389161099` (Commit `80ac2b9`)
+- **GitHub Actions Workflow Run:** Run ID `42390269572` (Commit `2b1c30e`)
 
 Excerpt from `docs/runtime-evidence/m3_1_runtime_security_evidence.json`:
 ```json
