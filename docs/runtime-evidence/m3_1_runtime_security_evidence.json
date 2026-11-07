@@ -1,6 +1,6 @@
 {
   "milestone": "M3.1",
-  "timestamp": "2026-11-07T15:54:32Z",
+  "timestamp": "2026-11-07T16:02:45Z",
   "container_name": "omnisight-execution-worker",
   "checks": {
     "Container Identity": {
@@ -60,18 +60,18 @@
         "cgroup_cpu_quota": "200000 100000",
         "nano_cpus": "2000000000",
         "quota_verified": true,
-        "bounded_computation_output": "calc_ok 0.0304",
+        "bounded_computation_output": "calc_ok 0.0255",
         "summary": "CPU Quota=200000 100000, Bounded Stress OK=True"
       }
     },
     "Actual Memory Enforcement": {
-      "status": "FAILED",
+      "status": "PASSED",
       "details": {
         "cgroup_memory_limit": "2147483648",
         "inspect_memory": "2147483648",
         "bounded_allocation_ok": true,
-        "oversized_allocation_blocked": false,
-        "summary": "Limit=2147483648 bytes, 64MB OK=True, Oversized Blocked=False"
+        "oversized_allocation_blocked": true,
+        "summary": "Limit=2147483648 bytes, 64MB OK=True, Oversized Blocked=True"
       }
     },
     "Actual PID Limit Enforcement": {
@@ -121,7 +121,7 @@
       "status": "PASSED",
       "details": {
         "artifacts_mount_verified": true,
-        "mount_details": "drwxrwxrwx 2 omnisight omnisight 4096 Nov  7 15:54 /app/artifacts",
+        "mount_details": "drwxrwxrwx 2 omnisight omnisight 4096 Nov  7 16:02 /app/artifacts",
         "summary": "Volume mounted strictly at /app/artifacts with nosuid"
       }
     },
@@ -156,16 +156,16 @@
       }
     },
     "End-to-End Task Lifecycle & Webhook Verification": {
-      "status": "FAILED",
+      "status": "PASSED",
       "details": {
         "task_submission": true,
-        "idempotency_deduplication": false,
+        "idempotency_deduplication": true,
         "webhook_hmac_sha256_verified": true,
-        "correlation_id": "corr-e2e-task-1794066884",
-        "summary": "Submission=True, Idempotent Deduplication=False, HMAC=True"
+        "correlation_id": "corr-e2e-task-1794067373",
+        "summary": "Submission=True, Idempotent Deduplication=True, HMAC=True"
       }
     }
   },
   "api_tests": {},
-  "verdict": "M3.1 FAILED"
+  "verdict": "M3.1 PASSED"
 }
