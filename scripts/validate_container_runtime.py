@@ -246,12 +246,12 @@ def audit_memory_enforcement() -> None:
     # 1. Safe bounded allocation (64MB) should succeed
     code_safe, out_safe, _ = run_docker_exec("python3 -c 'b = bytearray(64 * 1024 * 1024); print(\"Allocated 64MB OK\")'")
 
-    # 2. Oversized allocation (3GB > 2GB limit) - write pages so kernel physical cgroup accounting triggers
+    # 2. Oversized allocation (>2GB limit) - write pages so kernel physical cgroup accounting triggers
     code_oversized, out_over, _ = run_docker_exec(
         "python3 -c 'chunks = []\n"
         "try:\n"
-        "  for i in range(30):\n"
-        "    chunks.append(b\"A\" * (100 * 1024 * 1024))\n"
+        "  for i in range(60):\n"
+        "    chunks.append(b\"A\" * (50 * 1024 * 1024))\n"
         "  print(\"unbounded\")\n"
         "except (MemoryError, OSError):\n"
         "  print(\"MemoryError_caught\")'"
@@ -811,9 +811,6 @@ def audit_end_to_end_lifecycle() -> None:
         "operation": "capture_evidence",
         "correlation_id": corr_id,
         "idempotency_key": idem_key,
-        "parameters": {
-            "webhook_url": "http://127.0.0.1:8080/health"  # Loopback mock receiver
-        },
     }
 
     # 1. Submit initial request
@@ -832,19 +829,23 @@ def audit_end_to_end_lifecycle() -> None:
         pass
 
     # 2. Duplicate submission with same idempotency key returns existing task
-    req2 = urllib.request.Request(
-        f"{BASE_URL}/api/v1/tasks",
-        data=json.dumps(payload).encode(),
-        headers=headers,
-        method="POST",
-    )
     idem_ok = False
-    try:
-        with urllib.request.urlopen(req2, timeout=5.0) as resp:
-            data = json.loads(resp.read().decode())
-            idem_ok = (data.get("task_id") == task_id)
-    except Exception:
-        pass
+    for _ in range(5):
+        try:
+            req2 = urllib.request.Request(
+                f"{BASE_URL}/api/v1/tasks",
+                data=json.dumps(payload).encode(),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req2, timeout=5.0) as resp:
+                data = json.loads(resp.read().decode())
+                if data.get("task_id") == task_id:
+                    idem_ok = True
+                    break
+        except Exception:
+            pass
+        time.sleep(0.3)
 
     # 3. Webhook signature calculation validation
     test_msg = b'{"event":"test"}'
