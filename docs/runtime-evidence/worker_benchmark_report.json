@@ -1,57 +1,43 @@
 {
-  "timestamp": "2026-11-07T19:11:36.081335+00:00",
+  "timestamp": "2026-11-07T20:03:26.705540+00:00",
   "target_url": "http://127.0.0.1:8080",
-  "memory_rss_start_mb": 31.1,
+  "memory_rss_start_mb": 31.09,
   "tiers": {
     "health_check": {
       "total_requests": 100,
-      "duration_seconds": 0.236,
-      "throughput_req_sec": 423.6,
+      "duration_seconds": 0.538,
+      "throughput_req_sec": 186.0,
       "latency_ms": {
-        "p50": 1.86,
-        "p95": 2.85,
-        "p99": 36.04,
-        "avg": 2.36,
-        "min": 1.17,
-        "max": 36.04
+        "p50": 2.76,
+        "p95": 45.14,
+        "p99": 49.86,
+        "avg": 5.37,
+        "min": 2.39,
+        "max": 49.86
       }
     },
     "concurrent_submission_10": {
       "concurrency": 10,
       "total_requests": 10,
-      "duration_seconds": 0.107,
-      "throughput_req_sec": 93.2,
+      "duration_seconds": 0.18,
+      "throughput_req_sec": 55.7,
       "latency_ms": {
-        "p50": 73.22,
-        "p95": 88.19,
-        "p99": 88.19,
-        "avg": 69.23,
-        "min": 30.73,
-        "max": 88.19
-      }
-    },
-    "concurrent_submission_25": {
-      "concurrency": 25,
-      "total_requests": 8,
-      "duration_seconds": 0.728,
-      "throughput_req_sec": 11.0,
-      "latency_ms": {
-        "p50": 681.56,
-        "p95": 716.24,
-        "p99": 716.24,
-        "avg": 671.43,
-        "min": 602.93,
-        "max": 716.24
+        "p50": 161.58,
+        "p95": 174.37,
+        "p99": 174.37,
+        "avg": 144.4,
+        "min": 58.26,
+        "max": 174.37
       }
     }
   },
   "worker_metrics_snapshot": {
-    "uptime_seconds": 14.62,
+    "uptime_seconds": 16.17,
     "total_requests": 156,
     "tasks": {
-      "submitted": 32,
+      "submitted": 28,
       "completed": 0,
-      "failed": 5,
+      "failed": 2,
       "cancelled": 2,
       "timed_out": 1,
       "duration_seconds": {
@@ -68,11 +54,11 @@
       "payload_size_rejections": 0
     },
     "resources": {
-      "memory_rss_mb": 60.14,
-      "active_threads": 34
+      "memory_rss_mb": 59.56,
+      "active_threads": 22
     }
   },
-  "memory_rss_final_mb": 55.6,
-  "memory_growth_mb": 24.5,
+  "memory_rss_final_mb": 55.14,
+  "memory_growth_mb": 24.05,
   "status": "PASSED"
 }
