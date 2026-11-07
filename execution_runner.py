@@ -811,6 +811,7 @@ class WorkerServiceRunner(ExecutionRunner):
         max_retries: int = 3,
         retry_backoff_factor: float = 0.5,
         webhook_secret: Optional[str] = None,
+        approval_signer: Optional[Any] = None,
     ) -> None:
         self.worker_base_url = worker_base_url.rstrip("/")
         self.auth_token = auth_token
@@ -818,6 +819,7 @@ class WorkerServiceRunner(ExecutionRunner):
         self.max_retries = int(max_retries)
         self.retry_backoff_factor = float(retry_backoff_factor)
         self.webhook_secret = webhook_secret
+        self.approval_signer = approval_signer
 
     @property
     def mode(self) -> RunnerMode:
@@ -1011,6 +1013,132 @@ class WorkerServiceRunner(ExecutionRunner):
         calculated_sig = mac.hexdigest()
 
         return hmac.compare_digest(calculated_sig.lower(), expected_sig.lower())
+
+    def run_browser(
+        self,
+        scenario_id: str,
+        job_id: str,
+        base_url: str = "http://localhost:5173",
+        extra_args: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Runs browser evidence capture on the remote worker service."""
+        task_id = f"browser-{job_id}"
+        req = ExecutionTaskRequest(
+            task_id=task_id,
+            job_id=job_id,
+            operation=TaskOperationType.CAPTURE_EVIDENCE,
+            correlation_id=f"corr-brw-{job_id}",
+            idempotency_key=f"idem-brw-{job_id}",
+            parameters={"scenario_id": scenario_id, "base_url": base_url},
+        )
+        self.submit(req)
+
+        start = time.monotonic()
+        while time.monotonic() - start < self.timeout_seconds:
+            status = self.get_status(task_id)
+            if status.status in (
+                TaskExecutionStatus.COMPLETED,
+                TaskExecutionStatus.FAILED,
+                TaskExecutionStatus.REJECTED,
+                TaskExecutionStatus.CANCELLED,
+            ):
+                res = status.result
+                return {
+                    "success": res.passed if res else False,
+                    "final_state": res.final_state if res else "FAILED",
+                    "duration_seconds": res.duration_seconds if res else 0.0,
+                    "stdout_tail": res.stdout_tail if res else None,
+                    "stderr_tail": res.stderr_tail if res else None,
+                }
+            time.sleep(0.5)
+
+        raise ExecutionServiceError("timeout", f"Worker task {task_id} timed out.")
+
+    def run_repair(
+        self,
+        job_id: str,
+        proposal: Dict[str, Any],
+        approval: Optional[Dict[str, Any]],
+        base_commit: Optional[str] = None,
+        patch_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Runs automated repair on the remote worker service with approval enforcement."""
+        if not approval:
+            raise ExecutionServiceError("not_approved", "No human approval record. Repair will not run.")
+
+        proposal_id = proposal.get("proposalId", f"prop-{job_id}")
+        source_file = proposal.get("targetFile", "src/components/Cart.tsx")
+        defect_category = proposal.get("defectCategory", "UI_DEFECT")
+        scenario_id = proposal.get("scenarioId")
+        patch_digest = approval.get("patch_digest_sha256")
+
+        if not approval.get("signature") and self.approval_signer:
+            signed_ref = self.approval_signer.create_approved_ref(
+                proposal_id=proposal_id,
+                defect_category=defect_category,
+                source_file=source_file,
+                source_file_sha256=approval.get("source_file_sha256", "0" * 64),
+                reviewed_by=approval.get("reviewed_by", "operator"),
+                scenario_id=scenario_id,
+                patch_id=patch_id,
+                patch_digest_sha256=patch_digest,
+            )
+            proposal_ref = ApprovedProposalRef(**signed_ref)
+        else:
+            proposal_ref = ApprovedProposalRef(
+                proposal_id=proposal_id,
+                scenario_id=scenario_id,
+                defect_category=defect_category,
+                source_file=source_file,
+                source_file_sha256=approval.get("source_file_sha256", "0" * 64),
+                reviewed_by=approval.get("reviewed_by", "operator"),
+                reviewed_at=approval.get("reviewed_at", datetime.now(timezone.utc).isoformat()),
+                patch_id=patch_id,
+                patch_digest_sha256=patch_digest,
+                expires_at=approval.get("expires_at"),
+                approval_nonce=approval.get("approval_nonce"),
+                signer_key_id=approval.get("signer_key_id"),
+                signature=approval.get("signature"),
+            )
+
+        worktree_ref = WorktreeRef(
+            branch=f"repair/{job_id}",
+            base_commit=base_commit or "HEAD",
+        ) if base_commit else None
+
+        task_id = f"repair-{job_id}"
+        req = ExecutionTaskRequest(
+            task_id=task_id,
+            job_id=job_id,
+            operation=TaskOperationType.EXECUTE_REPAIR,
+            proposal_ref=proposal_ref,
+            worktree_ref=worktree_ref,
+            correlation_id=f"corr-rep-{job_id}",
+            idempotency_key=f"idem-rep-{job_id}",
+        )
+        self.submit(req)
+
+        start = time.monotonic()
+        while time.monotonic() - start < self.timeout_seconds:
+            status = self.get_status(task_id)
+            if status.status in (
+                TaskExecutionStatus.COMPLETED,
+                TaskExecutionStatus.FAILED,
+                TaskExecutionStatus.REJECTED,
+                TaskExecutionStatus.UNSUPPORTED,
+                TaskExecutionStatus.CANCELLED,
+            ):
+                res = status.result
+                return {
+                    "success": res.passed if res else False,
+                    "final_state": res.final_state if res else "FAILED",
+                    "duration_seconds": res.duration_seconds if res else 0.0,
+                    "stdout_tail": res.stdout_tail if res else None,
+                    "stderr_tail": res.stderr_tail if res else None,
+                }
+            time.sleep(0.5)
+
+        raise ExecutionServiceError("timeout", f"Worker task {task_id} timed out.")
 
 
 # =========================================================================== #

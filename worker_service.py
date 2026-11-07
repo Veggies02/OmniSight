@@ -58,6 +58,7 @@ from execution_schemas import (
     TaskOperationType,
     WorktreeRef,
 )
+from crypto_approval import ApprovalVerifier
 
 logger = logging.getLogger("omnisight.worker_service")
 
@@ -444,12 +445,14 @@ class TaskExecutor:
         webhook_dispatcher: WebhookDispatcher,
         repo_root: Optional[Path] = None,
         command_override: Optional[Sequence[str]] = None,
+        approval_verifier: Optional[ApprovalVerifier] = None,
     ) -> None:
         self.registry = registry
         self.workspace_mgr = workspace_mgr
         self.webhook_dispatcher = webhook_dispatcher
         self.repo_root = Path(repo_root).resolve() if repo_root else Path.cwd().resolve()
         self.command_override = list(command_override) if command_override else None
+        self.approval_verifier = approval_verifier
 
     def sanitize_environment(
         self, extra_env: Optional[Dict[str, str]] = None
@@ -554,6 +557,11 @@ class TaskExecutor:
         self.registry.set_workspace(request.task_id, workspace)
 
         try:
+            if request.operation == TaskOperationType.EXECUTE_REPAIR and self.approval_verifier:
+                is_valid, reason = self.approval_verifier.verify(request.proposal_ref)
+                if not is_valid:
+                    raise ValueError(f"TaskExecutor rejected unapproved repair: {reason}")
+
             command = self._build_command(request)
             sanitized_env = self.sanitize_environment()
 
@@ -769,10 +777,12 @@ def create_worker_app(
     repo_root: Optional[Path] = None,
     command_override: Optional[Sequence[str]] = None,
     enforce_seccomp: bool = False,
+    approval_verifier: Optional[ApprovalVerifier] = None,
 ) -> FastAPI:
     """Creates the OmniSight Isolated Execution Worker FastAPI application."""
     effective_token = auth_token or os.environ.get("OMNISIGHT_WORKER_AUTH_TOKEN")
     effective_secret = webhook_secret or os.environ.get("OMNISIGHT_WEBHOOK_SECRET")
+    effective_verifier = approval_verifier or ApprovalVerifier.from_env()
 
     registry = WorkerTaskRegistry()
     workspace_mgr = WorkspaceManager()
@@ -783,6 +793,7 @@ def create_worker_app(
         webhook_dispatcher=webhook_dispatcher,
         repo_root=repo_root,
         command_override=command_override,
+        approval_verifier=effective_verifier,
     )
 
     @asynccontextmanager
@@ -792,6 +803,7 @@ def create_worker_app(
         app.state.workspace_mgr = workspace_mgr
         app.state.executor = executor
         app.state.webhook_dispatcher = webhook_dispatcher
+        app.state.approval_verifier = effective_verifier
         app.state.start_time = time.time()
 
         # Optional Linux Seccomp Sandbox Initialization
@@ -900,6 +912,19 @@ def create_worker_app(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Human approval verification failed: reviewed_by and reviewed_at must be populated.",
+                )
+
+            # Cryptographic Human Approval Verification Gate
+            is_valid, reason = effective_verifier.verify(request.proposal_ref)
+            if not is_valid:
+                logger.warning(
+                    "[APPROVAL-GATE] Cryptographic approval verification rejected for task %s: %s",
+                    request.task_id,
+                    reason,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cryptographic human approval verification failed: {reason}",
                 )
 
         # Correlation ID & Idempotency propagation

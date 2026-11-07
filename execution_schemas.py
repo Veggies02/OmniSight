@@ -64,6 +64,11 @@ class ApprovedProposalRef(BaseModel):
     reviewed_by: str = Field(min_length=1, max_length=200)
     reviewed_at: str = Field(min_length=1, max_length=64, description="ISO 8601 timestamp")
     patch_id: Optional[str] = Field(default=None, max_length=100)
+    patch_digest_sha256: Optional[str] = Field(default=None, max_length=64, description="64-char hex SHA-256")
+    expires_at: Optional[str] = Field(default=None, max_length=64, description="ISO 8601 UTC timestamp")
+    approval_nonce: Optional[str] = Field(default=None, max_length=128, description="Anti-replay nonce")
+    signer_key_id: Optional[str] = Field(default=None, max_length=100, description="Authoritative signing key ID")
+    signature: Optional[str] = Field(default=None, max_length=256, description="Hex-encoded Ed25519 digital signature")
 
     @field_validator("source_file")
     @classmethod
@@ -79,6 +84,13 @@ class ApprovedProposalRef(BaseModel):
         if not _SHA256_PATTERN.fullmatch(v):
             raise ValueError(f"Invalid SHA-256 hash: {v!r}")
         return v.lower()
+
+    @field_validator("patch_digest_sha256")
+    @classmethod
+    def validate_patch_digest(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not _SHA256_PATTERN.fullmatch(v):
+            raise ValueError(f"Invalid patch digest SHA-256: {v!r}")
+        return v.lower() if v is not None else None
 
 
 class WorktreeRef(BaseModel):

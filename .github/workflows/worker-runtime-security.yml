@@ -41,8 +41,13 @@ jobs:
 
       - name: Run worker service automated tests
         run: |
+          python -m pytest test_crypto_approval.py -v
           python -m pytest test_execution_runner.py -v
           python -m pytest test_worker_service.py -v
+
+      - name: Generate authoritative approval signing keypair
+        run: |
+          python -c "from crypto_approval import ApprovalSigner; s = ApprovalSigner.generate(); print(f'OMNISIGHT_APPROVAL_PUBLIC_KEY_HEX={s.public_key_hex}'); print(f'OMNISIGHT_APPROVAL_PRIVATE_KEY_HEX={s.private_key_hex}')" >> $GITHUB_ENV
 
       - name: Validate Compose Configuration
         run: |
