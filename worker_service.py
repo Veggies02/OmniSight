@@ -251,6 +251,9 @@ class WorkerTaskRegistry:
             if task_id not in self._tasks:
                 return None
             current = self._tasks[task_id]
+            # Cancelled tasks must never be overwritten by background lifecycle threads
+            if current.status == TaskExecutionStatus.CANCELLED:
+                return current.model_copy()
             updated = ExecutionStatusResponse(
                 task_id=current.task_id,
                 job_id=current.job_id,
@@ -526,15 +529,24 @@ class TaskExecutor:
 
     def _run_task_lifecycle(self, request: ExecutionTaskRequest) -> None:
         """Orchestrates complete task lifecycle: prepare, execute, collect, notify, clean."""
+        # Check if task was cancelled before lifecycle thread started
+        current = self.registry.get_task(request.task_id)
+        if current and current.status == TaskExecutionStatus.CANCELLED:
+            logger.info("[WORKER] Task %s was cancelled before execution started", request.task_id)
+            return
+
         started_at = datetime.now(timezone.utc).isoformat()
         start_time = time.monotonic()
 
         # Update state to RUNNING
-        self.registry.update_task_status(
+        updated_status = self.registry.update_task_status(
             task_id=request.task_id,
             status=TaskExecutionStatus.RUNNING,
             started_at=started_at,
         )
+        if updated_status and updated_status.status == TaskExecutionStatus.CANCELLED:
+            logger.info("[WORKER] Task %s was cancelled during start transition", request.task_id)
+            return
 
         # Notify webhook: task.started if webhook configured
         webhook_url = request.parameters.get("webhook_url") or os.environ.get("OMNISIGHT_WEBHOOK_URL")

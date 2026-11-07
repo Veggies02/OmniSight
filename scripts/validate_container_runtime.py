@@ -246,13 +246,20 @@ def audit_memory_enforcement() -> None:
     # 1. Safe bounded allocation (64MB) should succeed
     code_safe, out_safe, _ = run_docker_exec("python3 -c 'b = bytearray(64 * 1024 * 1024); print(\"Allocated 64MB OK\")'")
 
-    # 2. Oversized allocation (3.5GB > 2GB limit) must be caught or terminated
+    # 2. Oversized allocation (3GB > 2GB limit) - write pages so kernel physical cgroup accounting triggers
     code_oversized, out_over, _ = run_docker_exec(
-        "python3 -c 'try:\n  b = bytearray(3500 * 1024 * 1024)\nexcept (MemoryError, OverflowError):\n  print(\"Caught MemoryError successfully\")'"
+        "python3 -c 'chunks = []\n"
+        "try:\n"
+        "  for i in range(30):\n"
+        "    chunks.append(b\"A\" * (100 * 1024 * 1024))\n"
+        "  print(\"unbounded\")\n"
+        "except (MemoryError, OSError):\n"
+        "  print(\"MemoryError_caught\")'"
     )
 
-    mem_limit_active = (out_mem_cgroup == "2147483648" or inspect_mem == "2147483648")
-    passed = mem_limit_active and (code_safe == 0) and (code_oversized != 0 or "MemoryError" in out_over)
+    oversized_blocked = (code_oversized != 0 or "MemoryError" in out_over)
+    mem_limit_active = ("2147483648" in out_mem_cgroup or inspect_mem == "2147483648")
+    passed = mem_limit_active and (code_safe == 0) and oversized_blocked
 
     log_check(
         "Actual Memory Enforcement",
@@ -261,8 +268,8 @@ def audit_memory_enforcement() -> None:
             "cgroup_memory_limit": out_mem_cgroup,
             "inspect_memory": inspect_mem,
             "bounded_allocation_ok": code_safe == 0,
-            "oversized_allocation_blocked": (code_oversized != 0 or "MemoryError" in out_over),
-            "summary": f"Limit={out_mem_cgroup or inspect_mem} bytes, 64MB OK={code_safe==0}, 3.5GB Blocked=True",
+            "oversized_allocation_blocked": oversized_blocked,
+            "summary": f"Limit={out_mem_cgroup or inspect_mem} bytes, 64MB OK={code_safe==0}, Oversized Blocked={oversized_blocked}",
         },
     )
 
@@ -404,12 +411,16 @@ def audit_cancellation_and_process_cleanup() -> None:
     # Poll status to confirm CANCELLED
     req_stat = urllib.request.Request(f"{BASE_URL}/api/v1/tasks/{task_id}", headers=headers, method="GET")
     status_cancelled = False
-    try:
-        with urllib.request.urlopen(req_stat, timeout=5.0) as resp:
-            data = json.loads(resp.read().decode())
-            status_cancelled = (data.get("status") == "cancelled")
-    except Exception:
-        pass
+    for _ in range(10):
+        try:
+            with urllib.request.urlopen(req_stat, timeout=5.0) as resp:
+                data = json.loads(resp.read().decode())
+                if data.get("status") == "cancelled":
+                    status_cancelled = True
+                    break
+        except Exception:
+            pass
+        time.sleep(0.3)
 
     passed = sub_ok and cancel_ok and status_cancelled
     log_check(
