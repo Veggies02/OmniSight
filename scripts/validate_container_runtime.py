@@ -44,8 +44,8 @@ if REPO_ROOT not in sys.path:
 CONTAINER_NAME = "omnisight-execution-worker"
 WORKER_PORT = 8080
 BASE_URL = f"http://127.0.0.1:{WORKER_PORT}"
-AUTH_TOKEN = "worker-auth-secret-token"
-WEBHOOK_SECRET = "webhook-signing-secret-key"
+AUTH_TOKEN = os.environ.get("OMNISIGHT_WORKER_AUTH_TOKEN", "worker-auth-secret-token")
+WEBHOOK_SECRET = os.environ.get("OMNISIGHT_WEBHOOK_SECRET", "webhook-signing-secret-key")
 
 EVIDENCE: Dict[str, Any] = {
     "milestone": "M3.1",

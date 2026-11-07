@@ -202,3 +202,4 @@ OmniSight Milestone **M3.3 (Production Readiness and Reliability Engineering)** 
 3. **Secret Boundary Integrity:** Private signing keys are prevented from entering worker nodes; production mode enforces strong secrets.
 4. **Supply Chain Traceability:** Pinned dependency lockfile, CycloneDX SBOM, and zero CVEs in frontend dependencies.
 5. **Zero Breaking Changes:** Full backwards compatibility with existing browser runners, VLM diagnostics, and repair execution pipelines.
+

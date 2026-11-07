@@ -52,14 +52,21 @@ jobs:
           python -c "
           from crypto_approval import ApprovalSigner
           import os
+          import secrets
 
           # Rotate keypair to version 2; invalidate prior compromised key IDs
           signer = ApprovalSigner.generate(key_id='omnisight-qa-root-v2')
           priv_hex = signer.private_key_hex
           pub_hex = signer.public_key_hex
 
-          # 1. Mask private key value from GitHub Actions logs immediately
+          # Generate secure production credentials for CI container runtime
+          ci_auth_token = secrets.token_hex(32)
+          ci_webhook_secret = secrets.token_hex(32)
+
+          # 1. Mask private key and production credentials from GitHub Actions logs
           print(f'::add-mask::{priv_hex}')
+          print(f'::add-mask::{ci_auth_token}')
+          print(f'::add-mask::{ci_webhook_secret}')
 
           # 2. Export environment variables to GITHUB_ENV
           with open(os.environ['GITHUB_ENV'], 'a') as f:
@@ -67,6 +74,9 @@ jobs:
               f.write(f'OMNISIGHT_APPROVAL_PRIVATE_KEY_HEX={priv_hex}\n')
               f.write('OMNISIGHT_APPROVAL_KEY_ID=omnisight-qa-root-v2\n')
               f.write('OMNISIGHT_REVOKED_KEY_IDS=omnisight-qa-root,omnisight-qa-root-v1\n')
+              f.write('OMNISIGHT_ENVIRONMENT=production\n')
+              f.write(f'OMNISIGHT_WORKER_AUTH_TOKEN={ci_auth_token}\n')
+              f.write(f'OMNISIGHT_WEBHOOK_SECRET={ci_webhook_secret}\n')
           "
 
       - name: Validate Compose Configuration

@@ -47,3 +47,4 @@ Audited via `npm audit`:
 
 A standardized CycloneDX v1.5 JSON SBOM is maintained at:
 `docs/sbom/omnisight-worker-sbom.json`
+

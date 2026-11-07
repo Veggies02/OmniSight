@@ -188,7 +188,11 @@ def run_benchmark(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OmniSight Worker Benchmark")
     parser.add_argument("--url", default="http://127.0.0.1:8080", help="Worker base URL")
-    parser.add_argument("--token", default="worker-auth-secret-token", help="Bearer auth token")
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("OMNISIGHT_WORKER_AUTH_TOKEN", "worker-auth-secret-token"),
+        help="Bearer auth token",
+    )
     parser.add_argument("--out", default="docs/runtime-evidence/worker_benchmark_report.json", help="Output JSON path")
     args = parser.parse_args()
 

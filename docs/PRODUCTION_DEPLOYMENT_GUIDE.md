@@ -128,3 +128,4 @@ On worker container restart, `WorkspaceManager.cleanup_abandoned_workspaces(max_
 ### Task Retryability Runbook
 - **`CAPTURE_EVIDENCE` / `INSPECT`:** Safe to retry automatically without human intervention.
 - **`EXECUTE_REPAIR`:** **DO NOT RETRY AUTOMATICALLY.** The approval nonce was recorded in the replay cache to prevent replay attacks. A failed repair requires human review and generation of a fresh approval payload.
+
