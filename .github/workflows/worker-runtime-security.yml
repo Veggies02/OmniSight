@@ -42,12 +42,17 @@ jobs:
           python -m pytest test_execution_runner.py -v
           python -m pytest test_worker_service.py -v
 
+      - name: Validate Compose Configuration
+        run: |
+          docker compose -f docker-compose.worker.yml config
+
       - name: Build hardened worker container image
         run: |
           docker compose -f docker-compose.worker.yml build
 
       - name: Launch isolated worker container
         run: |
+          echo "Starting worker container..."
           docker compose -f docker-compose.worker.yml up -d
           echo "Waiting for container health check..."
           for i in $(seq 1 30); do
@@ -58,7 +63,8 @@ jobs:
             fi
             sleep 2
           done
-          docker logs omnisight-execution-worker --tail 50
+          docker logs omnisight-execution-worker --tail 100 || true
+          docker ps -a
 
       - name: Inspect running container configuration
         run: |
@@ -88,4 +94,4 @@ jobs:
       - name: Container teardown
         if: always()
         run: |
-          docker compose -f docker-compose.worker.yml down -v
+          docker compose -f docker-compose.worker.yml down -v || true

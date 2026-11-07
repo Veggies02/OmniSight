@@ -150,7 +150,18 @@
         "clock_getres",
         "getrandom",
         "memfd_create",
-        "statx"
+        "statx",
+        "prctl",
+        "arch_prctl",
+        "rseq",
+        "capget",
+        "sched_getaffinity",
+        "sched_setaffinity",
+        "statfs",
+        "fstatfs",
+        "getresuid",
+        "getresgid",
+        "sendfile"
       ],
       "action": "SCMP_ACT_ALLOW"
     },
