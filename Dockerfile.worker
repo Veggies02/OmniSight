@@ -71,7 +71,7 @@ RUN chmod 0644 /usr/local/lib/seccomp_sandbox.so && \
 WORKDIR /app
 
 # Install Python production dependencies
-COPY artifacts/integration-backend/backend/requirements.txt /app/requirements.txt
+COPY requirements-worker.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy entrypoint script and configure permissions

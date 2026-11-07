@@ -166,12 +166,16 @@ def audit_capabilities_and_privileges() -> None:
 
 def audit_blocked_system_calls() -> None:
     """Verifies that dangerous syscalls blocked by the seccomp profile return error."""
-    # Attempt to call 'reboot' (syscall 169 / reboot())
-    code_reboot, _, err_reboot = run_docker_exec("python3 -c 'import ctypes, os; libc = ctypes.CDLL(None); libc.syscall(169, 0, 0, 0, 0)'")
+    # Attempt to call 'reboot' (syscall 169 on x86_64)
+    code_reboot, _, err_reboot = run_docker_exec(
+        "python3 -c 'import ctypes, sys; libc = ctypes.CDLL(None); ret = libc.syscall(169, 0, 0, 0, 0); sys.exit(0 if ret == 0 else 1)'"
+    )
     reboot_blocked = (code_reboot != 0)
 
     # Attempt to call 'chroot'
-    code_chroot, _, err_chroot = run_docker_exec("python3 -c 'import os; os.chroot(\"/tmp\")'")
+    code_chroot, _, err_chroot = run_docker_exec(
+        "python3 -c 'import os; os.chroot(\"/tmp\")'"
+    )
     chroot_blocked = (code_chroot != 0)
 
     passed = reboot_blocked and chroot_blocked
