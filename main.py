@@ -25,7 +25,7 @@ _backend_candidates = [
     _current_dir / "artifacts" / "integration-backend" / "backend",
     _current_dir,
 ]
-for candidate in _backend_candidates:
+for candidate in reversed(_backend_candidates):
     if candidate.exists() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 

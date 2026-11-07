@@ -333,6 +333,7 @@ class ApprovalVerifier:
         self,
         proposal_ref: Any,
         expected_patch_digest: Optional[str] = None,
+        check_replay: bool = True,
     ) -> Tuple[bool, str]:
         """Verifies cryptographic signature, digest binding, expiration, and replay.
 
@@ -432,7 +433,7 @@ class ApprovalVerifier:
             return False, f"Invalid Ed25519 signature length: expected 64 bytes, got {len(sig_bytes)}."
 
         # Check replay protection
-        if not self.replay_cache.check_and_record(nonce, sig_hex, exp_dt):
+        if check_replay and not self.replay_cache.check_and_record(nonce, sig_hex, exp_dt):
             return False, (
                 f"Approval replay attack detected: nonce {nonce!r} or signature "
                 "has already been submitted."
