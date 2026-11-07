@@ -100,30 +100,43 @@ class ApprovalReplayCache:
     def __init__(self, max_entries: int = 10000) -> None:
         self._lock = threading.Lock()
         self._seen_nonces: Dict[str, datetime] = {}
+        self._seen_signatures: Dict[str, datetime] = {}
         self._max_entries = max_entries
 
     def check_and_record(self, nonce: str, signature: str, expires_at: datetime) -> bool:
         """Checks if nonce or signature was seen.
 
+        Enforces that NEITHER a nonce NOR a signature can ever be reused.
         Returns True if fresh (recorded successfully), False if replay detected.
         """
         now = datetime.now(timezone.utc)
+        sig_prefix = signature[:64]
         with self._lock:
             # Purge expired entries if cache is growing
             if len(self._seen_nonces) > self._max_entries:
                 self._seen_nonces = {k: exp for k, exp in self._seen_nonces.items() if exp > now}
+                self._seen_signatures = {k: exp for k, exp in self._seen_signatures.items() if exp > now}
 
-            composite_key = f"{nonce}:{signature[:32]}"
-            if composite_key in self._seen_nonces:
+            # If either nonce or signature was previously seen, reject as replay attack
+            if nonce in self._seen_nonces or sig_prefix in self._seen_signatures:
                 return False
 
-            self._seen_nonces[composite_key] = expires_at
+            self._seen_nonces[nonce] = expires_at
+            self._seen_signatures[sig_prefix] = expires_at
             return True
+
+    def remove(self, nonce: str, signature: str) -> None:
+        """Removes a nonce and signature (e.g. if verification failed)."""
+        sig_prefix = signature[:64]
+        with self._lock:
+            self._seen_nonces.pop(nonce, None)
+            self._seen_signatures.pop(sig_prefix, None)
 
     def clear(self) -> None:
         """Resets the replay cache (useful for testing)."""
         with self._lock:
             self._seen_nonces.clear()
+            self._seen_signatures.clear()
 
 
 class ApprovalSigner:
@@ -409,6 +422,15 @@ class ApprovalVerifier:
         if pub_hex in self.revoked_public_keys:
             return False, f"Authoritative public key {pub_hex[:16]}... has been revoked."
 
+        # Parse raw signature bytes and validate structure before replay check
+        try:
+            sig_bytes = bytes.fromhex(sig_hex.strip())
+        except Exception:
+            return False, f"Invalid signature format: not valid hex string: {sig_hex!r}"
+
+        if len(sig_bytes) != 64:
+            return False, f"Invalid Ed25519 signature length: expected 64 bytes, got {len(sig_bytes)}."
+
         # Check replay protection
         if not self.replay_cache.check_and_record(nonce, sig_hex, exp_dt):
             return False, (
@@ -434,24 +456,17 @@ class ApprovalVerifier:
 
         canonical_data = payload.canonical_bytes()
 
-        # Parse raw signature bytes
-        try:
-            sig_bytes = bytes.fromhex(sig_hex.strip())
-        except Exception:
-            return False, f"Invalid signature format: not valid hex string: {sig_hex!r}"
-
-        if len(sig_bytes) != 64:
-            return False, f"Invalid Ed25519 signature length: expected 64 bytes, got {len(sig_bytes)}."
-
         # Perform Ed25519 verification
         try:
             public_key.verify(sig_bytes, canonical_data)
         except InvalidSignature:
+            self.replay_cache.remove(nonce, sig_hex)
             return False, (
                 "Cryptographic signature verification failed: signature does not match "
                 "authoritative key or proposal payload has been tampered with."
             )
         except Exception as exc:
+            self.replay_cache.remove(nonce, sig_hex)
             return False, f"Signature verification encountered an error: {exc}"
 
         return True, "Approval signature cryptographically verified."

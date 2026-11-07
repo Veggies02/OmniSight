@@ -152,16 +152,36 @@ class WorkspaceManager:
             self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def create_workspace(self, task_id: str) -> Path:
-        """Provisions an isolated workspace directory for a task."""
-        safe_task_id = re.sub(r"[^A-Za-z0-9_-]", "_", task_id)
-        workspace = self.base_dir / safe_task_id
+        """Provisions an isolated workspace directory with 0700 permissions for a task."""
+        safe_task_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(task_id))
+        if not safe_task_id:
+            safe_task_id = "default_task"
+        workspace = (self.base_dir / safe_task_id).resolve()
+        try:
+            workspace.relative_to(self.base_dir.resolve())
+        except ValueError:
+            raise ValueError(f"Task ID {task_id!r} escapes workspace root boundary.")
+
         workspace.mkdir(parents=True, exist_ok=True)
+        try:
+            workspace.chmod(0o700)
+        except OSError:
+            pass
         return workspace
 
-    def cleanup_workspace(self, task_id: str) -> None:
+    def cleanup_workspace(self, task_id: Union[str, Path]) -> None:
         """Removes the ephemeral workspace and all temporary artifacts."""
-        safe_task_id = re.sub(r"[^A-Za-z0-9_-]", "_", task_id)
-        workspace = self.base_dir / safe_task_id
+        if isinstance(task_id, Path):
+            workspace = task_id.resolve()
+        else:
+            safe_task_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(task_id))
+            workspace = (self.base_dir / safe_task_id).resolve()
+
+        try:
+            workspace.relative_to(self.base_dir.resolve())
+        except ValueError:
+            return
+
         if workspace.exists():
             try:
                 shutil.rmtree(workspace, ignore_errors=True)
@@ -181,11 +201,12 @@ class WorkspaceManager:
 class WorkerTaskRegistry:
     """Thread-safe state manager for tracked worker tasks and active processes."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_tasks: int = 1000) -> None:
         self._tasks: Dict[str, ExecutionStatusResponse] = {}
         self._idempotency_map: Dict[str, str] = {}  # idempotency_key -> task_id
         self._processes: Dict[str, subprocess.Popen[str]] = {}
         self._workspaces: Dict[str, Path] = {}
+        self._max_tasks = max_tasks
         self._lock = threading.Lock()
 
     def register_task(
@@ -215,6 +236,25 @@ class WorkerTaskRegistry:
                     request.task_id,
                 )
                 return self._tasks[request.task_id].model_copy(), False
+
+            # Capacity bounding: prune oldest terminal tasks if registry exceeds capacity
+            if len(self._tasks) >= self._max_tasks:
+                terminal_statuses = {
+                    TaskExecutionStatus.COMPLETED,
+                    TaskExecutionStatus.FAILED,
+                    TaskExecutionStatus.CANCELLED,
+                    TaskExecutionStatus.REJECTED,
+                    TaskExecutionStatus.UNSUPPORTED,
+                }
+                to_prune = [
+                    tid for tid, t in self._tasks.items()
+                    if t.status in terminal_statuses
+                ]
+                for tid in to_prune[: len(to_prune) // 2 + 1]:
+                    self._tasks.pop(tid, None)
+                    self._idempotency_map = {
+                        k: v for k, v in self._idempotency_map.items() if v != tid
+                    }
 
             # New task registration
             initial_status = ExecutionStatusResponse(
@@ -575,7 +615,11 @@ class TaskExecutor:
                     raise ValueError(f"TaskExecutor rejected unapproved repair: {reason}")
 
             command = self._build_command(request)
-            sanitized_env = self.sanitize_environment()
+            sanitized_env = self.sanitize_environment({
+                "OMNISIGHT_WORKSPACE": str(workspace),
+                "TMPDIR": str(workspace),
+                "TASK_ID": request.task_id,
+            })
 
             popen_kwargs: Dict[str, Any] = {
                 "cwd": str(self.repo_root),
@@ -839,6 +883,22 @@ def create_worker_app(
         description="Dedicated execution worker service providing isolated task processing.",
         lifespan=worker_lifespan,
     )
+
+    MAX_REQUEST_BODY_SIZE = 2 * 1024 * 1024  # 2MB maximum payload size
+
+    @app.middleware("http")
+    async def limit_request_size(request: Request, call_next: Any) -> Any:
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > MAX_REQUEST_BODY_SIZE:
+                    return JSONResponse(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        content={"detail": "Request payload exceeds maximum allowed size (2MB)."},
+                    )
+            except ValueError:
+                pass
+        return await call_next(request)
 
     # ----------------------------------------------------------------------- #
     # Authentication Dependency

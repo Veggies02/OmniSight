@@ -44,6 +44,7 @@ jobs:
           python -m pytest test_crypto_approval.py -v
           python -m pytest test_execution_runner.py -v
           python -m pytest test_worker_service.py -v
+          python -m pytest test_adversarial_security.py -v
 
       - name: Generate authoritative approval signing keypair and enforce key rotation
         run: |
