@@ -25,6 +25,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from browser_runner import BrowserRunner, RunnerError, runner_from_env
 from job_schemas import (
@@ -68,6 +69,26 @@ logger = logging.getLogger("omnisight.backend")
 DEFAULT_DB_PATH = Path(__file__).with_name("jobs.db")
 SUPPORTED_CI_EVENTS = {"build_success"}
 MAX_PROPOSAL_BYTES = 200_000
+# Only screenshots can be downloaded through the API. JSON files such as ground_truth_eval.json never can.
+ARTIFACT_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+MAX_ARTIFACT_BYTES = 15_000_000
+
+
+def resolve_artifact_file(repo_root: Path, artifacts_root: Path, uri: str) -> Optional[Path]:
+    """Map an artifact reference to a real file, or None if it is not a file inside artifacts/.
+    Rejects placeholders (mock://), absolute paths, drive letters, and anything that resolves
+    (after following symlinks) outside the artifacts folder."""
+    if not uri or "://" in uri or "\x00" in uri:
+        return None
+    text = uri.replace("\\", "/")
+    if text.startswith("/") or re.match(r"^[A-Za-z]:", text):
+        return None
+    try:
+        candidate = (repo_root / text).resolve()
+        candidate.relative_to(artifacts_root)
+    except (ValueError, OSError):
+        return None
+    return candidate if candidate.is_file() else None
 
 
 def run_inspection(store: JobStore, runner: BrowserRunner, job_id: str, website_url: str) -> None:
@@ -144,12 +165,15 @@ def create_app(
     repair_runner: Optional[RepairRunner] = None,
     operator_token: Optional[str] = None,
     github_client: Optional[GitHubClient] = None,
+    repo_root: Optional[Path] = None,
 ) -> FastAPI:
     store = JobStore(db_path or os.getenv("OMNISIGHT_DB_PATH") or DEFAULT_DB_PATH)
     browser_runner = runner or runner_from_env()
     repairer = repair_runner or repair_runner_from_env()
     gh_client = github_client or github_client_from_env()
     token = operator_token if operator_token is not None else os.getenv("OMNISIGHT_OPERATOR_TOKEN", "")
+    root = Path(repo_root or os.getenv("OMNISIGHT_REPO_ROOT") or Path(__file__).resolve().parent.parent).resolve()
+    artifacts_root = (root / "artifacts").resolve()
 
     app = FastAPI(
         title="OmniSight Backend",
@@ -211,6 +235,29 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
         return job["artifacts"]
+
+    @router.get("/jobs/{job_id}/artifacts/{artifact_id}/file")
+    def get_artifact_file(job_id: str, artifact_id: str):
+        """Serve one screenshot that belongs to this job. The file must be an image inside artifacts/."""
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        artifact = next((a for a in job["artifacts"] if a["artifact_id"] == artifact_id), None)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        file_path = resolve_artifact_file(root, artifacts_root, artifact["uri"])
+        if file_path is None:
+            raise HTTPException(status_code=404, detail="Artifact file is not available")
+        media_type = ARTIFACT_IMAGE_TYPES.get(file_path.suffix.lower())
+        if media_type is None:
+            raise HTTPException(status_code=415, detail="Only image artifacts can be downloaded")
+        if file_path.stat().st_size > MAX_ARTIFACT_BYTES:
+            raise HTTPException(status_code=413, detail="Artifact file is too large")
+        return FileResponse(
+            file_path,
+            media_type=media_type,
+            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=300"},
+        )
 
     # ------------------------------------------------------------ repair flow
     @router.post("/jobs/{job_id}/proposal", response_model=JobResponse)

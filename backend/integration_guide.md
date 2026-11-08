@@ -62,7 +62,7 @@ artifacts [ { artifact_id, kind, uri, description, mock, created_at } ]
 
 `repair.outcome` is `passed`, `failed`, `rejected` (the CLI refused the approval) or `error`
 (no usable report, timeout, or a CLI crash). Artifact `uri` values are paths relative to the repo root.
-There is no endpoint that serves the files themselves.
+Screenshots are served at `GET /jobs/{job_id}/artifacts/{artifact_id}/file` (images only, and only files inside `artifacts/`).
 
 ## Statuses and stages
 
