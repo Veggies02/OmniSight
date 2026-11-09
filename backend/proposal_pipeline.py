@@ -15,6 +15,7 @@ Safety rules, each learned from a real run:
   * It never reads ground_truth_eval.json.
 """
 import json
+import os
 import re
 import shutil
 import threading
@@ -151,3 +152,16 @@ class ProposalPipeline:
                 proposals_path=proposals_file.resolve().relative_to(self.repo_root).as_posix(),
                 duration_seconds=round(time.monotonic() - started, 3),
             )
+
+
+def proposal_pipeline_from_env(repo_root: Path) -> Optional[ProposalPipeline]:
+    """OFF unless OMNISIGHT_AUTO_PROPOSALS is 1, true or yes, so a stock setup behaves as before.
+    OMNISIGHT_DIAGNOSIS_PROVIDER (default mock) and OMNISIGHT_PIPELINE_TIMEOUT_SECONDS (default 300, per step)
+    tune it. A bad provider name fails at startup instead of at the first job."""
+    if os.getenv("OMNISIGHT_AUTO_PROPOSALS", "").strip().lower() not in ("1", "true", "yes"):
+        return None
+    return ProposalPipeline(
+        repo_root=repo_root,
+        provider=os.getenv("OMNISIGHT_DIAGNOSIS_PROVIDER", "mock").strip().lower(),
+        timeout_seconds=float(os.getenv("OMNISIGHT_PIPELINE_TIMEOUT_SECONDS", DEFAULT_PIPELINE_TIMEOUT_SECONDS)),
+    )

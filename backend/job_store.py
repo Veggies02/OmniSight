@@ -14,6 +14,14 @@ from job_schemas import (
     JobStatus,
     check_transition,
 )
+from scenario_logic import (
+    clean_proposal,
+    describe_proposal,
+    outcome_for,
+    repair_job_id,
+    summarize,
+    valid_scenario_id,
+)
 
 # Columns added after the first version of the table. Existing databases are
 # upgraded in place, so jobs created earlier stay retrievable.
@@ -30,6 +38,7 @@ _ADDED_JOB_COLUMNS = {
     "approval": "TEXT",  # JSON {reviewed_by, reviewed_at}, set only by the approval endpoint
     "repair": "TEXT",  # JSON result of the repair CLI run
     "pull_request": "TEXT",  # JSON pull request metadata {pr_number, pr_url, title, ...}
+    "pipeline": "TEXT",  # JSON {run_id, provider, proposals_path}; set once scenarios were generated (v2 jobs)
 }
 
 
@@ -108,6 +117,28 @@ class JobStore:
                 """
             )
             db.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_job ON artifacts(job_id)")
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scenarios (
+                    job_id TEXT NOT NULL REFERENCES jobs(job_id),
+                    scenario_id TEXT NOT NULL,
+                    defect_category TEXT,
+                    is_mock INTEGER NOT NULL DEFAULT 0,
+                    diagnosis TEXT,
+                    proposal TEXT NOT NULL,
+                    review_status TEXT NOT NULL DEFAULT 'pending_review',
+                    approval TEXT,
+                    rejection TEXT,
+                    repair_state TEXT NOT NULL DEFAULT 'not_started',
+                    repair TEXT,
+                    pr_status TEXT NOT NULL DEFAULT 'not_started',
+                    pull_request TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (job_id, scenario_id)
+                )
+                """
+            )
 
     # ----------------------------------------------------------------- writes
     def create_job(
@@ -231,6 +262,59 @@ class JobStore:
             )
         return self.get_job(job_id)  # type: ignore[return-value]
 
+    def set_stage(self, job_id: str, stage: str) -> None:
+        """Change only the display stage (for example generating_proposals). The status stays."""
+        with self._connect() as db:
+            cursor = db.execute(
+                "UPDATE jobs SET stage = ?, updated_at = ? WHERE job_id = ?", (stage, utc_now(), job_id)
+            )
+            if cursor.rowcount == 0:
+                raise JobNotFoundError(job_id)
+
+    def add_scenarios(
+        self, job_id: str, pipeline_info: Dict[str, Any], proposals: Dict[str, Dict[str, Any]]
+    ) -> Dict:
+        """Store one scenario per generated proposal and move the job on, in ONE transaction:
+        analyzing -> repair_proposed (stage awaiting_approval), or -> completed (stage done) when there is
+        nothing to repair. Allowed once per job. A bad scenario id or proposal stores nothing."""
+        prepared = []
+        for scenario_id, proposal in proposals.items():
+            if not valid_scenario_id(scenario_id):
+                raise ValueError(f"Scenario id {scenario_id!r} is not allowed (letters, digits, - and _ only; no --).")
+            cleaned = clean_proposal(scenario_id, proposal)
+            category, is_mock, diagnosis = describe_proposal(cleaned)
+            prepared.append((scenario_id, cleaned, category, is_mock, diagnosis))
+        now = utc_now()
+        with self._connect() as db:
+            row = db.execute("SELECT status, pipeline FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise JobNotFoundError(job_id)
+            if row["status"] != JobStatus.ANALYZING.value or row["pipeline"]:
+                raise JobStateError("Scenarios can only be added once, to a job that finished inspection (status analyzing).")
+            new_status = JobStatus.REPAIR_PROPOSED if prepared else JobStatus.COMPLETED
+            check_transition(JobStatus.ANALYZING, new_status)
+            for scenario_id, cleaned, category, is_mock, diagnosis in prepared:
+                db.execute(
+                    """
+                    INSERT INTO scenarios (job_id, scenario_id, defect_category, is_mock, diagnosis,
+                                           proposal, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (job_id, scenario_id, category, int(is_mock), json.dumps(diagnosis), json.dumps(cleaned), now, now),
+                )
+            db.execute(
+                "UPDATE jobs SET status = ?, stage = ?, pipeline = ?, updated_at = ? WHERE job_id = ?",
+                (new_status.value, "awaiting_approval" if prepared else "done", json.dumps(pipeline_info), now, job_id),
+            )
+        return self.get_job(job_id)  # type: ignore[return-value]
+
+    def list_scenarios(self, job_id: str) -> List[Dict]:
+        with self._connect() as db:
+            return self._scenarios_for(db, job_id)
+
+    def get_scenario(self, job_id: str, scenario_id: str) -> Optional[Dict]:
+        return next((s for s in self.list_scenarios(job_id) if s["scenario_id"] == scenario_id), None)
+
     def add_artifacts(self, job_id: str, drafts: List[ArtifactDraft]) -> None:
         with self._connect() as db:
             for draft in drafts:
@@ -267,7 +351,30 @@ class JobStore:
             for r in rows
         ]
 
+    def _scenarios_for(self, db: sqlite3.Connection, job_id: str) -> List[Dict]:
+        rows = db.execute("SELECT * FROM scenarios WHERE job_id = ? ORDER BY rowid", (job_id,)).fetchall()
+        return [
+            {
+                "scenario_id": r["scenario_id"],
+                "defect_category": r["defect_category"],
+                "is_mock": bool(r["is_mock"]),
+                "diagnosis": _loads(r["diagnosis"]),
+                "proposal": _loads(r["proposal"]),
+                "review_status": r["review_status"],
+                "approval": _loads(r["approval"]),
+                "rejection": _loads(r["rejection"]),
+                "repair_state": r["repair_state"],
+                "repair_job_id": repair_job_id(job_id, r["scenario_id"]),
+                "repair": _loads(r["repair"]),
+                "pr_status": r["pr_status"],
+                "pull_request": _loads(r["pull_request"]),
+            }
+            for r in rows
+        ]
+
     def _to_job(self, db: sqlite3.Connection, row: sqlite3.Row) -> Dict:
+        scenarios = self._scenarios_for(db, row["job_id"])
+        has_scenarios = bool(scenarios) or row["pipeline"] is not None
         return {
             "job_id": row["job_id"],
             "website_url": row["website_url"],
@@ -285,6 +392,9 @@ class JobStore:
             "pull_request": _loads(row["pull_request"]) if "pull_request" in row.keys() else None,
             "error": row["error"],
             "artifacts": self._artifacts_for(db, row["job_id"]),
+            "scenarios": scenarios,
+            "summary": summarize(scenarios) if has_scenarios else None,
+            "outcome": outcome_for(scenarios) if has_scenarios else None,
         }
 
     def get_job(self, job_id: str) -> Optional[Dict]:

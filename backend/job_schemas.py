@@ -186,6 +186,37 @@ class Inspection(BaseModel):
     stderr_tail: Optional[str] = Field(default=None, description="Last part of the process errors")
 
 
+class ScenarioSummary(BaseModel):
+    total: int = 0
+    pending_review: int = 0
+    approved: int = 0
+    repairing: int = 0
+    passed: int = 0
+    failed: int = 0
+    rejected: int = 0
+    unsupported: int = 0
+    error: int = 0
+    prs_created: int = 0
+
+
+class ScenarioResponse(BaseModel):
+    """One defect scenario of a capture job (contract v2). Each has its own review, repair and PR state."""
+
+    scenario_id: str
+    defect_category: Optional[str] = None
+    is_mock: bool = False
+    diagnosis: Optional[Dict[str, Any]] = None
+    proposal: Dict[str, Any]
+    review_status: Literal["pending_review", "approved", "rejected"] = "pending_review"
+    approval: Optional[Dict[str, Any]] = None
+    rejection: Optional[Dict[str, Any]] = None
+    repair_state: Literal["not_started", "running", "passed", "failed", "rejected", "unsupported", "error"] = "not_started"
+    repair_job_id: str
+    repair: Optional[Dict[str, Any]] = None
+    pr_status: Literal["not_started", "created", "failed"] = "not_started"
+    pull_request: Optional[Dict[str, Any]] = None
+
+
 class JobResponse(BaseModel):
     job_id: str
     website_url: str
@@ -205,6 +236,9 @@ class JobResponse(BaseModel):
     )
     error: Optional[str] = None
     artifacts: List[ArtifactRef] = Field(default_factory=list)
+    scenarios: List[ScenarioResponse] = Field(default_factory=list, description="Contract v2: one entry per defect scenario")
+    summary: Optional[ScenarioSummary] = Field(default=None, description="Scenario counts (jobs with scenarios only)")
+    outcome: Optional[str] = Field(default=None, description="null while any scenario is open")
 
 
 class JobListResponse(BaseModel):

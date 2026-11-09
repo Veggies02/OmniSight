@@ -45,8 +45,10 @@ from job_schemas import (
     ProposalRequest,
     PullRequestCreateRequest,
     PullRequestResponse,
+    ScenarioResponse,
 )
 from job_store import JobNotFoundError, JobStore
+from proposal_pipeline import PipelineError, ProposalPipeline, proposal_pipeline_from_env
 from github_client import (
     GitHubAPIError,
     GitHubAuthError,
@@ -91,8 +93,15 @@ def resolve_artifact_file(repo_root: Path, artifacts_root: Path, uri: str) -> Op
     return candidate if candidate.is_file() else None
 
 
-def run_inspection(store: JobStore, runner: BrowserRunner, job_id: str, website_url: str) -> None:
-    """Background task. Never raises: any failure is recorded on the job."""
+def run_inspection(
+    store: JobStore,
+    runner: BrowserRunner,
+    job_id: str,
+    website_url: str,
+    pipeline: Optional[ProposalPipeline] = None,
+) -> None:
+    """Background task. Never raises: any failure is recorded on the job.
+    With a `pipeline`, a real capture is followed by diagnosis and proposal generation."""
     try:
         store.update_status(job_id, JobStatus.INSPECTING)
         result = runner.run(job_id, website_url)
@@ -100,6 +109,8 @@ def run_inspection(store: JobStore, runner: BrowserRunner, job_id: str, website_
         summary = Inspection(**result.model_dump(exclude={"artifacts"}))
         store.update_status(job_id, JobStatus.ANALYZING, inspection=summary.model_dump())
         logger.info("job %s inspected (mode=%s executed=%s)", job_id, result.mode, result.executed)
+        if pipeline is not None and result.executed and result.run_id:
+            run_proposal_pipeline(store, pipeline, job_id, result.run_id)
     except RunnerError as exc:
         # Expected failure (app down, non-zero exit, bad manifest...). Keep the details.
         logger.error("job %s inspection failed: %s", job_id, exc)
@@ -119,6 +130,23 @@ def run_inspection(store: JobStore, runner: BrowserRunner, job_id: str, website_
             store.update_status(job_id, JobStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
         except Exception:  # noqa: BLE001
             logger.exception("job %s could not be marked failed", job_id)
+
+
+def run_proposal_pipeline(store: JobStore, pipeline: ProposalPipeline, job_id: str, run_id: str) -> None:
+    """Diagnose the capture, generate one proposal per scenario and store them.
+    Never raises. A failed step fails the job and keeps the stage where it stopped."""
+    try:
+        store.set_stage(job_id, "generating_proposals")
+        result = pipeline.run(run_id)
+        info = {"run_id": result.run_id, "provider": result.provider, "proposals_path": result.proposals_path}
+        store.add_scenarios(job_id, info, result.proposals)
+        logger.info("job %s: %d scenario proposal(s) from run %s", job_id, len(result.proposals), run_id)
+    except PipelineError as exc:
+        logger.error("job %s proposal pipeline failed: %s", job_id, exc)
+        _mark_failed(store, job_id, f"Proposal pipeline failed ({exc.code}): {exc}")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("job %s proposal pipeline crashed", job_id)
+        _mark_failed(store, job_id, f"Proposal pipeline failed: {type(exc).__name__}: {exc}")
 
 
 def _repair_artifacts(result: RepairResult) -> List[ArtifactDraft]:
@@ -166,6 +194,7 @@ def create_app(
     operator_token: Optional[str] = None,
     github_client: Optional[GitHubClient] = None,
     repo_root: Optional[Path] = None,
+    proposal_pipeline: Optional[ProposalPipeline] = None,
 ) -> FastAPI:
     store = JobStore(db_path or os.getenv("OMNISIGHT_DB_PATH") or DEFAULT_DB_PATH)
     browser_runner = runner or runner_from_env()
@@ -174,6 +203,8 @@ def create_app(
     token = operator_token if operator_token is not None else os.getenv("OMNISIGHT_OPERATOR_TOKEN", "")
     root = Path(repo_root or os.getenv("OMNISIGHT_REPO_ROOT") or Path(__file__).resolve().parent.parent).resolve()
     artifacts_root = (root / "artifacts").resolve()
+    # OFF unless OMNISIGHT_AUTO_PROPOSALS=1: then a real capture is followed by diagnosis and proposals.
+    pipeline = proposal_pipeline if proposal_pipeline is not None else proposal_pipeline_from_env(root)
 
     app = FastAPI(
         title="OmniSight Backend",
@@ -209,7 +240,7 @@ def create_app(
     def create_job(request: JobCreateRequest, background_tasks: BackgroundTasks):
         job = store.create_job(str(request.website_url), source="manual")
         background_tasks.add_task(
-            run_inspection, store, browser_runner, job["job_id"], job["website_url"]
+            run_inspection, store, browser_runner, job["job_id"], job["website_url"], pipeline
         )
         return job
 
@@ -258,6 +289,23 @@ def create_app(
             media_type=media_type,
             headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=300"},
         )
+
+    # -------------------------------------------------------------- scenarios (v2)
+    @router.get("/jobs/{job_id}/scenarios", response_model=List[ScenarioResponse])
+    def list_scenarios(job_id: str):
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job["scenarios"]
+
+    @router.get("/jobs/{job_id}/scenarios/{scenario_id}", response_model=ScenarioResponse)
+    def get_scenario(job_id: str, scenario_id: str):
+        if store.get_job(job_id) is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        scenario = store.get_scenario(job_id, scenario_id)
+        if scenario is None:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        return scenario
 
     # ------------------------------------------------------------ repair flow
     @router.post("/jobs/{job_id}/proposal", response_model=JobResponse)
@@ -468,7 +516,7 @@ def create_app(
             commit_sha=request.commit_sha,
         )
         background_tasks.add_task(
-            run_inspection, store, browser_runner, job["job_id"], job["website_url"]
+            run_inspection, store, browser_runner, job["job_id"], job["website_url"], pipeline
         )
         return CIWebhookResponse(
             message="CI event received; inspection job queued",
