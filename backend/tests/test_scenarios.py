@@ -250,6 +250,29 @@ def test_summary_counts():
         "total": 8, "pending_review": 1, "approved": 1, "repairing": 1, "passed": 1,
         "failed": 1, "rejected": 1, "unsupported": 1, "error": 1, "prs_created": 1,
     }
+def test_real_proposal_shape_gives_category_provider_and_status(tmp_path):
+    """Field names as printed from a real repair_proposals.json (Nov 9)."""
+    real = {
+        "schemaVersion": "1.0", "proposalId": "prop-real", "scenarioId": "product-image-distortion",
+        "diagnosisRef": {
+            "diagnosisStatus": "diagnosed", "model": "mock-vlm-v1", "provider": "mock",
+            "primaryDefectCategory": "image_distortion", "reportedConfidence": 0.94,
+        },
+        "defectCategory": "image_distortion", "isMock": True, "humanReviewStatus": "pending_review",
+    }
+    store, job_id = analyzing_job(tmp_path)
+    store.add_scenarios(job_id, INFO, {"product-image-distortion": real})
+    stored = store.get_scenario(job_id, "product-image-distortion")
+    assert stored["defect_category"] == "image_distortion" and stored["is_mock"] is True
+    assert stored["diagnosis"] == {"provider": "mock", "model": "mock-vlm-v1", "status": "diagnosed"}
+
+
+def test_category_falls_back_to_the_diagnosis_reference(tmp_path):
+    only_ref = {"proposalId": "p", "diagnosisRef": {"provider": "gemini", "primaryDefectCategory": "low_contrast"}}
+    store, job_id = analyzing_job(tmp_path)
+    store.add_scenarios(job_id, INFO, {"s1": only_ref})
+    stored = store.get_scenario(job_id, "s1")
+    assert stored["defect_category"] == "low_contrast" and stored["is_mock"] is False
 
 
 # -------------------------------------------------------------- env switch

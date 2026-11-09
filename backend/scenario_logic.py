@@ -49,13 +49,17 @@ def describe_proposal(proposal: Dict[str, Any]) -> Tuple[Optional[str], bool, Di
     ref = ref if isinstance(ref, dict) else {}
     category = (
         proposal.get("defectCategory") or proposal.get("defect_category")
-        or proposal.get("category") or ref.get("category")
+        or proposal.get("category") or ref.get("primaryDefectCategory") or ref.get("category")
     )
     provider = ref.get("provider")
     is_mock = bool(
         proposal.get("is_mock") or proposal.get("isMock") or ref.get("is_mock") or provider == "mock"
     )
-    diagnosis = {"provider": provider, "model": ref.get("model") or ref.get("modelName"), "status": ref.get("status")}
+    diagnosis = {
+        "provider": provider,
+        "model": ref.get("model") or ref.get("modelName"),
+        "status": ref.get("diagnosisStatus") or ref.get("status"),
+    }
     return (category if isinstance(category, str) else None), is_mock, diagnosis
 
 
