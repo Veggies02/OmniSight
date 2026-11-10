@@ -98,21 +98,38 @@ def _load_evidence_from_file(path: str) -> EvidenceContext:
     )
 
 
-def _find_screenshot(run_dir: str) -> str:
-    """Find a defective screenshot inside a run directory.
+def _find_screenshot(scenario_or_run_dir: str) -> str:
+    """Find a defective screenshot inside a scenario directory or run directory.
 
-    Tries common locations: scenario sub-folders first, then the root.
+    Explicitly prioritizes defective screenshots and strictly excludes baseline images.
     """
-    patterns = [
-        os.path.join(run_dir, "*", "defective-screenshot.png"),
-        os.path.join(run_dir, "*", "defective.png"),
-        os.path.join(run_dir, "defective-screenshot.png"),
-        os.path.join(run_dir, "*.png"),
+    # 1. Direct defective screenshot names in the folder
+    direct_candidates = [
+        os.path.join(scenario_or_run_dir, "defective.png"),
+        os.path.join(scenario_or_run_dir, "defective-screenshot.png"),
+        os.path.join(scenario_or_run_dir, "defective.jpg"),
+        os.path.join(scenario_or_run_dir, "defective.webp"),
     ]
-    for pattern in patterns:
+    for cand in direct_candidates:
+        if os.path.isfile(cand):
+            return cand
+
+    # 2. Check immediate subdirectories for defective images
+    sub_patterns = [
+        os.path.join(scenario_or_run_dir, "*", "defective.png"),
+        os.path.join(scenario_or_run_dir, "*", "defective-screenshot.png"),
+    ]
+    for pattern in sub_patterns:
         matches = glob.glob(pattern)
         if matches:
             return matches[0]
+
+    # 3. Fallback to any non-baseline image in the directory
+    for f in sorted(glob.glob(os.path.join(scenario_or_run_dir, "*.png"))):
+        base_name = os.path.basename(f).lower()
+        if "baseline" not in base_name and "clean" not in base_name:
+            return f
+
     return ""
 
 

@@ -150,7 +150,12 @@ class MockVisionModel(VisionModel):
         self.last_prompt: Optional[str] = None
 
     def analyze(self, image_path: str, prompt: str) -> str:
-        """Simulate analysis, verifying file existence first."""
+        """Simulate analysis, verifying file existence first.
+        
+        If no explicit canned_response was configured, dynamically returns
+        findings tailored to the specific defect scenario when identifiable
+        from the prompt or image path.
+        """
         self.call_count += 1
         self.last_image_path = image_path
         self.last_prompt = prompt
@@ -160,6 +165,73 @@ class MockVisionModel(VisionModel):
 
         if self.simulate_error:
             raise self.simulate_error
+
+        # If custom canned response was passed, preserve it
+        if self.canned_response != self.DEFAULT_RESPONSE:
+            return self.canned_response
+
+        # Tailor response to the scenario context if detected
+        context_str = f"{image_path} {prompt}".lower()
+        if "mobile-nav" in context_str or "nav-overflow" in context_str:
+            return json.dumps({
+                "has_defect": True,
+                "findings": [
+                    {
+                        "defect_category": "modal_overflow",
+                        "description": "Mobile navigation container exceeds viewport width at 390px, causing horizontal overflow.",
+                        "confidence": 0.95,
+                        "target_selector": ".navbar.defect-mobile-nav-overflow .navbar-container",
+                        "target_component": "src/index.css",
+                        "requires_human_review": False,
+                        "suggested_next_step": "Constrain width to 100% and reset oversized navigation gaps.",
+                    }
+                ]
+            })
+        elif "product-card" in context_str or "layout-break" in context_str:
+            return json.dumps({
+                "has_defect": True,
+                "findings": [
+                    {
+                        "defect_category": "incorrect_spacing",
+                        "description": "Product card body has negative margin offset overlapping the card image, and footer action buttons displace outside bounds.",
+                        "confidence": 0.92,
+                        "target_selector": ".defect-product-card-layout-break .product-card-body",
+                        "target_component": "src/index.css",
+                        "requires_human_review": False,
+                        "suggested_next_step": "Reset negative margin on product-card-body and restore flex layout.",
+                    }
+                ]
+            })
+        elif "low-contrast" in context_str or "contrast" in context_str:
+            return json.dumps({
+                "has_defect": True,
+                "findings": [
+                    {
+                        "defect_category": "other",
+                        "description": "Text contrast ratio is below WCAG AAA threshold on product snippet and price text.",
+                        "confidence": 0.88,
+                        "target_selector": ".defect-low-contrast-text .product-snippet",
+                        "target_component": "src/index.css",
+                        "requires_human_review": False,
+                        "suggested_next_step": "Restore high-contrast text color token.",
+                    }
+                ]
+            })
+        elif "image-distortion" in context_str or "distortion" in context_str:
+            return json.dumps({
+                "has_defect": True,
+                "findings": [
+                    {
+                        "defect_category": "other",
+                        "description": "Product thumbnail image is distorted with stretched aspect ratio and non-uniform scaling.",
+                        "confidence": 0.93,
+                        "target_selector": ".defect-product-image-distortion .product-image",
+                        "target_component": "src/index.css",
+                        "requires_human_review": False,
+                        "suggested_next_step": "Restore 4:3 aspect ratio and object-fit cover.",
+                    }
+                ]
+            })
 
         return self.canned_response
 
