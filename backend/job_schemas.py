@@ -193,6 +193,17 @@ class Inspection(BaseModel):
     stderr_tail: Optional[str] = Field(default=None, description="Last part of the process errors")
 
 
+class ScenarioPullRequestRequest(BaseModel):
+    """Optional wording for a scenario's Draft pull request. It can NOT choose the repository or the head branch:
+    the repository comes from the server setting OMNISIGHT_GITHUB_REPO, the branch from the repair report."""
+
+    title: Optional[str] = Field(default=None, max_length=200)
+    body: Optional[str] = Field(default=None, max_length=20000)
+    base_branch: str = Field(
+        default="main", max_length=200, validation_alias=AliasChoices("base_branch", "baseBranch", "base")
+    )
+
+
 class ScenarioSummary(BaseModel):
     total: int = 0
     pending_review: int = 0

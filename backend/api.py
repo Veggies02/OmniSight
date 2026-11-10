@@ -20,10 +20,11 @@ import json
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, FastAPI, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -46,11 +47,13 @@ from job_schemas import (
     PullRequestCreateRequest,
     PullRequestResponse,
     RejectionRequest,
+    ScenarioPullRequestRequest,
     ScenarioResponse,
 )
 from job_store import JobNotFoundError, JobStore, ScenarioNotFoundError
 from proposal_pipeline import PipelineError, ProposalPipeline, proposal_pipeline_from_env
 from scenario_logic import repair_job_id, repair_state_for
+from branch_pusher import BranchPushError, BranchPusher
 from github_client import (
     GitHubAPIError,
     GitHubAuthError,
@@ -234,6 +237,7 @@ def create_app(
     github_client: Optional[GitHubClient] = None,
     repo_root: Optional[Path] = None,
     proposal_pipeline: Optional[ProposalPipeline] = None,
+    branch_pusher: Optional[BranchPusher] = None,
 ) -> FastAPI:
     store = JobStore(db_path or os.getenv("OMNISIGHT_DB_PATH") or DEFAULT_DB_PATH)
     browser_runner = runner or runner_from_env()
@@ -244,6 +248,9 @@ def create_app(
     artifacts_root = (root / "artifacts").resolve()
     # OFF unless OMNISIGHT_AUTO_PROPOSALS=1: then a real capture is followed by diagnosis and proposals.
     pipeline = proposal_pipeline if proposal_pipeline is not None else proposal_pipeline_from_env(root)
+    # Pushes the validated repair commit to GitHub (token from the server environment only).
+    pusher = branch_pusher if branch_pusher is not None else BranchPusher(repo_root=root)
+    pr_lock = threading.Lock()
 
     app = FastAPI(
         title="OmniSight Backend",
@@ -407,6 +414,140 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc))
         background_tasks.add_task(run_scenario_repair, store, repairer, job_id, scenario_id)
         return claimed
+
+    # ------------------------------------------------ scenario pull request (v2)
+    def _target_repository() -> str:
+        """Decided by the SERVER only: the first entry of OMNISIGHT_GITHUB_REPO (default Veggies02/OmniSight)."""
+        return next(
+            (r.strip() for r in (os.getenv("OMNISIGHT_GITHUB_REPO") or "Veggies02/OmniSight").split(",") if r.strip()),
+            "Veggies02/OmniSight",
+        )
+
+    def _push_status(code: str) -> int:
+        if code == "no_token":
+            return 503
+        if code.startswith("push_"):
+            return 502
+        return 409  # the repair report or the local repository is not in a pushable state
+
+    @router.post("/jobs/{job_id}/scenarios/{scenario_id}/pr", status_code=201, response_model=ScenarioResponse)
+    def create_scenario_pull_request(
+        job_id: str,
+        scenario_id: str,
+        response: Response,
+        request: Optional[ScenarioPullRequestRequest] = None,
+        x_operator_token: Optional[str] = Header(default=None),
+    ):
+        require_operator(x_operator_token)
+        if store.get_job(job_id) is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if store.get_scenario(job_id, scenario_id) is None:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        with pr_lock:  # one at a time, so two requests can never push or open the same PR twice
+            scenario = store.get_scenario(job_id, scenario_id)
+            if scenario is None:
+                raise HTTPException(status_code=404, detail="Scenario not found")
+            if scenario["pull_request"]:
+                response.status_code = 200  # already created: nothing is pushed or opened again
+                return scenario
+            if scenario["repair_state"] != "passed":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Only a scenario whose repair passed can have a pull request (repair_state: {scenario['repair_state']}).",
+                )
+            repair = scenario["repair"] or {}
+            if not repair.get("passed"):
+                raise HTTPException(status_code=409, detail="Repair did not pass or has not been successfully executed.")
+            if repair.get("visual_passed") is False:
+                raise HTTPException(
+                    status_code=409, detail="Repair failed visual regression verification; PR creation blocked."
+                )
+            commit_sha, head_branch = repair.get("commit_sha"), repair.get("branch")
+            if not commit_sha or not head_branch:
+                raise HTTPException(status_code=409, detail="The repair produced no commit or branch to push.")
+
+            req = request or ScenarioPullRequestRequest()
+            base_branch = req.base_branch
+            if (
+                not re.match(r"^[A-Za-z0-9._/-]{1,200}$", base_branch)
+                or ".." in base_branch
+                or base_branch.startswith(("/", "-"))
+            ):
+                raise HTTPException(status_code=422, detail="Invalid base branch name.")
+
+            repository = _target_repository()
+            owner, repo_name = repository.split("/", 1)
+            try:
+                pusher.push(repository, commit_sha, head_branch)
+            except BranchPushError as exc:
+                logger.error("job %s scenario %s push failed (%s): %s", job_id, scenario_id, exc.code, exc)
+                if exc.code != "no_token":
+                    store.mark_scenario_pr_failed(job_id, scenario_id)
+                raise HTTPException(status_code=_push_status(exc.code), detail=str(exc))
+
+            clean_job_id = job_id.replace("job-", "")
+            approval = scenario["approval"] or {}
+            title = req.title or f"fix(ui): automated visual repair for {scenario_id} [{clean_job_id[:8]}]"
+            body = req.body or "\n".join(
+                [
+                    "### OmniSight Automated UI Repair Summary",
+                    "",
+                    f"- **Job ID**: `{job_id}`",
+                    f"- **Scenario**: `{scenario_id}`",
+                    f"- **Human Reviewer**: {approval.get('reviewed_by', 'operator')} ({approval.get('reviewed_at', '')})",
+                    f"- **Repair Outcome**: `{repair.get('outcome', 'passed')}`",
+                    f"- **Build Passed**: `{repair.get('build_passed', True)}`",
+                    f"- **Test Passed**: `{repair.get('test_passed', True)}`",
+                    f"- **Visual Verification**: `{repair.get('visual_passed', True)}`",
+                    f"- **Commit**: `{commit_sha}`",
+                    "",
+                    "> *Safety Notice*: Automated PR created in Draft state. Please inspect visual diffs before merging.",
+                ]
+            )
+            try:
+                pr_data = gh_client.create_draft_pull_request(
+                    owner=owner,
+                    repo=repo_name,
+                    title=title,
+                    head=head_branch,
+                    base=base_branch,
+                    body=body,
+                    labels=["automated-repair", "omnisight"],
+                )
+            except GitHubAuthMissingError as exc:
+                raise HTTPException(status_code=503, detail=str(exc))
+            except Exception as exc:  # noqa: BLE001
+                store.mark_scenario_pr_failed(job_id, scenario_id)
+                if isinstance(exc, GitHubAuthError):
+                    raise HTTPException(status_code=502, detail=f"GitHub authentication failed: {exc}")
+                if isinstance(exc, GitHubRateLimitError):
+                    raise HTTPException(status_code=429, detail=str(exc))
+                if isinstance(exc, GitHubNotFoundError):
+                    raise HTTPException(status_code=502, detail=str(exc))
+                if isinstance(exc, GitHubAPIError):
+                    raise HTTPException(status_code=exc.status_code, detail=str(exc))
+                logger.exception("Unexpected error creating pull request: %s", exc)
+                raise HTTPException(status_code=502, detail=f"Failed to create pull request: {exc}")
+
+            pr_data = dict(pr_data)
+            pr_data["job_id"] = job_id
+            pr_data["scenario_id"] = scenario_id
+            # the names used in CONTRACT_V2_DRAFT.md, next to the names the GitHub client already returns
+            pr_data.setdefault("url", pr_data.get("pr_url"))
+            pr_data.setdefault("state", pr_data.get("status"))
+            pr_data.setdefault("draft", pr_data.get("is_draft", True))
+            return store.record_scenario_pull_request(job_id, scenario_id, pr_data)
+
+    @router.get("/jobs/{job_id}/scenarios/{scenario_id}/pr")
+    def get_scenario_pull_request(job_id: str, scenario_id: str):
+        if store.get_job(job_id) is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        scenario = store.get_scenario(job_id, scenario_id)
+        if scenario is None:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        if not scenario["pull_request"]:
+            raise HTTPException(status_code=404, detail="No pull request has been created for this scenario.")
+        return scenario["pull_request"]
 
     # ------------------------------------------------------------ repair flow
     @router.post("/jobs/{job_id}/proposal", response_model=JobResponse)

@@ -439,6 +439,31 @@ class JobStore:
             self._move_job(db, job_id, JobStatus.APPLYING_PATCH, JobStatus.REPAIR_PROPOSED, now)
         return self.get_job(job_id)  # type: ignore[return-value]
 
+    def record_scenario_pull_request(self, job_id: str, scenario_id: str, pr_data: Dict[str, Any]) -> Dict:
+        """Store the Draft PR of a scenario whose repair passed. The JOB status does not change: in contract v2
+        repairs and pull requests are separate, so a job is `completed` whether or not its PRs exist."""
+        now = utc_now()
+        with self._connect() as db:
+            self._v2_job_row(db, job_id)
+            row = self._scenario_row(db, job_id, scenario_id)
+            if row["repair_state"] != "passed":
+                raise JobStateError("Only a scenario whose repair passed can have a pull request.")
+            db.execute(
+                "UPDATE scenarios SET pr_status = 'created', pull_request = ?, updated_at = ? "
+                "WHERE job_id = ? AND scenario_id = ?",
+                (json.dumps(pr_data), now, job_id, scenario_id),
+            )
+        return self.get_scenario(job_id, scenario_id)  # type: ignore[return-value]
+
+    def mark_scenario_pr_failed(self, job_id: str, scenario_id: str) -> None:
+        """A push or GitHub error. A later request may try again; a created PR is never overwritten."""
+        with self._connect() as db:
+            db.execute(
+                "UPDATE scenarios SET pr_status = 'failed', updated_at = ? "
+                "WHERE job_id = ? AND scenario_id = ? AND repair_state = 'passed' AND pr_status != 'created'",
+                (utc_now(), job_id, scenario_id),
+            )
+
     def list_scenarios(self, job_id: str) -> List[Dict]:
         with self._connect() as db:
             return self._scenarios_for(db, job_id)
