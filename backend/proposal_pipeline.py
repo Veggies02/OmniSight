@@ -14,11 +14,11 @@ Safety rules, each learned from a real run:
   * Mock output stays labelled by the CLI itself (is_mock / provider "mock"); this module never relabels it.
   * It never reads ground_truth_eval.json.
 """
-import sys
 import json
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 from pathlib import Path
@@ -158,10 +158,10 @@ class ProposalPipeline:
 def proposal_pipeline_from_env(repo_root: Path) -> Optional[ProposalPipeline]:
     """OFF unless OMNISIGHT_AUTO_PROPOSALS is 1, true or yes, so a stock setup behaves as before.
     OMNISIGHT_DIAGNOSIS_PROVIDER (default mock) and OMNISIGHT_PIPELINE_TIMEOUT_SECONDS (default 300, per step)
-    tune it. A bad provider name fails at startup instead of at the first job."""
+    tune it. OMNISIGHT_DIAGNOSIS_ENGINE=python swaps the diagnosis step for the Python AI engine wrapper
+    (needs OMNISIGHT_AI_ENGINE_DIR). A bad provider name fails at startup instead of at the first job."""
     if os.getenv("OMNISIGHT_AUTO_PROPOSALS", "").strip().lower() not in ("1", "true", "yes"):
         return None
-    
     diagnose_command = None
     if os.getenv("OMNISIGHT_DIAGNOSIS_ENGINE", "").strip().lower() == "python":
         diagnose_command = [sys.executable, str(Path(__file__).resolve().with_name("diagnose_wrapper.py"))]

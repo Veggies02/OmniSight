@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from scenario_logic import valid_scenario_id
 
-# PROPOSED mapping. Replace with section 5 of diagnosis-contract-comparison.md once reviewed.
+# Python engine category -> TypeScript category. The engine has no image_distortion or low_contrast yet.
 CATEGORY_MAP = {
     "mobile_button_clipping": "responsive_overflow",
     "modal_overflow": "responsive_overflow",
@@ -12,6 +12,14 @@ CATEGORY_MAP = {
     "incorrect_spacing": "layout_breakage",
     "hidden_control": "layout_breakage",
     "other": "unknown",
+}
+# Verified by Ajay against SCENARIO_TO_PATCH_MAP in scripts/repair/patch-registry.ts.
+# Used only to flag mismatches for the reviewer. The patch is chosen by scenario id, never by category.
+EXPECTED_CATEGORY = {
+    "product-image-distortion": "image_distortion",
+    "product-card-layout-break": "layout_breakage",
+    "low-contrast-text": "low_contrast",
+    "mobile-nav-overflow": "responsive_overflow",
 }
 # The engine's own default viewport, i.e. what it analysed with when none was supplied.
 DEFAULT_VIEWPORT = {"width": 1280, "height": 720}
@@ -48,6 +56,13 @@ def adapt_scenario(scenario_id: str, response: Dict[str, Any], viewport: Optiona
             "suspected_cause": _text(f.get("uncertainty_notes"), _NOT_REPORTED),
             "suggested_fix": _text(f.get("suggested_next_step"), _NOT_REPORTED),
         })
+        expected = EXPECTED_CATEGORY.get(scenario_id)
+        if expected and defects[-1]["category"] != expected:
+            limitations.append(
+                f"Category mismatch: the AI engine said '{f.get('defect_category')}' (mapped to "
+                f"'{defects[-1]['category']}'), but scenario '{scenario_id}' expects '{expected}'. "
+                "The patch is chosen by scenario id."
+            )
         if f.get("requires_human_review"):
             limitations.append(f"The AI engine flagged this finding for human review: {description[:120]}")
     if defects:

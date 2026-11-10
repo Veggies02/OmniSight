@@ -100,3 +100,15 @@ def test_unsafe_scenario_ids_are_refused(bad):
 def test_missing_scenarios_object():
     with pytest.raises(ValueError):
         adapt_cli_output({"run_id": "r"})
+
+
+def test_category_mismatch_is_recorded_in_limitations():
+    r = adapt_scenario("product-image-distortion", response([finding()]))
+    assert_ts_valid(r)
+    assert any("Category mismatch" in s and "image_distortion" in s for s in r["diagnosis"]["limitations"])
+    assert r["diagnosis"]["defects"][0]["category"] == "responsive_overflow"  # never relabelled to fit
+
+
+def test_matching_category_has_no_mismatch_note():
+    r = adapt_scenario("mobile-nav-overflow", response([finding()]))
+    assert not any("Category mismatch" in s for s in r["diagnosis"]["limitations"])
