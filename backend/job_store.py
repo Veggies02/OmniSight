@@ -17,6 +17,7 @@ from job_schemas import (
 from scenario_logic import (
     clean_proposal,
     describe_proposal,
+    is_open,
     outcome_for,
     repair_job_id,
     summarize,
@@ -55,6 +56,10 @@ def _loads(text: Optional[str]) -> Optional[Dict[str, Any]]:
 
 
 class JobNotFoundError(LookupError):
+    pass
+
+
+class ScenarioNotFoundError(LookupError):
     pass
 
 
@@ -306,6 +311,132 @@ class JobStore:
                 "UPDATE jobs SET status = ?, stage = ?, pipeline = ?, updated_at = ? WHERE job_id = ?",
                 (new_status.value, "awaiting_approval" if prepared else "done", json.dumps(pipeline_info), now, job_id),
             )
+        return self.get_job(job_id)  # type: ignore[return-value]
+
+    # ------------------------------------------------------- scenario decisions (v2)
+    def _scenario_row(self, db: sqlite3.Connection, job_id: str, scenario_id: str) -> sqlite3.Row:
+        row = db.execute(
+            "SELECT * FROM scenarios WHERE job_id = ? AND scenario_id = ?", (job_id, scenario_id)
+        ).fetchone()
+        if row is None:
+            raise ScenarioNotFoundError(f"{job_id}/{scenario_id}")
+        return row
+
+    def _v2_job_row(self, db: sqlite3.Connection, job_id: str) -> sqlite3.Row:
+        row = db.execute("SELECT status, pipeline FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise JobNotFoundError(job_id)
+        if row["pipeline"] is None:
+            raise ScenarioNotFoundError("This job has no scenarios.")
+        return row
+
+    def _has_open_scenario(self, db: sqlite3.Connection, job_id: str) -> bool:
+        return any(is_open(s) for s in self._scenarios_for(db, job_id))
+
+    def _move_job(self, db: sqlite3.Connection, job_id: str, current: JobStatus, target: JobStatus, now: str) -> None:
+        check_transition(current, target)
+        stage = "done" if target == JobStatus.COMPLETED else STAGE_FOR_STATUS[target]
+        db.execute(
+            "UPDATE jobs SET status = ?, stage = ?, updated_at = ? WHERE job_id = ?",
+            (target.value, stage, now, job_id),
+        )
+
+    def approve_scenario(self, job_id: str, scenario_id: str, reviewed_by: str) -> Dict:
+        """Record who approved THIS scenario, with a server-side timestamp. Once per scenario. Approving one
+        scenario never approves another. The job status does not change: repairing is a separate action."""
+        return self._review_scenario(job_id, scenario_id, "approved", reviewed_by, None)
+
+    def reject_scenario(self, job_id: str, scenario_id: str, reviewed_by: str, reason: str) -> Dict:
+        """A human rejects THIS scenario (its repair_state becomes rejected). Once per scenario. If it was the last
+        open scenario the job completes."""
+        return self._review_scenario(job_id, scenario_id, "rejected", reviewed_by, reason)
+
+    def _review_scenario(
+        self, job_id: str, scenario_id: str, decision: str, reviewed_by: str, reason: Optional[str]
+    ) -> Dict:
+        now = utc_now()
+        with self._connect() as db:
+            job = self._v2_job_row(db, job_id)
+            status = JobStatus(job["status"])
+            # A decision may also be taken while ANOTHER scenario is being repaired.
+            if status not in (JobStatus.REPAIR_PROPOSED, JobStatus.APPLYING_PATCH):
+                raise JobStateError("Scenarios can only be reviewed while the job is waiting for decisions or repairs.")
+            row = self._scenario_row(db, job_id, scenario_id)
+            if row["review_status"] != "pending_review":
+                raise JobStateError(f"This scenario was already {row['review_status']}.")
+            record = {"reviewed_by": reviewed_by.strip(), "reviewed_at": now}
+            if decision == "approved":
+                db.execute(
+                    "UPDATE scenarios SET review_status = 'approved', approval = ?, updated_at = ? "
+                    "WHERE job_id = ? AND scenario_id = ?",
+                    (json.dumps(record), now, job_id, scenario_id),
+                )
+            else:
+                record["reason"] = (reason or "").strip()
+                db.execute(
+                    "UPDATE scenarios SET review_status = 'rejected', repair_state = 'rejected', rejection = ?, "
+                    "updated_at = ? WHERE job_id = ? AND scenario_id = ?",
+                    (json.dumps(record), now, job_id, scenario_id),
+                )
+                if status == JobStatus.REPAIR_PROPOSED and not self._has_open_scenario(db, job_id):
+                    self._move_job(db, job_id, status, JobStatus.COMPLETED, now)
+        return self.get_scenario(job_id, scenario_id)  # type: ignore[return-value]
+
+    def claim_scenario_repair(self, job_id: str, scenario_id: str) -> Dict:
+        """Atomically start the repair of one approved scenario: scenario -> running, job -> applying_patch.
+        A second request for the same scenario, or any scenario of a job that is already repairing, fails."""
+        now = utc_now()
+        with self._connect() as db:
+            job = self._v2_job_row(db, job_id)
+            status = JobStatus(job["status"])
+            if status == JobStatus.APPLYING_PATCH:
+                raise JobStateError("Another scenario of this job is being repaired. Try again when it finishes.")
+            if status != JobStatus.REPAIR_PROPOSED:
+                raise JobStateError("Only a job that is waiting for repairs can start one.")
+            row = self._scenario_row(db, job_id, scenario_id)
+            if row["review_status"] != "approved":
+                raise JobStateError("This scenario has not been approved by a human reviewer.")
+            if row["repair_state"] != "not_started":
+                raise JobStateError("This scenario's repair has already been started.")
+            db.execute(
+                "UPDATE scenarios SET repair_state = 'running', updated_at = ? WHERE job_id = ? AND scenario_id = ?",
+                (now, job_id, scenario_id),
+            )
+            self._move_job(db, job_id, status, JobStatus.APPLYING_PATCH, now)
+        return self.get_job(job_id)  # type: ignore[return-value]
+
+    def finish_scenario_repair(self, job_id: str, scenario_id: str, state: str, repair: Dict[str, Any]) -> Dict:
+        """Store the result of one scenario's repair and move the job on: back to repair_proposed while any
+        scenario is still open, or to completed when none is. A failed repair does NOT fail the job."""
+        if state not in ("passed", "failed", "unsupported", "error"):
+            raise ValueError(f"Not a finished repair state: {state!r}")
+        now = utc_now()
+        with self._connect() as db:
+            job = self._v2_job_row(db, job_id)
+            row = self._scenario_row(db, job_id, scenario_id)
+            if row["repair_state"] != "running" or JobStatus(job["status"]) != JobStatus.APPLYING_PATCH:
+                raise JobStateError("This scenario's repair is not running.")
+            db.execute(
+                "UPDATE scenarios SET repair_state = ?, repair = ?, updated_at = ? WHERE job_id = ? AND scenario_id = ?",
+                (state, json.dumps(repair), now, job_id, scenario_id),
+            )
+            target = JobStatus.REPAIR_PROPOSED if self._has_open_scenario(db, job_id) else JobStatus.COMPLETED
+            self._move_job(db, job_id, JobStatus.APPLYING_PATCH, target, now)
+        return self.get_job(job_id)  # type: ignore[return-value]
+
+    def release_scenario_repair(self, job_id: str, scenario_id: str) -> Dict:
+        """Undo a claim when the repair never started (for example another repair held the lock)."""
+        now = utc_now()
+        with self._connect() as db:
+            job = self._v2_job_row(db, job_id)
+            row = self._scenario_row(db, job_id, scenario_id)
+            if row["repair_state"] != "running" or JobStatus(job["status"]) != JobStatus.APPLYING_PATCH:
+                raise JobStateError("This scenario's repair is not running.")
+            db.execute(
+                "UPDATE scenarios SET repair_state = 'not_started', updated_at = ? WHERE job_id = ? AND scenario_id = ?",
+                (now, job_id, scenario_id),
+            )
+            self._move_job(db, job_id, JobStatus.APPLYING_PATCH, JobStatus.REPAIR_PROPOSED, now)
         return self.get_job(job_id)  # type: ignore[return-value]
 
     def list_scenarios(self, job_id: str) -> List[Dict]:

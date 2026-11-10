@@ -45,10 +45,12 @@ from job_schemas import (
     ProposalRequest,
     PullRequestCreateRequest,
     PullRequestResponse,
+    RejectionRequest,
     ScenarioResponse,
 )
-from job_store import JobNotFoundError, JobStore
+from job_store import JobNotFoundError, JobStore, ScenarioNotFoundError
 from proposal_pipeline import PipelineError, ProposalPipeline, proposal_pipeline_from_env
+from scenario_logic import repair_job_id, repair_state_for
 from github_client import (
     GitHubAPIError,
     GitHubAuthError,
@@ -180,6 +182,43 @@ def run_repair(store: JobStore, runner: RepairRunner, job_id: str) -> None:
         _mark_failed(store, job_id, f"{type(exc).__name__}: {exc}")
 
 
+def run_scenario_repair(store: JobStore, runner: RepairRunner, job_id: str, scenario_id: str) -> None:
+    """Background task: repair ONE approved scenario under the derived id <job_id>--<scenario_id>.
+    Never raises. The scenario is already `running` and the job `applying_patch` when this starts.
+    Whatever happens, the scenario ends in a final state and the job moves on (a failed repair does not fail the job)."""
+    repair_id = repair_job_id(job_id, scenario_id)
+    try:
+        scenario = store.get_scenario(job_id, scenario_id)
+        if scenario is None or scenario["review_status"] != "approved" or not scenario["approval"]:
+            raise RepairPreflightError("not_approved", "Scenario has no stored human approval.")
+        result = runner.run(repair_id, scenario["proposal"], RepairApproval(**scenario["approval"]))
+        store.add_artifacts(job_id, _repair_artifacts(result))
+        store.finish_scenario_repair(job_id, scenario_id, repair_state_for(result.outcome), result.model_dump())
+        logger.info("job %s scenario %s repair finished: %s", job_id, scenario_id, result.outcome)
+    except RepairPreflightError as exc:
+        if exc.code == "busy":
+            # Nothing ran (another repair held the lock). Put the scenario back so it can be tried again.
+            logger.warning("job %s scenario %s: repair runner busy, released", job_id, scenario_id)
+            try:
+                store.release_scenario_repair(job_id, scenario_id)
+            except Exception:  # noqa: BLE001
+                logger.exception("job %s scenario %s could not be released", job_id, scenario_id)
+            return
+        logger.error("job %s scenario %s repair refused: %s", job_id, scenario_id, exc)
+        _finish_scenario_error(store, job_id, scenario_id, repair_id, f"Repair refused ({exc.code}): {exc}")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("job %s scenario %s failed during repair", job_id, scenario_id)
+        _finish_scenario_error(store, job_id, scenario_id, repair_id, f"{type(exc).__name__}: {exc}")
+
+
+def _finish_scenario_error(store: JobStore, job_id: str, scenario_id: str, repair_id: str, message: str) -> None:
+    try:
+        error = RepairResult(outcome="error", passed=False, job_id=repair_id, message=message)
+        store.finish_scenario_repair(job_id, scenario_id, "error", error.model_dump())
+    except Exception:  # noqa: BLE001
+        logger.exception("job %s scenario %s could not be marked as errored", job_id, scenario_id)
+
+
 def _mark_failed(store: JobStore, job_id: str, message: str) -> None:
     try:
         store.update_status(job_id, JobStatus.FAILED, error=message)
@@ -306,6 +345,68 @@ def create_app(
         if scenario is None:
             raise HTTPException(status_code=404, detail="Scenario not found")
         return scenario
+
+    @router.post("/jobs/{job_id}/scenarios/{scenario_id}/approval", response_model=ScenarioResponse)
+    def approve_scenario(
+        job_id: str,
+        scenario_id: str,
+        request: ApprovalRequest,
+        x_operator_token: Optional[str] = Header(default=None),
+    ):
+        require_operator(x_operator_token)
+        if not request.reviewed_by.strip():
+            raise HTTPException(status_code=422, detail="reviewed_by must not be blank.")
+        try:
+            return store.approve_scenario(job_id, scenario_id, request.reviewed_by)
+        except JobNotFoundError:
+            raise HTTPException(status_code=404, detail="Job not found")
+        except ScenarioNotFoundError:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        except JobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @router.post("/jobs/{job_id}/scenarios/{scenario_id}/rejection", response_model=ScenarioResponse)
+    def reject_scenario(
+        job_id: str,
+        scenario_id: str,
+        request: RejectionRequest,
+        x_operator_token: Optional[str] = Header(default=None),
+    ):
+        require_operator(x_operator_token)
+        if not request.reviewed_by.strip() or not request.reason.strip():
+            raise HTTPException(status_code=422, detail="reviewed_by and reason must not be blank.")
+        try:
+            return store.reject_scenario(job_id, scenario_id, request.reviewed_by, request.reason)
+        except JobNotFoundError:
+            raise HTTPException(status_code=404, detail="Job not found")
+        except ScenarioNotFoundError:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        except JobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @router.post("/jobs/{job_id}/scenarios/{scenario_id}/repair", status_code=202, response_model=JobResponse)
+    def execute_scenario_repair(
+        job_id: str,
+        scenario_id: str,
+        background_tasks: BackgroundTasks,
+        x_operator_token: Optional[str] = Header(default=None),
+    ):
+        require_operator(x_operator_token)
+        if store.get_job(job_id) is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if store.get_scenario(job_id, scenario_id) is None:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        if repairer.is_busy():
+            raise HTTPException(status_code=409, detail="Another repair is running. Try again when it finishes.")
+        try:
+            # Moving the scenario to running and the job to applying_patch is the atomic claim.
+            claimed = store.claim_scenario_repair(job_id, scenario_id)
+        except (JobNotFoundError, ScenarioNotFoundError):
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        except JobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        background_tasks.add_task(run_scenario_repair, store, repairer, job_id, scenario_id)
+        return claimed
 
     # ------------------------------------------------------------ repair flow
     @router.post("/jobs/{job_id}/proposal", response_model=JobResponse)

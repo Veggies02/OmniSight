@@ -38,10 +38,12 @@ ALLOWED_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
         JobStatus.COMPLETED,
         JobStatus.FAILED,
     },
-    JobStatus.REPAIR_PROPOSED: {JobStatus.APPLYING_PATCH, JobStatus.NEEDS_REVIEW, JobStatus.FAILED},
+    # COMPLETED: contract v2, the last open scenario was rejected by a human.
+    JobStatus.REPAIR_PROPOSED: {JobStatus.APPLYING_PATCH, JobStatus.NEEDS_REVIEW, JobStatus.COMPLETED, JobStatus.FAILED},
     # The repair CLI runs patch, build, tests and visual checks as ONE process, so the backend
     # sees applying_patch until it ends and then moves straight to completed or failed.
-    JobStatus.APPLYING_PATCH: {JobStatus.VALIDATING, JobStatus.COMPLETED, JobStatus.FAILED},
+    # REPAIR_PROPOSED: contract v2, one scenario finished and others still wait for a decision or a repair.
+    JobStatus.APPLYING_PATCH: {JobStatus.VALIDATING, JobStatus.COMPLETED, JobStatus.REPAIR_PROPOSED, JobStatus.FAILED},
     JobStatus.VALIDATING: {JobStatus.PR_CREATED, JobStatus.NEEDS_REVIEW, JobStatus.FAILED},
     JobStatus.COMPLETED: {JobStatus.PR_CREATED},
     JobStatus.PR_CREATED: set(),
@@ -102,6 +104,11 @@ class ProposalRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     reviewed_by: str = Field(min_length=1, max_length=200)
+
+
+class RejectionRequest(BaseModel):
+    reviewed_by: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class PullRequestCreateRequest(BaseModel):

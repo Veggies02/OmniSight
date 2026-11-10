@@ -103,3 +103,18 @@ def outcome_for(scenarios: List[Dict[str, Any]]) -> Optional[str]:
     if passed >= 1:
         return "partial"
     return "all_failed"
+
+
+# How the repair CLI's result becomes the scenario's repair_state. A CLI that refuses the approval record
+# (outcome "rejected") is an error: repair_state "rejected" is reserved for a human rejecting the scenario.
+_STATE_FOR_OUTCOME = {
+    "passed": "passed",
+    "failed": "failed",
+    "unsupported": "unsupported",
+    "rejected": "error",
+    "error": "error",
+}
+
+
+def repair_state_for(outcome: str) -> str:
+    return _STATE_FOR_OUTCOME.get(outcome, "error")
