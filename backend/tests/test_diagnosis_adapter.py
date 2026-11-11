@@ -1,5 +1,5 @@
 import pytest
-from diagnosis_adapter import CATEGORY_MAP, adapt_cli_output, adapt_scenario
+from diagnosis_adapter import CATEGORY_MAP, adapt_cli_output, adapt_scenario, severity_for
 
 PY_CATEGORIES = {"mobile_button_clipping", "overlapping_text", "hidden_control", "incorrect_spacing", "modal_overflow", "other"}
 TS_CATEGORIES = {"image_distortion", "layout_breakage", "low_contrast", "responsive_overflow", "unknown"}
@@ -64,10 +64,16 @@ def test_defect_without_usable_finding_is_inconclusive():
     assert r["status"] == "inconclusive"
 
 
-def test_confidence_is_clamped_and_blanks_get_fallbacks():
-    r = adapt_scenario("s", response([finding(confidence=7, description=" ", evidence_reference="", target_selector=None)]))
+def test_confidence_is_clamped():
+    r = adapt_scenario("s", response([finding(confidence=7)]))
     assert_ts_valid(r)
     assert r["diagnosis"]["defects"][0]["confidence"] == 1.0
+
+
+def test_blank_optional_fields_get_labelled_fallbacks():
+    r = adapt_scenario("s", response([finding(evidence_reference="", target_selector=None, uncertainty_notes=" ")]))
+    assert_ts_valid(r)
+    assert r["status"] == "diagnosed"
 
 
 def test_mock_is_labelled():
@@ -112,3 +118,41 @@ def test_category_mismatch_is_recorded_in_limitations():
 def test_matching_category_has_no_mismatch_note():
     r = adapt_scenario("mobile-nav-overflow", response([finding()]))
     assert not any("Category mismatch" in s for s in r["diagnosis"]["limitations"])
+
+
+# ---- agreed with Ajay: severity rule, 'other' stays unsupported, nothing fabricated ----
+@pytest.mark.parametrize("confidence, review, expected", [
+    (0.95, True, "high"), (0.1, True, "high"), (0.71, False, "medium"), (0.7, False, "low"), (0.3, False, "low"), (1.0, False, "medium"),
+])
+def test_severity_rule(confidence, review, expected):
+    assert severity_for(confidence, review) == expected
+    r = adapt_scenario("s", response([finding(confidence=confidence, requires_human_review=review)]))
+    d = r["diagnosis"]["defects"][0]
+    assert d["severity"] == expected and d["confidence"] == confidence
+
+
+def test_human_review_flag_is_kept_in_the_limitations():
+    r = adapt_scenario("s", response([finding(requires_human_review=True)]))
+    assert any("human review" in s for s in r["diagnosis"]["limitations"])
+
+
+@pytest.mark.parametrize("scenario", ["product-image-distortion", "low-contrast-text"])
+def test_other_stays_unknown_whatever_the_scenario(scenario):
+    r = adapt_scenario(scenario, response([finding(defect_category="other")]))
+    assert r["diagnosis"]["defects"][0]["category"] == "unknown"  # never image_distortion / low_contrast
+
+
+@pytest.mark.parametrize("bad", [
+    {"description": " "}, {"description": None}, {"confidence": None}, {"confidence": "high"},
+    {"confidence": float("nan")}, {"defect_category": None}, {"defect_category": "made_up"},
+])
+def test_a_finding_missing_required_fields_is_never_actionable(bad):
+    r = adapt_scenario("s", response([finding(**bad)]))
+    assert_ts_valid(r)
+    assert r["status"] == "inconclusive" and r["diagnosis"]["defects"] == []
+    assert any("ignored" in s for s in r["diagnosis"]["limitations"])
+
+
+def test_one_bad_finding_does_not_hide_a_good_one():
+    r = adapt_scenario("s", response([finding(description=""), finding(description="Real defect")]))
+    assert r["status"] == "diagnosed" and len(r["diagnosis"]["defects"]) == 1

@@ -35,6 +35,21 @@ def inside(path: Path, root: Path) -> bool:
         return False
 
 
+def defective_screenshot(run_dir: Path, scenario_id: str, relative: str) -> Path:
+    """The one file the model may see for a scenario: <run>/<scenario>/defective.*, a plain file, never a link,
+    never a baseline or clean image. Anything else stops the run."""
+    raw = run_dir / relative.replace("\\", "/")
+    if raw.is_symlink() or not raw.is_file() or not inside(raw, run_dir):
+        die(f"defective screenshot for {scenario_id} is missing or is a link")
+    resolved = raw.resolve()
+    name = resolved.name.lower()
+    if not name.startswith("defective") or "baseline" in name or "clean" in name:
+        die(f"screenshot for {scenario_id} is not a defective image: {resolved.name}")
+    if resolved.parent.name != scenario_id or resolved.parent.parent != run_dir.resolve():
+        die(f"screenshot for {scenario_id} is not inside its own scenario folder")
+    return resolved
+
+
 def error_response(provider: str, message: str) -> dict:
     return {"has_defect": False, "findings": [], "provider": provider, "error": message}
 
@@ -60,17 +75,23 @@ def main() -> int:
         scenarios = meta["scenarios"]
     except (OSError, ValueError, KeyError) as exc:
         die(f"model_facing_evidence.json unusable: {exc}")
+    if not isinstance(scenarios, list) or not scenarios:
+        die("model_facing_evidence.json lists no scenarios")
+    seen = set()
+    for sc in scenarios:  # one entry per canonical scenario: a repeated id would be an alias counted twice
+        sid = sc.get("scenarioId") if isinstance(sc, dict) else None
+        if not valid_scenario_id(sid):
+            die(f"scenario id {sid!r} is not allowed")
+        if sid in seen:
+            die(f"scenario {sid} appears more than once")
+        seen.add(sid)
 
     responses, viewports = {}, {}
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     with tempfile.TemporaryDirectory() as tmp:
         for sc in scenarios:
-            sid = sc.get("scenarioId")
-            if not valid_scenario_id(sid):
-                die(f"scenario id {sid!r} is not allowed")
-            shot = (run_dir / str(sc.get("defectiveScreenshot", "")).replace("\\", "/")).resolve()
-            if not inside(shot, run_dir) or not shot.is_file():
-                die(f"defective screenshot for {sid} is missing")
+            sid = sc["scenarioId"]
+            shot = defective_screenshot(run_dir, sid, str(sc.get("defectiveScreenshot", "")))
             vp = sc.get("viewport") or {}
             width, height = int(vp.get("width", 1280)), int(vp.get("height", 720))
             viewports[sid] = {"width": width, "height": height}
@@ -104,6 +125,8 @@ def main() -> int:
                             raise ValueError("not an object")
                     except ValueError:
                         resp = error_response(args.provider, "AI engine output was not valid JSON")
+            if resp.get("error"):  # a non-null error is a failed scenario even when the exit code was 0
+                resp = error_response(str(resp.get("provider") or args.provider), str(resp["error"]))
             for finding in resp.get("findings") or []:
                 finding["evidence_reference"] = f"{sid}/defective.png"  # no local paths in the output
             responses[sid] = resp

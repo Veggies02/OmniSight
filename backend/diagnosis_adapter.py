@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 from scenario_logic import valid_scenario_id
 
 # Python engine category -> TypeScript category. The engine has no image_distortion or low_contrast yet.
+# 'other' stays 'unknown' on purpose: it must end up unsupported, never turned into an actionable category.
 CATEGORY_MAP = {
     "mobile_button_clipping": "responsive_overflow",
     "modal_overflow": "responsive_overflow",
@@ -30,22 +31,49 @@ def _text(value: Any, fallback: str) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else fallback
 
 
+def _real_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def severity_for(confidence: float, requires_human_review: bool) -> str:
+    """Agreed with Ajay: human review needed -> high; otherwise confidence above 0.7 -> medium; else low."""
+    if requires_human_review:
+        return "high"
+    return "medium" if confidence > 0.7 else "low"
+
+
+def _usable_confidence(value: Any) -> Optional[float]:
+    """The engine's own number, clamped to 0..1. None when it is missing: a confidence is never invented."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:  # NaN
+        return None
+    return min(1.0, max(0.0, number))
+
+
 def adapt_scenario(scenario_id: str, response: Dict[str, Any], viewport: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     error = response.get("error")
     provider = _text(response.get("provider"), "unknown")
     limitations = []
     defects = []
+    ignored = 0
     for f in response.get("findings") or []:
         if f.get("defect_category") == "none":
             continue
-        try:
-            confidence = min(1.0, max(0.0, float(f.get("confidence", 0.0))))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        description = _text(f.get("description"), "Defect reported without a description.")
+        confidence = _usable_confidence(f.get("confidence"))
+        # A finding missing what an approver needs is dropped, never filled in to look actionable.
+        if confidence is None or not _real_text(f.get("description")) or f.get("defect_category") not in CATEGORY_MAP:
+            ignored += 1
+            continue
+        description = f["description"].strip()
+        needs_review = bool(f.get("requires_human_review"))
         defects.append({
-            "category": CATEGORY_MAP.get(f.get("defect_category"), "unknown"),
-            "severity": "medium",
+            "category": CATEGORY_MAP[f["defect_category"]],
+            "severity": severity_for(confidence, needs_review),
             "confidence": confidence,
             "description": description,
             "evidence": [_text(f.get("evidence_reference"), _NOT_REPORTED)],
@@ -63,10 +91,15 @@ def adapt_scenario(scenario_id: str, response: Dict[str, Any], viewport: Optiona
                 f"'{defects[-1]['category']}'), but scenario '{scenario_id}' expects '{expected}'. "
                 "The patch is chosen by scenario id."
             )
-        if f.get("requires_human_review"):
+        if needs_review:
             limitations.append(f"The AI engine flagged this finding for human review: {description[:120]}")
+    if ignored:
+        limitations.append(f"{ignored} finding(s) from the AI engine were ignored because required fields were missing or invalid.")
     if defects:
-        limitations.append("The AI engine reports no severity; every defect is defaulted to 'medium'.")
+        limitations.append(
+            "The AI engine reports no severity; severity is derived: human-review flag -> high, "
+            "confidence above 0.7 -> medium, otherwise low."
+        )
     if response.get("is_mock"):
         limitations.append("Produced by a mock provider; not a real diagnosis.")
 
@@ -75,7 +108,7 @@ def adapt_scenario(scenario_id: str, response: Dict[str, Any], viewport: Optiona
     elif defects:
         status = "diagnosed"
         summary = defects[0]["description"] + (f" (+{len(defects) - 1} more finding(s))" if len(defects) > 1 else "")
-    elif response.get("has_defect"):
+    elif response.get("has_defect") or ignored:
         status, summary = "inconclusive", "The AI engine reported a defect but gave no usable finding."
     else:
         status, summary = "no_defect_detected", "No visual defect detected."
