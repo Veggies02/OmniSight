@@ -19,6 +19,7 @@ from scenario_logic import (
     describe_proposal,
     is_open,
     outcome_for,
+    proposal_is_actionable,
     repair_job_id,
     summarize,
     valid_scenario_id,
@@ -288,7 +289,7 @@ class JobStore:
                 raise ValueError(f"Scenario id {scenario_id!r} is not allowed (letters, digits, - and _ only; no --).")
             cleaned = clean_proposal(scenario_id, proposal)
             category, is_mock, diagnosis = describe_proposal(cleaned)
-            prepared.append((scenario_id, cleaned, category, is_mock, diagnosis))
+            prepared.append((scenario_id, cleaned, category, is_mock, diagnosis, proposal_is_actionable(cleaned)))
         now = utc_now()
         with self._connect() as db:
             row = db.execute("SELECT status, pipeline FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
@@ -296,20 +297,26 @@ class JobStore:
                 raise JobNotFoundError(job_id)
             if row["status"] != JobStatus.ANALYZING.value or row["pipeline"]:
                 raise JobStateError("Scenarios can only be added once, to a job that finished inspection (status analyzing).")
-            new_status = JobStatus.REPAIR_PROPOSED if prepared else JobStatus.COMPLETED
+            has_open = any(item[5] for item in prepared)  # a job with nothing actionable has nothing to wait for
+            new_status = JobStatus.REPAIR_PROPOSED if has_open else JobStatus.COMPLETED
             check_transition(JobStatus.ANALYZING, new_status)
-            for scenario_id, cleaned, category, is_mock, diagnosis in prepared:
+            for scenario_id, cleaned, category, is_mock, diagnosis, actionable in prepared:
                 db.execute(
                     """
                     INSERT INTO scenarios (job_id, scenario_id, defect_category, is_mock, diagnosis,
-                                           proposal, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                           proposal, review_status, repair_state, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (job_id, scenario_id, category, int(is_mock), json.dumps(diagnosis), json.dumps(cleaned), now, now),
+                    (
+                        job_id, scenario_id, category, int(is_mock), json.dumps(diagnosis), json.dumps(cleaned),
+                        "pending_review" if actionable else "not_applicable",
+                        "not_started" if actionable else "unsupported",
+                        now, now,
+                    ),
                 )
             db.execute(
                 "UPDATE jobs SET status = ?, stage = ?, pipeline = ?, updated_at = ? WHERE job_id = ?",
-                (new_status.value, "awaiting_approval" if prepared else "done", json.dumps(pipeline_info), now, job_id),
+                (new_status.value, "awaiting_approval" if has_open else "done", json.dumps(pipeline_info), now, job_id),
             )
         return self.get_job(job_id)  # type: ignore[return-value]
 
@@ -362,6 +369,8 @@ class JobStore:
             if status not in (JobStatus.REPAIR_PROPOSED, JobStatus.APPLYING_PATCH):
                 raise JobStateError("Scenarios can only be reviewed while the job is waiting for decisions or repairs.")
             row = self._scenario_row(db, job_id, scenario_id)
+            if row["review_status"] == "not_applicable":
+                raise JobStateError("This scenario has no supported repair, so it cannot be approved or rejected.")
             if row["review_status"] != "pending_review":
                 raise JobStateError(f"This scenario was already {row['review_status']}.")
             record = {"reviewed_by": reviewed_by.strip(), "reviewed_at": now}

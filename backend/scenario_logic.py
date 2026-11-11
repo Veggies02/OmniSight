@@ -42,6 +42,12 @@ def clean_proposal(scenario_id: str, proposal: Any) -> Dict[str, Any]:
     return cleaned
 
 
+def proposal_is_actionable(proposal: Dict[str, Any]) -> bool:
+    """Only a proposal the generator marked 'proposed' can be approved and repaired. Anything else
+    (unsupported_category, inconclusive, a missing status, ...) is review-only. Fail closed."""
+    return proposal.get("status") == "proposed"
+
+
 def describe_proposal(proposal: Dict[str, Any]) -> Tuple[Optional[str], bool, Dict[str, Any]]:
     """(defect_category, is_mock, diagnosis) read defensively from a generated proposal.
     Nothing is invented: a field that is not there stays None."""
@@ -89,6 +95,7 @@ def summarize(scenarios: List[Dict[str, Any]]) -> Dict[str, int]:
 
 def outcome_for(scenarios: List[Dict[str, Any]]) -> Optional[str]:
     """None while any scenario is open, then all_passed / partial / all_failed / all_rejected / no_repairs_needed."""
+    scenarios = [sc for sc in scenarios if sc["review_status"] != "not_applicable"]  # nothing to decide there
     if not scenarios:
         return "no_repairs_needed"
     if any(is_open(sc) for sc in scenarios):

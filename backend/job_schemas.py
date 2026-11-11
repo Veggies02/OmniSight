@@ -225,7 +225,7 @@ class ScenarioResponse(BaseModel):
     is_mock: bool = False
     diagnosis: Optional[Dict[str, Any]] = None
     proposal: Dict[str, Any]
-    review_status: Literal["pending_review", "approved", "rejected"] = "pending_review"
+    review_status: Literal["pending_review", "approved", "rejected", "not_applicable"] = "pending_review"
     approval: Optional[Dict[str, Any]] = None
     rejection: Optional[Dict[str, Any]] = None
     repair_state: Literal["not_started", "running", "passed", "failed", "rejected", "unsupported", "error"] = "not_started"

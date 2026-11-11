@@ -19,6 +19,7 @@ def proposal(scenario_id, **extra):
     base = {
         "proposalId": f"prop-{scenario_id}",
         "scenarioId": scenario_id,
+        "status": "proposed",
         "diagnosisRef": {"provider": "mock", "model": "mock-vlm-v1"},
     }
     base.update(extra)
