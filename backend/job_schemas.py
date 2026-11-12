@@ -104,6 +104,9 @@ class ProposalRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     reviewed_by: str = Field(min_length=1, max_length=200)
+    patch_digest_sha256: Optional[str] = Field(
+        default=None, max_length=200, description="Digest of the exact proposal the reviewer was shown"
+    )
 
 
 class RejectionRequest(BaseModel):
@@ -225,6 +228,9 @@ class ScenarioResponse(BaseModel):
     is_mock: bool = False
     diagnosis: Optional[Dict[str, Any]] = None
     proposal: Dict[str, Any]
+    proposal_digest: Optional[str] = Field(
+        default=None, description="Send this back as patch_digest_sha256 when approving this exact proposal"
+    )
     review_status: Literal["pending_review", "approved", "rejected", "not_applicable"] = "pending_review"
     approval: Optional[Dict[str, Any]] = None
     rejection: Optional[Dict[str, Any]] = None

@@ -52,6 +52,7 @@ from job_schemas import (
 )
 from job_store import JobNotFoundError, JobStore, ScenarioNotFoundError
 from proposal_pipeline import PipelineError, ProposalPipeline, proposal_pipeline_from_env
+from proposal_digest import DigestError, check_approval, proposal_digest
 from scenario_logic import repair_job_id, repair_state_for
 from branch_pusher import BranchPushError, BranchPusher
 from github_client import (
@@ -185,6 +186,11 @@ def run_repair(store: JobStore, runner: RepairRunner, job_id: str) -> None:
         _mark_failed(store, job_id, f"{type(exc).__name__}: {exc}")
 
 
+def _digest_required() -> bool:
+    """On unless OMNISIGHT_REQUIRE_APPROVAL_DIGEST is 0, false or no."""
+    return os.getenv("OMNISIGHT_REQUIRE_APPROVAL_DIGEST", "1").strip().lower() not in ("0", "false", "no")
+
+
 def run_scenario_repair(store: JobStore, runner: RepairRunner, job_id: str, scenario_id: str) -> None:
     """Background task: repair ONE approved scenario under the derived id <job_id>--<scenario_id>.
     Never raises. The scenario is already `running` and the job `applying_patch` when this starts.
@@ -194,7 +200,14 @@ def run_scenario_repair(store: JobStore, runner: RepairRunner, job_id: str, scen
         scenario = store.get_scenario(job_id, scenario_id)
         if scenario is None or scenario["review_status"] != "approved" or not scenario["approval"]:
             raise RepairPreflightError("not_approved", "Scenario has no stored human approval.")
-        result = runner.run(repair_id, scenario["proposal"], RepairApproval(**scenario["approval"]))
+        approval = scenario["approval"]
+        if approval.get("digest_verified"):
+            # The approval is bound to one exact proposal: refuse if what is stored now is not what was approved.
+            if approval.get("patch_digest_sha256") != proposal_digest(scenario["proposal"]):
+                raise RepairPreflightError("digest_mismatch", "The stored proposal no longer matches the digest that was approved.")
+        elif _digest_required():
+            raise RepairPreflightError("digest_missing", "This approval has no verified proposal digest. Approve it again.")
+        result = runner.run(repair_id, scenario["proposal"], RepairApproval(**approval))
         store.add_artifacts(job_id, _repair_artifacts(result))
         store.finish_scenario_repair(job_id, scenario_id, repair_state_for(result.outcome), result.model_dump())
         logger.info("job %s scenario %s repair finished: %s", job_id, scenario_id, result.outcome)
@@ -364,7 +377,24 @@ def create_app(
         if not request.reviewed_by.strip():
             raise HTTPException(status_code=422, detail="reviewed_by must not be blank.")
         try:
-            return store.approve_scenario(job_id, scenario_id, request.reviewed_by)
+            scenario = store.get_scenario(job_id, scenario_id)
+            if scenario is None:
+                raise HTTPException(status_code=404, detail="Scenario not found")
+            if scenario["review_status"] == "not_applicable":
+                raise HTTPException(
+                    status_code=409, detail="This scenario has no supported repair, so it cannot be approved or rejected."
+                )
+            if scenario["review_status"] != "pending_review":
+                raise HTTPException(status_code=409, detail=f"This scenario was already {scenario['review_status']}.")
+            run_id = ((store.get_job(job_id) or {}).get("inspection") or {}).get("run_id")
+            try:
+                binding = check_approval(
+                    scenario["proposal"], scenario_id, request.patch_digest_sha256, run_id, required=_digest_required()
+                )
+            except DigestError as exc:
+                logger.warning("job %s scenario %s approval refused: %s", job_id, scenario_id, exc)
+                raise HTTPException(status_code=exc.status, detail=str(exc))
+            return store.approve_scenario(job_id, scenario_id, request.reviewed_by, binding)
         except JobNotFoundError:
             raise HTTPException(status_code=404, detail="Job not found")
         except ScenarioNotFoundError:

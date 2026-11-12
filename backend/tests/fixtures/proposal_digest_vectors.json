@@ -1,0 +1,252 @@
+[
+ {
+  "name": "real_shape",
+  "proposal": {
+   "schemaVersion": "1.0",
+   "proposalId": "prop-real",
+   "scenarioId": "product-image-distortion",
+   "diagnosisRef": {
+    "diagnosisStatus": "diagnosed",
+    "model": "mock-vlm-v1",
+    "provider": "mock",
+    "primaryDefectCategory": "image_distortion",
+    "reportedConfidence": 0.94
+   },
+   "defectCategory": "image_distortion",
+   "severity": "medium",
+   "localization": {
+    "file": "src/index.css",
+    "selector": ".product-card img"
+   },
+   "suspectedRootCause": "object-fit missing",
+   "evidenceExplanation": "stretched",
+   "proposedCorrection": {
+    "patchId": "patch-product-image-distortion-001"
+   },
+   "expectedVisualImprovement": "natural ratio",
+   "confidence": "high",
+   "confidenceScore": 0.94,
+   "potentialRisks": [
+    "none"
+   ],
+   "requiredValidationTests": [
+    "npm test",
+    "npm run build"
+   ],
+   "humanReviewStatus": "pending_review",
+   "status": "proposed",
+   "createdAt": "2026-11-10T17:51:38.949Z",
+   "isMock": true
+  },
+  "payload": "{\"confidence\":\"high\",\"confidenceScore\":0.94,\"createdAt\":\"2026-11-10T17:51:38.949Z\",\"defectCategory\":\"image_distortion\",\"diagnosisRef\":{\"diagnosisStatus\":\"diagnosed\",\"model\":\"mock-vlm-v1\",\"primaryDefectCategory\":\"image_distortion\",\"provider\":\"mock\",\"reportedConfidence\":0.94},\"evidenceExplanation\":\"stretched\",\"expectedVisualImprovement\":\"natural ratio\",\"isMock\":true,\"localization\":{\"file\":\"src/index.css\",\"selector\":\".product-card img\"},\"potentialRisks\":[\"none\"],\"proposalId\":\"prop-real\",\"proposedCorrection\":{\"patchId\":\"patch-product-image-distortion-001\"},\"requiredValidationTests\":[\"npm test\",\"npm run build\"],\"scenarioId\":\"product-image-distortion\",\"schemaVersion\":\"1.0\",\"severity\":\"medium\",\"status\":\"proposed\",\"suspectedRootCause\":\"object-fit missing\"}",
+  "sha256": "005a024ad437f3bd8c7172dc398edb0ddd1f42c066817e352a5a54b15ec4b84e"
+ },
+ {
+  "name": "review_fields_are_ignored",
+  "proposal": {
+   "schemaVersion": "1.0",
+   "proposalId": "prop-real",
+   "scenarioId": "product-image-distortion",
+   "diagnosisRef": {
+    "diagnosisStatus": "diagnosed",
+    "model": "mock-vlm-v1",
+    "provider": "mock",
+    "primaryDefectCategory": "image_distortion",
+    "reportedConfidence": 0.94
+   },
+   "defectCategory": "image_distortion",
+   "severity": "medium",
+   "localization": {
+    "file": "src/index.css",
+    "selector": ".product-card img"
+   },
+   "suspectedRootCause": "object-fit missing",
+   "evidenceExplanation": "stretched",
+   "proposedCorrection": {
+    "patchId": "patch-product-image-distortion-001"
+   },
+   "expectedVisualImprovement": "natural ratio",
+   "confidence": "high",
+   "confidenceScore": 0.94,
+   "potentialRisks": [
+    "none"
+   ],
+   "requiredValidationTests": [
+    "npm test",
+    "npm run build"
+   ],
+   "humanReviewStatus": "approved",
+   "status": "proposed",
+   "createdAt": "2026-11-10T17:51:38.949Z",
+   "isMock": true,
+   "reviewedBy": "x",
+   "reviewedAt": "y",
+   "extra": "z"
+  },
+  "payload": "{\"confidence\":\"high\",\"confidenceScore\":0.94,\"createdAt\":\"2026-11-10T17:51:38.949Z\",\"defectCategory\":\"image_distortion\",\"diagnosisRef\":{\"diagnosisStatus\":\"diagnosed\",\"model\":\"mock-vlm-v1\",\"primaryDefectCategory\":\"image_distortion\",\"provider\":\"mock\",\"reportedConfidence\":0.94},\"evidenceExplanation\":\"stretched\",\"expectedVisualImprovement\":\"natural ratio\",\"isMock\":true,\"localization\":{\"file\":\"src/index.css\",\"selector\":\".product-card img\"},\"potentialRisks\":[\"none\"],\"proposalId\":\"prop-real\",\"proposedCorrection\":{\"patchId\":\"patch-product-image-distortion-001\"},\"requiredValidationTests\":[\"npm test\",\"npm run build\"],\"scenarioId\":\"product-image-distortion\",\"schemaVersion\":\"1.0\",\"severity\":\"medium\",\"status\":\"proposed\",\"suspectedRootCause\":\"object-fit missing\"}",
+  "sha256": "005a024ad437f3bd8c7172dc398edb0ddd1f42c066817e352a5a54b15ec4b84e"
+ },
+ {
+  "name": "key_order",
+  "proposal": {
+   "status": "proposed",
+   "proposalId": "p",
+   "scenarioId": "s",
+   "schemaVersion": "1.0"
+  },
+  "payload": "{\"proposalId\":\"p\",\"scenarioId\":\"s\",\"schemaVersion\":\"1.0\",\"status\":\"proposed\"}",
+  "sha256": "f03fb9b8965a47e8cd90dc4d41f9077a16d22f206d6a2877ff8678cc7d8f3ae1"
+ },
+ {
+  "name": "binding_fields",
+  "proposal": {
+   "schemaVersion": "1.0",
+   "proposalId": "prop-real",
+   "scenarioId": "product-image-distortion",
+   "diagnosisRef": {
+    "diagnosisStatus": "diagnosed",
+    "model": "mock-vlm-v1",
+    "provider": "mock",
+    "primaryDefectCategory": "image_distortion",
+    "reportedConfidence": 0.94
+   },
+   "defectCategory": "image_distortion",
+   "severity": "medium",
+   "localization": {
+    "file": "src/index.css",
+    "selector": ".product-card img"
+   },
+   "suspectedRootCause": "object-fit missing",
+   "evidenceExplanation": "stretched",
+   "proposedCorrection": {
+    "patchId": "patch-product-image-distortion-001"
+   },
+   "expectedVisualImprovement": "natural ratio",
+   "confidence": "high",
+   "confidenceScore": 0.94,
+   "potentialRisks": [
+    "none"
+   ],
+   "requiredValidationTests": [
+    "npm test",
+    "npm run build"
+   ],
+   "humanReviewStatus": "pending_review",
+   "status": "proposed",
+   "createdAt": "2026-11-10T17:51:38.949Z",
+   "isMock": true,
+   "runId": "run-1",
+   "attemptId": "attempt-1-a",
+   "registeredPatchId": "patch-product-image-distortion-001",
+   "diagnosisManifestPath": "artifacts/x/diagnoses-manifest.json"
+  },
+  "payload": "{\"attemptId\":\"attempt-1-a\",\"confidence\":\"high\",\"confidenceScore\":0.94,\"createdAt\":\"2026-11-10T17:51:38.949Z\",\"defectCategory\":\"image_distortion\",\"diagnosisManifestPath\":\"artifacts/x/diagnoses-manifest.json\",\"diagnosisRef\":{\"diagnosisStatus\":\"diagnosed\",\"model\":\"mock-vlm-v1\",\"primaryDefectCategory\":\"image_distortion\",\"provider\":\"mock\",\"reportedConfidence\":0.94},\"evidenceExplanation\":\"stretched\",\"expectedVisualImprovement\":\"natural ratio\",\"isMock\":true,\"localization\":{\"file\":\"src/index.css\",\"selector\":\".product-card img\"},\"potentialRisks\":[\"none\"],\"proposalId\":\"prop-real\",\"proposedCorrection\":{\"patchId\":\"patch-product-image-distortion-001\"},\"registeredPatchId\":\"patch-product-image-distortion-001\",\"requiredValidationTests\":[\"npm test\",\"npm run build\"],\"runId\":\"run-1\",\"scenarioId\":\"product-image-distortion\",\"schemaVersion\":\"1.0\",\"severity\":\"medium\",\"status\":\"proposed\",\"suspectedRootCause\":\"object-fit missing\"}",
+  "sha256": "896288c5165f90b9a015fc48bf055176f90da4f53dae25978982ea2b5cbb31c8"
+ },
+ {
+  "name": "unicode",
+  "proposal": {
+   "proposalId": "p",
+   "suspectedRootCause": "é ü 日本語 😀     ",
+   "evidenceExplanation": "tab\there\nnew \"q\" \\ back \u0001 \u001f"
+  },
+  "payload": "{\"evidenceExplanation\":\"tab\\there\\nnew \\\"q\\\" \\\\ back \\u0001 \\u001f\",\"proposalId\":\"p\",\"suspectedRootCause\":\"é ü 日本語 😀     \"}",
+  "sha256": "3dd1149c4b2a04d57862381f2ca7305025867d911e585643fede74bd9cbeed24"
+ },
+ {
+  "name": "astral_vs_bmp_key_order",
+  "proposal": {
+   "proposalId": "p",
+   "diagnosisRef": {
+    "9": 7,
+    "10": 6,
+    "😀": 1,
+    "￿": 2,
+    "": 3,
+    "a": 4,
+    "B": 5
+   }
+  },
+  "payload": "{\"diagnosisRef\":{\"10\":6,\"9\":7,\"B\":5,\"a\":4,\"😀\":1,\"\":3,\"￿\":2},\"proposalId\":\"p\"}",
+  "sha256": "fa1f64efd4cd0b25c63adb23ada1dac45720134f485dc0d8b9e662199340907e"
+ },
+ {
+  "name": "numbers",
+  "proposal": {
+   "proposalId": "p",
+   "potentialRisks": [
+    0,
+    0,
+    1,
+    1,
+    -1,
+    0.1,
+    0.5,
+    1e+21,
+    100000000000000000000,
+    0.000001,
+    1e-7,
+    1.5e-7,
+    123456789012345680000,
+    0.30000000000000004,
+    0.3333333333333333,
+    9007199254740992,
+    9007199254740992,
+    12345678901234567000,
+    5e-324,
+    1.7976931348623157e+308,
+    100,
+    100,
+    0.000001,
+    123.456,
+    -0.000001234,
+    4.35,
+    0.07
+   ],
+   "confidenceScore": 0.94
+  },
+  "payload": "{\"confidenceScore\":0.94,\"potentialRisks\":[0,0,1,1,-1,0.1,0.5,1e+21,100000000000000000000,0.000001,1e-7,1.5e-7,123456789012345680000,0.30000000000000004,0.3333333333333333,9007199254740992,9007199254740992,12345678901234567000,5e-324,1.7976931348623157e+308,100,100,0.000001,123.456,-0.000001234,4.35,0.07],\"proposalId\":\"p\"}",
+  "sha256": "b0626257cc59d3b1ca6ae115dd308346569f245d850eb8030256a5367b0b5a57"
+ },
+ {
+  "name": "nested_empty_and_null",
+  "proposal": {
+   "proposalId": "p",
+   "localization": {},
+   "potentialRisks": [],
+   "diagnosisRef": null,
+   "isMock": false,
+   "severity": null,
+   "confidence": [
+    [],
+    [
+     []
+    ],
+    {
+     "a": [
+      {}
+     ]
+    }
+   ]
+  },
+  "payload": "{\"confidence\":[[],[[]],{\"a\":[{}]}],\"diagnosisRef\":null,\"isMock\":false,\"localization\":{},\"potentialRisks\":[],\"proposalId\":\"p\",\"severity\":null}",
+  "sha256": "0cec64d74beeb709aa4713c0cdc8de808eb65eee3c18ad37e2ebcd157d2a5c48"
+ },
+ {
+  "name": "lone_surrogate",
+  "proposal": {
+   "proposalId": "p\ud800x",
+   "suspectedRootCause": "\udc00"
+  },
+  "payload": "{\"proposalId\":\"p\\ud800x\",\"suspectedRootCause\":\"\\udc00\"}",
+  "sha256": "cd1c6fd5519c16100b32af4d7eb05e6d1c59e6db19cf6f27b160ee0e428bbcea"
+ },
+ {
+  "name": "missing_fields",
+  "proposal": {
+   "proposalId": "only"
+  },
+  "payload": "{\"proposalId\":\"only\"}",
+  "sha256": "05ae36167645aabec7ffe8a9ca63af34d774fda5bcb192a899aff18fab67d1e5"
+ }
+]

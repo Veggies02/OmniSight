@@ -44,6 +44,9 @@ class RepairApproval(BaseModel):
 
     reviewed_by: str = Field(min_length=1, max_length=200)
     reviewed_at: str = Field(min_length=1, max_length=64, description="ISO 8601 timestamp")
+    patch_digest_sha256: Optional[str] = Field(
+        default=None, max_length=64, description="Digest of the exact proposal that was approved (verified by the backend)"
+    )
 
 
 class RepairResult(BaseModel):
@@ -207,6 +210,9 @@ class RepairRunner:
             approved["humanReviewStatus"] = "approved"
             approved["reviewedBy"] = approval.reviewed_by
             approved["reviewedAt"] = approval.reviewed_at
+            if approval.patch_digest_sha256:  # verified by the backend against the stored proposal
+                approved["proposalDigest"] = approval.patch_digest_sha256
+                approved["approvalDigest"] = approval.patch_digest_sha256
             job_dir = self.job_dir(job_id)
             job_dir.mkdir(parents=True)
             proposal_file = job_dir / "proposal.json"

@@ -50,10 +50,11 @@ def setup(tmp_path):
     return repo, run_dir, engine
 
 
-def run_wrapper(repo, engine, run_id="run-t1", **extra_env):
+def run_wrapper(repo, engine, run_id="run-t1", extra_args=(), **extra_env):
     env = {k: v for k, v in os.environ.items() if k not in ("FAIL_SCENARIO", "FAKE_GARBAGE", "ERROR_WITH_EXIT_ZERO")}
+    env["OMNISIGHT_EXPECTED_SCENARIOS"] = ",".join(SCENARIOS)  # the fixture has two scenarios, not the canonical four
     env.update(OMNISIGHT_REPO_ROOT=str(repo), OMNISIGHT_AI_ENGINE_DIR=str(engine), **extra_env)
-    return subprocess.run([sys.executable, str(WRAPPER), "--run-id", run_id, "--provider", "mock"],
+    return subprocess.run([sys.executable, str(WRAPPER), "--run-id", run_id, "--provider", "mock", *extra_args],
                           capture_output=True, text=True, env=env, timeout=60)
 
 
@@ -155,3 +156,74 @@ def test_an_empty_scenario_list_is_refused(setup):
     repo, run_dir, engine = setup
     set_meta(run_dir, lambda m: m.update(scenarios=[]))
     assert run_wrapper(repo, engine).returncode == 2
+
+
+# ---- provenance and publication, in the shape scripts/vlm/diagnosis-manifest.ts validates ----
+def test_the_manifest_and_attempt_state_carry_the_lock_attempt_id(setup):
+    repo, run_dir, engine = setup
+    proc = run_wrapper(repo, engine, extra_args=["--attempt-id", "attempt-123-abc-def"])
+    assert proc.returncode == 0, proc.stderr
+    diag = run_dir / "diagnoses"
+    manifest = json.loads((diag / "diagnoses-manifest.json").read_text())
+    state = json.loads((diag / "diagnosis-attempt.json").read_text())
+    assert manifest["attemptId"] == "attempt-123-abc-def" and manifest["runId"] == "run-t1"
+    assert manifest["status"] == "completed" and manifest["scenarioAliases"] == []
+    assert manifest["outputArtifactsDirectory"] == str(diag)
+    assert state["runId"] == "run-t1" and state["attemptId"] == manifest["attemptId"] and state["status"] == "completed"
+    assert state["manifestPath"] == str(diag / "diagnoses-manifest.json")
+
+
+def test_without_a_lock_id_one_is_generated_in_the_lock_format(setup):
+    import re
+    repo, run_dir, engine = setup
+    assert run_wrapper(repo, engine).returncode == 0
+    manifest = json.loads((run_dir / "diagnoses" / "diagnoses-manifest.json").read_text())
+    assert re.match(r"^attempt-[A-Za-z0-9-]+$", manifest["attemptId"])
+
+
+@pytest.mark.parametrize("bad", ["123", "attempt-", "attempt-../x", "attempt-a b", "ATTEMPT-1"])
+def test_a_malformed_attempt_id_is_refused(setup, bad):
+    repo, run_dir, engine = setup
+    assert run_wrapper(repo, engine, extra_args=["--attempt-id", bad]).returncode == 2
+    assert not (run_dir / "diagnoses").exists()
+
+
+def test_publication_leaves_no_staging_folder_and_replaces_an_older_result(setup):
+    repo, run_dir, engine = setup
+    (run_dir / "diagnoses").mkdir()
+    (run_dir / "diagnoses" / "old.json").write_text("{}")
+    assert run_wrapper(repo, engine).returncode == 0
+    assert not (run_dir / "diagnoses" / "old.json").exists()
+    assert [p.name for p in run_dir.iterdir() if p.name.startswith(".diagnoses")] == []
+
+
+def test_a_failed_run_keeps_the_previous_result_and_leaves_nothing_behind(setup):
+    repo, run_dir, engine = setup
+    (run_dir / "diagnoses").mkdir()
+    (run_dir / "diagnoses" / "old.json").write_text("{}")
+    assert run_wrapper(repo, engine, FAIL_SCENARIO="product-image-distortion").returncode == 1
+    assert (run_dir / "diagnoses" / "old.json").exists()
+    assert [p.name for p in run_dir.iterdir() if p.name.startswith(".diagnoses")] == []
+
+
+def test_a_missing_canonical_scenario_fails_the_run(setup):
+    repo, run_dir, engine = setup
+    proc = run_wrapper(repo, engine, OMNISIGHT_EXPECTED_SCENARIOS=",".join(SCENARIOS + ["low-contrast-text"]))
+    assert proc.returncode == 2 and "missing" in proc.stderr
+    assert not (run_dir / "diagnoses").exists()
+
+
+def test_an_aliased_or_unknown_scenario_is_refused_not_guessed(setup):
+    repo, run_dir, engine = setup
+    proc = run_wrapper(repo, engine, OMNISIGHT_EXPECTED_SCENARIOS="mobile-nav-overflow")
+    assert proc.returncode == 2 and "product-image-distortion" in proc.stderr
+    assert not (run_dir / "diagnoses").exists()
+
+
+def test_the_default_expected_set_is_the_four_registry_scenarios(setup):
+    repo, run_dir, engine = setup
+    env = {k: v for k, v in os.environ.items() if k != "OMNISIGHT_EXPECTED_SCENARIOS"}
+    env.update(OMNISIGHT_REPO_ROOT=str(repo), OMNISIGHT_AI_ENGINE_DIR=str(engine))
+    proc = subprocess.run([sys.executable, str(WRAPPER), "--run-id", "run-t1", "--provider", "mock"],
+                          capture_output=True, text=True, env=env, timeout=60)
+    assert proc.returncode == 2 and "low-contrast-text" in proc.stderr and "product-card-layout-break" in proc.stderr

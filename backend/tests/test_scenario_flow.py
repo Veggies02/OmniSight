@@ -47,8 +47,14 @@ def new_job(client):
     return job_id
 
 
-def approve(client, job_id, sid, by="qa@omnisight.ai"):
-    return client.post(f"/jobs/{job_id}/scenarios/{sid}/approval", json={"reviewed_by": by}, headers=HEADERS)
+def approve(client, job_id, sid, by="qa@omnisight.ai", digest="auto"):
+    """Approves the proposal exactly as the API shows it: the digest is echoed from the scenario."""
+    body = {"reviewed_by": by}
+    if digest == "auto":
+        body["patch_digest_sha256"] = client.get(f"/jobs/{job_id}/scenarios/{sid}").json().get("proposal_digest")
+    elif digest is not None:
+        body["patch_digest_sha256"] = digest
+    return client.post(f"/jobs/{job_id}/scenarios/{sid}/approval", json=body, headers=HEADERS)
 
 
 def reject(client, job_id, sid, reason="not a real defect", by="qa@omnisight.ai"):
@@ -86,7 +92,11 @@ def test_the_server_sets_the_approval_time_not_the_caller(client):
     job_id = new_job(client)
     r = client.post(
         f"/jobs/{job_id}/scenarios/{A}/approval",
-        json={"reviewed_by": "qa", "reviewed_at": "1999-01-01T00:00:00Z"}, headers=HEADERS,
+        json={
+            "reviewed_by": "qa", "reviewed_at": "1999-01-01T00:00:00Z",
+            "patch_digest_sha256": client.get(f"/jobs/{job_id}/scenarios/{A}").json()["proposal_digest"],
+        },
+        headers=HEADERS,
     )
     assert r.status_code == 200 and not r.json()["approval"]["reviewed_at"].startswith("1999")
 

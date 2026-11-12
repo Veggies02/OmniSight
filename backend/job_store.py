@@ -14,6 +14,7 @@ from job_schemas import (
     JobStatus,
     check_transition,
 )
+from proposal_digest import proposal_digest
 from scenario_logic import (
     clean_proposal,
     describe_proposal,
@@ -348,10 +349,10 @@ class JobStore:
             (target.value, stage, now, job_id),
         )
 
-    def approve_scenario(self, job_id: str, scenario_id: str, reviewed_by: str) -> Dict:
+    def approve_scenario(self, job_id: str, scenario_id: str, reviewed_by: str, binding: Optional[Dict] = None) -> Dict:
         """Record who approved THIS scenario, with a server-side timestamp. Once per scenario. Approving one
         scenario never approves another. The job status does not change: repairing is a separate action."""
-        return self._review_scenario(job_id, scenario_id, "approved", reviewed_by, None)
+        return self._review_scenario(job_id, scenario_id, "approved", reviewed_by, None, binding)
 
     def reject_scenario(self, job_id: str, scenario_id: str, reviewed_by: str, reason: str) -> Dict:
         """A human rejects THIS scenario (its repair_state becomes rejected). Once per scenario. If it was the last
@@ -359,7 +360,8 @@ class JobStore:
         return self._review_scenario(job_id, scenario_id, "rejected", reviewed_by, reason)
 
     def _review_scenario(
-        self, job_id: str, scenario_id: str, decision: str, reviewed_by: str, reason: Optional[str]
+        self, job_id: str, scenario_id: str, decision: str, reviewed_by: str, reason: Optional[str],
+        binding: Optional[Dict] = None,
     ) -> Dict:
         now = utc_now()
         with self._connect() as db:
@@ -375,6 +377,7 @@ class JobStore:
                 raise JobStateError(f"This scenario was already {row['review_status']}.")
             record = {"reviewed_by": reviewed_by.strip(), "reviewed_at": now}
             if decision == "approved":
+                record.update(binding or {})  # the verified digest and what it is bound to
                 db.execute(
                     "UPDATE scenarios SET review_status = 'approved', approval = ?, updated_at = ? "
                     "WHERE job_id = ? AND scenario_id = ?",
@@ -525,6 +528,7 @@ class JobStore:
                 "is_mock": bool(r["is_mock"]),
                 "diagnosis": _loads(r["diagnosis"]),
                 "proposal": _loads(r["proposal"]),
+                "proposal_digest": proposal_digest(_loads(r["proposal"]) or {}),
                 "review_status": r["review_status"],
                 "approval": _loads(r["approval"]),
                 "rejection": _loads(r["rejection"]),
