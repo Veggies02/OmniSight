@@ -14,6 +14,8 @@ import {
 } from '../scripts/repair/patch-registry';
 import { computeFileHash } from '../scripts/vlm/source-path-security';
 import { runRepairJob } from '../scripts/run-repair-job';
+import crypto from 'crypto';
+import { proposalDigestPayload } from '../scripts/vlm/proposal-digest';
 
 const execFileAsync = promisify(execFile);
 
@@ -750,6 +752,10 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
     const fakeProposal: any = {
       schemaVersion: '1.0',
       proposalId: 'prop-unsupported-test',
+      runId: `run-unsupported-${crypto.randomUUID()}`,
+      attemptId: `attempt-unsupported-${crypto.randomUUID()}`,
+      diagnosisManifestPath: '',
+      registeredPatchId: null,
       scenarioId: 'unsupported-feature-break',
       diagnosisRef: {
         diagnosisStatus: 'diagnosed',
@@ -794,6 +800,25 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
       createdAt: new Date().toISOString(),
       isMock: true,
     };
+    const diagnosisDir = path.join(repoRoot, 'artifacts', 'visual-evidence', fakeProposal.runId, 'diagnoses');
+    const diagnosisManifestPath = path.join(diagnosisDir, 'diagnoses-manifest.json');
+    fakeProposal.diagnosisManifestPath = path.relative(repoRoot, diagnosisManifestPath);
+    const fakeDiagnosis = {
+      schema_version: '1.0', status: 'diagnosed', summary: 'Unsupported test case', limitations: [],
+      defects: [{ category: 'unknown', severity: 'medium', confidence: 0.9, description: 'Unknown', evidence: ['No mapping'], affected_element: { description: 'Unknown' }, suspected_cause: 'Unknown', suggested_fix: 'Manual review' }],
+    };
+    fs.mkdirSync(diagnosisDir, { recursive: true });
+    fs.writeFileSync(diagnosisManifestPath, JSON.stringify({
+      runId: fakeProposal.runId, attemptId: fakeProposal.attemptId, status: 'completed', timestamp: new Date().toISOString(),
+      provider: 'mock', model: 'mock', scenariosDiagnosed: 1, totalScenarios: 1,
+      results: { [fakeProposal.scenarioId]: { scenarioId: fakeProposal.scenarioId, status: 'diagnosed', diagnosis: fakeDiagnosis, model: 'mock', provider: 'mock' } },
+      scenarioAliases: [], outputArtifactsDirectory: diagnosisDir,
+    }));
+    fs.writeFileSync(path.join(diagnosisDir, 'diagnosis-attempt.json'), JSON.stringify({
+      runId: fakeProposal.runId, attemptId: fakeProposal.attemptId, status: 'completed', manifestPath: path.resolve(diagnosisManifestPath),
+    }));
+    fakeProposal.proposalDigest = crypto.createHash('sha256').update(proposalDigestPayload(fakeProposal)).digest('hex');
+    fakeProposal.approvalDigest = fakeProposal.proposalDigest;
     fs.writeFileSync(fakeProposalPath, JSON.stringify(fakeProposal, null, 2), 'utf-8');
 
     const jobId = `job-unsupported-${Date.now()}`;
@@ -818,6 +843,7 @@ test.describe('Step 4.6 — Isolated Patch Application & Validation Pipeline', (
 
     // Cleanup fake proposal file
     fs.rmSync(fakeProposalDir, { recursive: true, force: true });
+    fs.rmSync(path.dirname(diagnosisDir), { recursive: true, force: true });
   });
 
   test('v2 Workflow: Validated repair creates Git commit, preserves local branch, and outputs metadata', async () => {

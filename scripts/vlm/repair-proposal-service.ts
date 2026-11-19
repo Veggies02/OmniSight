@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { type DefectCategory, type DetectedDefect, type DiagnosisResult } from "./diagnosis-schema";
 import {
   type ProposedCodeCorrection,
@@ -15,14 +16,25 @@ import {
   verifySourceHashFreshness,
 } from "./source-path-security";
 import { resolveAuthoritativePatch } from "../repair/patch-registry";
+import { readCurrentDiagnosisManifest } from "./diagnosis-manifest";
+import { proposalDigestPayload } from "./proposal-digest";
+import { acquireDiagnosisLock } from "./diagnosis-attempt-lock";
 
 export interface RepairProposalServiceOptions {
   projectRoot?: string;
   isMock?: boolean;
 }
 
+export interface ProposalSourceProvenance {
+  runId: string;
+  attemptId: string;
+  diagnosisManifestPath: string;
+}
+
 export interface ProposalRunManifest {
   runId: string;
+  attemptId: string;
+  status: "completed";
   timestamp: string;
   diagnosisSourceFile: string;
   totalDiagnosesProcessed: number;
@@ -50,7 +62,20 @@ export class RepairProposalService {
   /**
    * Generates a repair proposal for a single diagnosed scenario.
    */
-  public generateProposal(diagnosisResult: DiagnosisResult): RepairProposal {
+  public generateProposal(diagnosisResult: DiagnosisResult, provenance: ProposalSourceProvenance): RepairProposal {
+    if (!provenance?.runId || !provenance.attemptId || !provenance.diagnosisManifestPath) {
+      throw new Error("Proposal generation requires complete diagnosis source provenance.");
+    }
+    const proposal = this.buildProposal(diagnosisResult);
+    proposal.runId = provenance.runId;
+    proposal.attemptId = provenance.attemptId;
+    proposal.diagnosisManifestPath = provenance.diagnosisManifestPath;
+    proposal.registeredPatchId = resolveAuthoritativePatch(diagnosisResult.scenarioId, proposal.defectCategory).patch?.patchId || null;
+    proposal.proposalDigest = crypto.createHash("sha256").update(proposalDigestPayload(proposal)).digest("hex");
+    return proposal;
+  }
+
+  private buildProposal(diagnosisResult: DiagnosisResult): RepairProposal {
     const proposalId = `prop_${diagnosisResult.scenarioId}_${Date.now()}`;
     const diag = diagnosisResult.diagnosis;
     const createdAt = new Date().toISOString();
@@ -446,17 +471,24 @@ export class RepairProposalService {
    */
   public generateProposalsForRun(
     diagnosisManifestPath: string,
-    outputDirectory?: string
+    outputDirectory?: string,
+    expectedRunId?: string
   ): ProposalRunManifest {
     if (!fs.existsSync(diagnosisManifestPath)) {
       throw new Error(`Diagnosis manifest not found: '${diagnosisManifestPath}'.`);
     }
 
-    const diagData = JSON.parse(fs.readFileSync(diagnosisManifestPath, "utf8"));
-    const runId = diagData.runId || "unknown_run";
+    const resolvedDiagnosisManifestPath = path.resolve(diagnosisManifestPath);
+    const diagnosisLock = acquireDiagnosisLock(path.dirname(resolvedDiagnosisManifestPath));
+    try {
+    const diagData = readCurrentDiagnosisManifest(resolvedDiagnosisManifestPath, expectedRunId);
+    const runId = diagData.runId;
+    const attemptId = diagData.attemptId;
     const outDir = outputDirectory || path.resolve(this.projectRoot, "artifacts/repair-proposals", runId);
-
-    fs.mkdirSync(outDir, { recursive: true });
+    const resolvedOutDir = path.resolve(outDir);
+    const attemptOutDir = path.join(resolvedOutDir, "attempts", attemptId);
+    if (fs.existsSync(attemptOutDir)) throw new Error(`Proposal artifacts already exist for attempt '${attemptId}'.`);
+    fs.mkdirSync(attemptOutDir, { recursive: true });
 
     const results: Record<string, RepairProposal> = {};
     const localizations: Record<string, SourceLocalizationResult> = {};
@@ -466,7 +498,11 @@ export class RepairProposalService {
     const diagnosesMap = diagData.results || {};
 
     for (const [scenarioKey, diagResult] of Object.entries<DiagnosisResult>(diagnosesMap)) {
-      const proposal = this.generateProposal(diagResult);
+      const proposal = this.generateProposal(diagResult, {
+        runId,
+        attemptId,
+        diagnosisManifestPath: path.relative(this.projectRoot, resolvedDiagnosisManifestPath),
+      });
       results[scenarioKey] = proposal;
       localizations[scenarioKey] = proposal.localization;
 
@@ -479,6 +515,8 @@ export class RepairProposalService {
 
     const runManifest: ProposalRunManifest = {
       runId,
+      attemptId,
+      status: "completed",
       timestamp: new Date().toISOString(),
       diagnosisSourceFile: diagnosisManifestPath,
       totalDiagnosesProcessed: Object.keys(diagnosesMap).length,
@@ -488,20 +526,28 @@ export class RepairProposalService {
       outputDirectory: outDir,
     };
 
-    // Write repair_proposals.json
-    fs.writeFileSync(path.join(outDir, "repair_proposals.json"), JSON.stringify(results, null, 2), "utf8");
-
-    // Write source_localization.json
-    fs.writeFileSync(path.join(outDir, "source_localization.json"), JSON.stringify(localizations, null, 2), "utf8");
-
-    // Write summary report markdown
+    const proposalBundle = { runId, attemptId, status: "completed", results };
+    fs.writeFileSync(path.join(attemptOutDir, "repair_proposals.json"), JSON.stringify(proposalBundle, null, 2), "utf8");
+    fs.writeFileSync(path.join(attemptOutDir, "source_localization.json"), JSON.stringify(localizations, null, 2), "utf8");
     const summaryMd = this.generateSummaryMarkdown(runManifest);
-    fs.writeFileSync(path.join(outDir, "repair_proposal_summary.md"), summaryMd, "utf8");
+    fs.writeFileSync(path.join(attemptOutDir, "repair_proposal_summary.md"), summaryMd, "utf8");
+    fs.writeFileSync(path.join(attemptOutDir, "manifest.json"), JSON.stringify(runManifest, null, 2), "utf8");
 
-    // Write full run manifest
-    fs.writeFileSync(path.join(outDir, "manifest.json"), JSON.stringify(runManifest, null, 2), "utf8");
+    // Publish the complete immutable attempt bundle first, then replace the canonical
+    // proposal bundle last as the atomic visibility marker consumed by repair execution.
+    diagnosisLock.assertOwned();
+    const latestDiagnosis = readCurrentDiagnosisManifest(resolvedDiagnosisManifestPath, runId);
+    if (latestDiagnosis.attemptId !== attemptId) throw new Error("Diagnosis attempt changed before proposal publication.");
+    fs.mkdirSync(resolvedOutDir, { recursive: true });
+    writeAtomic(path.join(resolvedOutDir, "source_localization.json"), fs.readFileSync(path.join(attemptOutDir, "source_localization.json")));
+    writeAtomic(path.join(resolvedOutDir, "repair_proposal_summary.md"), fs.readFileSync(path.join(attemptOutDir, "repair_proposal_summary.md")));
+    writeAtomic(path.join(resolvedOutDir, "manifest.json"), fs.readFileSync(path.join(attemptOutDir, "manifest.json")));
+    writeAtomic(path.join(resolvedOutDir, "repair_proposals.json"), fs.readFileSync(path.join(attemptOutDir, "repair_proposals.json")));
 
     return runManifest;
+    } finally {
+      diagnosisLock.release();
+    }
   }
 
   private generateSummaryMarkdown(manifest: ProposalRunManifest): string {
@@ -541,4 +587,10 @@ export class RepairProposalService {
 
     return lines.join("\n");
   }
+}
+
+function writeAtomic(targetPath: string, content: string | Buffer): void {
+  const tempPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(tempPath, content, { flag: "wx" });
+  fs.renameSync(tempPath, targetPath);
 }

@@ -77,7 +77,7 @@ async function main() {
 
   try {
     const service = new RepairProposalService({ isMock: true });
-    const runManifest = service.generateProposalsForRun(diagnosisManifestPath, outputDirectory);
+    const runManifest = service.generateProposalsForRun(diagnosisManifestPath, outputDirectory, runId);
 
     console.log("\nRepair Proposal Generation Completed Successfully!");
     console.log(`- Run ID: ${runManifest.runId}`);

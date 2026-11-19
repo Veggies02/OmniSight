@@ -3,6 +3,7 @@ import {
   type ReviewProposalItem,
   type ClientRepairJobResult,
 } from "../types/review-types";
+import { proposalDigestPayload } from "../../scripts/vlm/proposal-digest";
 import { INITIAL_REVIEW_PROPOSALS } from "../data/mockProposals";
 import {
   backendRepairClient,
@@ -16,6 +17,7 @@ const DECISIONS_STORAGE_KEY = "omnisight:review-decisions";
 export interface IReviewRepository {
   getAllProposals(): Promise<ReviewProposalItem[]>;
   getProposalById(id: string): Promise<ReviewProposalItem | null>;
+  upsertProposal(proposal: ReviewProposalItem): Promise<void>;
   approveProposal(id: string, reviewer?: string): Promise<ReviewProposalItem>;
   rejectProposal(id: string, reason: string, reviewer?: string): Promise<ReviewProposalItem>;
   resetDecisions(): Promise<void>;
@@ -99,9 +101,59 @@ export class LocalStorageReviewRepository implements IReviewRepository {
     return this.getStoredProposals();
   }
 
+  public async upsertProposal(proposal: ReviewProposalItem): Promise<void> {
+    const list = this.getStoredProposals();
+    const index = list.findIndex(
+      (p) => p.proposalId === proposal.proposalId || p.scenarioId === proposal.scenarioId
+    );
+    if (index >= 0) {
+      list[index] = proposal;
+    } else {
+      list.unshift(proposal);
+    }
+    this.saveProposals(list);
+  }
+
   public async getProposalById(id: string): Promise<ReviewProposalItem | null> {
     const list = this.getStoredProposals();
-    return list.find((p) => p.proposalId === id || p.scenarioId === id) || null;
+    const item = list.find((p) => p.proposalId === id || p.scenarioId === id);
+    if (!item) return null;
+
+    // Attempt dynamic enhancement from backend if an active job ID is associated
+    try {
+      const associatedJobId = (item as any).backendJobId || (item as any).jobId;
+      if (associatedJobId) {
+        const ev = await this.apiClient.getScenarioEvidence(associatedJobId, item.scenarioId);
+        if (ev && !ev.isMock) {
+          return {
+            ...item,
+            isMock: false,
+            visualEvidence: {
+              ...(item.visualEvidence || {
+                scenarioId: item.scenarioId,
+                route: ev.route || "/products",
+                viewport: ev.viewport || { width: 1440, height: 900 },
+                pageTitle: "OmniShop — Curated Essentials",
+              }),
+              runId: ev.runId,
+              capturedAt: ev.capturedAt,
+              isRealEvidence: true,
+              baselineScreenshotUrl: ev.baselineScreenshotUrl || item.visualEvidence?.baselineScreenshotUrl || "",
+              defectiveScreenshotUrl: ev.defectiveScreenshotUrl || item.visualEvidence?.defectiveScreenshotUrl || "",
+              baselineDomUrl: ev.baselineDomUrl,
+              defectiveDomUrl: ev.defectiveDomUrl,
+              measurementsUrl: ev.measurementsUrl,
+              manifestUrl: ev.manifestUrl,
+              measurements: ev.measurements || item.visualEvidence?.measurements,
+            },
+          };
+        }
+      }
+    } catch {
+      // Backend unavailable or job has no evidence; retain stored/embedded evidence
+    }
+
+    return item;
   }
 
   public async approveProposal(id: string, reviewer: string = "Human Reviewer"): Promise<ReviewProposalItem> {
@@ -117,16 +169,27 @@ export class LocalStorageReviewRepository implements IReviewRepository {
     }
 
     const previousStatus = current.humanReviewStatus;
+    let approvalDigest: string | undefined;
+    if (current.proposalDigest) {
+      if (!globalThis.crypto?.subtle) throw new Error("Secure proposal approval is unavailable in this browser.");
+      const payload = new TextEncoder().encode(proposalDigestPayload(current as any));
+      const hash = await globalThis.crypto.subtle.digest("SHA-256", payload);
+      approvalDigest = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+      if (approvalDigest !== current.proposalDigest) throw new Error("Proposal changed after generation; refusing to approve modified content.");
+    }
     const updated: ReviewProposalItem = {
       ...current,
       humanReviewStatus: "approved",
+      ...(approvalDigest ? { approvalDigest } : {}),
     };
 
     // If an associated backend job exists, persist approval to backend
     const associatedJobId = (current as any).backendJobId || (current as any).jobId;
     if (associatedJobId) {
       try {
-        await this.apiClient.recordApproval(associatedJobId, reviewer);
+        await this.apiClient.recordApproval(associatedJobId, reviewer, {
+          patch_digest_sha256: approvalDigest,
+        });
       } catch (err: any) {
         throw new Error(
           `Failed to record human approval in backend for job ${associatedJobId}: ${err.message || String(err)}`

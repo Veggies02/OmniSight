@@ -13,6 +13,7 @@ import {
 } from "../scripts/vlm/source-path-security";
 import { SourceLocalizationService } from "../scripts/vlm/source-localization-service";
 import { RepairProposalService } from "../scripts/vlm/repair-proposal-service";
+import { validateDiagnosisManifestShape } from "../scripts/vlm/diagnosis-manifest";
 import { type DiagnosisResult } from "../scripts/vlm/diagnosis-schema";
 import {
   resolveAuthoritativePatch,
@@ -335,17 +336,20 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
           provider: "mock",
           diagnosis: {
             schema_version: "1.0",
+            status: "diagnosed",
             summary: s.summary,
+            limitations: [],
             defects: [
               {
                 id: `def-${s.id}`,
                 category: s.category,
                 severity: "medium",
                 confidence: 0.95,
+                description: s.summary,
                 evidence: [s.summary],
                 suspected_cause: s.cause,
                 suggested_fix: s.fix,
-                affected_element: { selector: s.selector },
+                affected_element: { description: s.selector, selector: s.selector },
               },
             ],
           },
@@ -357,15 +361,25 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
         manifestPath,
         JSON.stringify({
           runId: `isolated-fixture-run-${Date.now()}`,
+          attemptId: `attempt-${Date.now()}-fixture`,
+          status: "completed",
           timestamp: new Date().toISOString(),
           provider: "mock",
           model: "mock-vlm-v1",
           scenariosDiagnosed: 4,
           totalScenarios: 4,
           results: resultsMap,
+          scenarioAliases: [],
           outputArtifactsDirectory: testFixtureDir,
         })
       );
+      const diagnosisAttemptId = JSON.parse(fs.readFileSync(manifestPath, "utf8")).attemptId;
+      fs.writeFileSync(path.join(testFixtureDir, "diagnosis-attempt.json"), JSON.stringify({
+        runId: JSON.parse(fs.readFileSync(manifestPath, "utf8")).runId,
+        attemptId: diagnosisAttemptId,
+        status: "completed",
+        manifestPath: path.resolve(manifestPath),
+      }));
 
       try {
         const runManifest = proposalService.generateProposalsForRun(manifestPath, testOutputDir);
@@ -399,6 +413,79 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
       }
     });
 
+    test("rejects mismatched, incomplete, and failed diagnosis manifests before writing proposals", () => {
+      const fixtureDir = path.resolve(process.cwd(), `artifacts/temp_manifest_guard_${Date.now()}`);
+      const outDir = path.join(fixtureDir, "proposals");
+      fs.mkdirSync(fixtureDir, { recursive: true });
+      const base = {
+        runId: "run-current-2026.11.09T12:00:00Z", attemptId: "attempt-123-fixture", status: "completed",
+        timestamp: new Date().toISOString(), provider: "mock", model: "mock-vlm-v1", scenariosDiagnosed: 1, totalScenarios: 1,
+        outputArtifactsDirectory: fixtureDir,
+        results: { scenario_01: { scenarioId: "scenario_01", status: "inconclusive", diagnosis: { schema_version: "1.0", status: "inconclusive", summary: "Unclear visual evidence", defects: [], limitations: [] }, model: "mock-vlm-v1", provider: "mock" } },
+        scenarioAliases: [],
+      };
+      const manifestPath = path.join(fixtureDir, "diagnoses-manifest.json");
+      try {
+        expect(() => proposalService.generateProposalsForRun(path.join(fixtureDir, "missing.json"), outDir)).toThrow(/not found/);
+        fs.writeFileSync(manifestPath, "{ invalid json");
+        expect(() => proposalService.generateProposalsForRun(manifestPath, outDir)).toThrow(/valid JSON/);
+
+        fs.writeFileSync(manifestPath, JSON.stringify(base));
+        expect(() => proposalService.generateProposalsForRun(manifestPath, outDir, base.runId)).toThrow(/state is missing/);
+        fs.writeFileSync(path.join(fixtureDir, "diagnosis-attempt.json"), JSON.stringify({ runId: base.runId, attemptId: base.attemptId, status: "completed", manifestPath: path.resolve(manifestPath) }));
+        expect(() => proposalService.generateProposalsForRun(manifestPath, outDir, "another-run")).toThrow(/does not match/);
+        expect(fs.existsSync(outDir)).toBe(false);
+
+        fs.writeFileSync(manifestPath, JSON.stringify({ ...base, scenariosDiagnosed: 0 }));
+        expect(() => proposalService.generateProposalsForRun(manifestPath, outDir)).toThrow(/incomplete/);
+
+        fs.writeFileSync(manifestPath, JSON.stringify({ ...base, status: "failed" }));
+        expect(() => proposalService.generateProposalsForRun(manifestPath, outDir)).toThrow(/completed/);
+
+        fs.writeFileSync(manifestPath, JSON.stringify({ ...base, results: { scenario_01: { ...base.results.scenario_01, status: "error", diagnosis: { ...base.results.scenario_01.diagnosis, status: "error" } } } }));
+        expect(() => proposalService.generateProposalsForRun(manifestPath, outDir)).toThrow(/failed or has an invalid status/);
+      } finally {
+        fs.rmSync(fixtureDir, { recursive: true, force: true });
+      }
+    });
+
+    test("uses one canonical scenario result and validates explicit aliases", () => {
+      const fixtureDir = path.resolve(process.cwd(), `artifacts/temp_alias_manifest_${Date.now()}`);
+      const outputDir = path.join(fixtureDir, "proposals");
+      const runId = `run-alias-${Date.now()}`;
+      const attemptId = `attempt-alias-${Date.now()}`;
+      const manifestPath = path.join(fixtureDir, "diagnoses-manifest.json");
+      const diagnosis = {
+        schema_version: "1.0", status: "diagnosed", summary: "Product image stretched", limitations: [],
+        defects: [{ category: "image_distortion", severity: "medium", confidence: 0.9, description: "Image stretched", evidence: ["Image aspect differs"], affected_element: { description: "Product image" }, suspected_cause: "object fit", suggested_fix: "cover" }],
+      };
+      const manifest = {
+        runId, attemptId, status: "completed", timestamp: new Date().toISOString(), provider: "mock", model: "mock",
+        scenariosDiagnosed: 1, totalScenarios: 1,
+        results: { "product-image-distortion": { scenarioId: "product-image-distortion", status: "diagnosed", diagnosis, provider: "mock", model: "mock" } },
+        scenarioAliases: [{ alias: "scenario_01", canonicalScenarioId: "product-image-distortion" }],
+        outputArtifactsDirectory: fixtureDir,
+      };
+      fs.mkdirSync(fixtureDir, { recursive: true });
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      fs.writeFileSync(path.join(fixtureDir, "diagnosis-attempt.json"), JSON.stringify({ runId, attemptId, status: "completed", manifestPath: path.resolve(manifestPath) }));
+      try {
+        const generated = proposalService.generateProposalsForRun(manifestPath, outputDir, runId);
+        expect(Object.keys(generated.results)).toEqual(["product-image-distortion"]);
+        expect(generated.results["product-image-distortion"].scenarioId).toBe("product-image-distortion");
+        expect(generated.results["product-image-distortion"].registeredPatchId).toBe("patch-product-image-distortion-001");
+        expect(() => validateDiagnosisManifestShape({ ...manifest, scenarioAliases: [
+          { alias: "scenario_01", canonicalScenarioId: "product-image-distortion" },
+          { alias: "scenario_01", canonicalScenarioId: "product-image-distortion" },
+        ] })).toThrow(/Duplicate/);
+        expect(() => validateDiagnosisManifestShape({ ...manifest, scenarioAliases: [
+          { alias: "unknown_alias", canonicalScenarioId: "missing-canonical" },
+        ] })).toThrow(/unknown canonical/);
+      } finally {
+        fs.rmSync(fixtureDir, { recursive: true, force: true });
+      }
+    });
+
     test("generates inconclusive proposal when diagnosis reports no defect or error", () => {
       const inconclusiveDiag: DiagnosisResult = {
         scenarioId: "clean-run",
@@ -420,7 +507,7 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
         },
       };
 
-      const proposal = proposalService.generateProposal(inconclusiveDiag);
+      const proposal = proposalService.generateProposal(inconclusiveDiag, { runId: "test-run", attemptId: "test-attempt", diagnosisManifestPath: "artifacts/test/diagnoses-manifest.json" });
       expect(proposal.status).toBe("inconclusive");
       expect(proposal.localization.status).toBe("unsupported");
       expect(proposal.proposedCorrection.targetSelectorOrComponent).toBe("none");
@@ -476,7 +563,7 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
         uncertaintyNotes: [],
       });
 
-      const proposal = customService.generateProposal(diag);
+      const proposal = customService.generateProposal(diag, { runId: "test-run", attemptId: "test-attempt", diagnosisManifestPath: "artifacts/test/diagnoses-manifest.json" });
       expect(proposal.status).toBe("stale_source");
       expect(proposal.humanReviewStatus).toBe("rejected");
     });
@@ -543,7 +630,7 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
         },
       };
 
-      const proposal = proposalService.generateProposal(diag);
+      const proposal = proposalService.generateProposal(diag, { runId: "test-run", attemptId: "test-attempt", diagnosisManifestPath: "artifacts/test/diagnoses-manifest.json" });
       expect(proposal.defectCategory).toBe("image_distortion");
       expect(proposal.diagnosisRef.primaryDefectCategory).toBe("image_distortion");
       expect(proposal.potentialRisks.some((r) => r.includes("Category mismatch detected"))).toBe(false);
@@ -592,7 +679,7 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
         },
       };
 
-      const proposal = proposalService.generateProposal(misdiagnosedResult);
+      const proposal = proposalService.generateProposal(misdiagnosedResult, { runId: "test-run", attemptId: "test-attempt", diagnosisManifestPath: "artifacts/test/diagnoses-manifest.json" });
 
       // Proposal effective category must be the authoritative expected category
       expect(proposal.defectCategory).toBe("layout_breakage");
@@ -677,7 +764,7 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
         },
       };
 
-      const proposal = proposalService.generateProposal(diag);
+      const proposal = proposalService.generateProposal(diag, { runId: "test-run", attemptId: "test-attempt", diagnosisManifestPath: "artifacts/test/diagnoses-manifest.json" });
       expect(proposal.status).toBe("unsupported_category");
       expect(proposal.localization.status).toBe("unsupported");
       expect(proposal.confidenceScore).toBe(0);
@@ -728,7 +815,7 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
         },
       };
 
-      const proposal = proposalService.generateProposal(legacyDiag);
+      const proposal = proposalService.generateProposal(legacyDiag, { runId: "test-run", attemptId: "test-attempt", diagnosisManifestPath: "artifacts/test/diagnoses-manifest.json" });
       expect(proposal.status).toBe("proposed");
       expect(proposal.defectCategory).toBe("low_contrast");
       expect(proposal.localization.status).toBe("localized");
@@ -772,7 +859,7 @@ test.describe("Step 4.4 Defect Localization & Repair Proposal Generation", () =>
         },
       };
 
-      const proposal = proposalService.generateProposal(diag);
+      const proposal = proposalService.generateProposal(diag, { runId: "test-run", attemptId: "test-attempt", diagnosisManifestPath: "artifacts/test/diagnoses-manifest.json" });
       expect(proposal.status).toBe("unsupported_category");
       expect(proposal.localization.status).toBe("unsupported");
     });

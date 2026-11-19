@@ -13,9 +13,12 @@ import {
 import {
   createVlmProvider,
   STANDARD_VLM_PROMPT,
+  VlmProviderError,
   type ProviderConfig,
   type VlmProvider,
 } from "./vlm-provider";
+import { acquireDiagnosisLock } from "./diagnosis-attempt-lock";
+import { type DiagnosisScenarioAlias } from "./diagnosis-manifest";
 
 export interface DiagnosisPipelineOptions {
   runId?: string;
@@ -27,12 +30,15 @@ export interface DiagnosisPipelineOptions {
 
 export interface DiagnosisRunManifest {
   runId: string;
+  attemptId: string;
+  status: "completed" | "failed";
   timestamp: string;
   provider: string;
   model: string;
   scenariosDiagnosed: number;
   totalScenarios: number;
   results: Record<string, DiagnosisResult>;
+  scenarioAliases: DiagnosisScenarioAlias[];
   outputArtifactsDirectory: string;
 }
 
@@ -140,6 +146,7 @@ Carefully compare the baseline and test images provided, correlate with the layo
     // 7. Call VLM Provider
     let diagnosis: StructuredDiagnosis;
     let errorMessage: string | undefined;
+    let errorCode: string | undefined;
 
     try {
       diagnosis = await this.provider.diagnose({
@@ -148,13 +155,15 @@ Carefully compare the baseline and test images provided, correlate with the layo
         defectiveImageBase64: defectiveImgBase64,
       });
     } catch (err: any) {
-      errorMessage = err.message;
+      const safeError = safeErrorDetails(err);
+      errorMessage = safeError.message;
+      errorCode = safeError.code;
       diagnosis = {
         schema_version: "1.0",
         status: "error",
-        summary: `Diagnosis failed due to provider error: ${err.message}`,
+        summary: `Diagnosis failed due to provider error: ${errorMessage}`,
         defects: [],
-        limitations: [`Error: ${err.message}`],
+        limitations: [`Error: ${errorMessage}`],
       };
     }
 
@@ -173,6 +182,7 @@ Carefully compare the baseline and test images provided, correlate with the layo
         viewport: scenarioEntry.viewport,
       },
       error: errorMessage,
+      errorCode,
     };
   }
 
@@ -204,59 +214,170 @@ Carefully compare the baseline and test images provided, correlate with the layo
       }
     }
 
+    targetRunDir = path.resolve(targetRunDir);
+    const outputDir = path.resolve(options.outputDirectory || path.join(targetRunDir, "diagnoses"));
+    const lock = acquireDiagnosisLock(outputDir);
+    try {
+    // Invalidate the previous published result before touching the new input. Even a
+    // missing or malformed evidence manifest must make the prior result unusable.
+    fs.mkdirSync(outputDir, { recursive: true });
+    const attemptId = lock.attemptId;
+    const attemptsDir = path.join(outputDir, "attempts");
+    const attemptDir = path.join(attemptsDir, attemptId);
+    fs.mkdirSync(attemptDir, { recursive: true });
+    const statePath = path.join(outputDir, "diagnosis-attempt.json");
+    let state = { runId: options.runId || "__pending__", attemptId, status: "running" as const, updatedAt: new Date().toISOString() };
+    const stateTemp = `${statePath}.${attemptId}.tmp`;
+    fs.writeFileSync(stateTemp, JSON.stringify(state, null, 2), "utf8");
+    fs.renameSync(stateTemp, statePath);
+    const markAttemptFailed = () => {
+      lock.assertOwned();
+      const failedState = { ...state, status: "failed", updatedAt: new Date().toISOString() };
+      fs.writeFileSync(stateTemp, JSON.stringify(failedState, null, 2), "utf8");
+      fs.renameSync(stateTemp, statePath);
+    };
+
     const modelEvidencePath = path.join(targetRunDir, "model_facing_evidence.json");
     if (!fs.existsSync(modelEvidencePath)) {
+      markAttemptFailed();
       throw new Error(`Model-facing evidence manifest '${modelEvidencePath}' was not found.`);
     }
 
-    const modelEvidence = JSON.parse(fs.readFileSync(modelEvidencePath, "utf8"));
-    const outputDir = options.outputDirectory || path.join(targetRunDir, "diagnoses");
-    fs.mkdirSync(outputDir, { recursive: true });
+    let modelEvidence: any;
+    try {
+      modelEvidence = JSON.parse(fs.readFileSync(modelEvidencePath, "utf8"));
+    } catch {
+      markAttemptFailed();
+      throw new Error(`Model-facing evidence manifest is not valid JSON: '${modelEvidencePath}'.`);
+    }
+    if (typeof modelEvidence.runId !== "string" || !modelEvidence.runId.trim()) {
+      markAttemptFailed();
+      throw new Error("Model-facing evidence is missing a valid runId.");
+    }
+    if (options.runId && options.runId !== modelEvidence.runId) {
+      markAttemptFailed();
+      throw new Error(`Requested run ID '${options.runId}' does not match evidence run ID '${modelEvidence.runId}'.`);
+    }
+    if (!Array.isArray(modelEvidence.scenarios) || modelEvidence.scenarios.length === 0) {
+      markAttemptFailed();
+      throw new Error("Model-facing evidence has no diagnosis scenarios.");
+    }
+    state = { ...state, runId: modelEvidence.runId };
+    fs.writeFileSync(stateTemp, JSON.stringify(state, null, 2), "utf8");
+    fs.renameSync(stateTemp, statePath);
 
     // Read internal orchestration manifest if present to maintain correlation for evaluation
     const internalManifestPath = path.join(targetRunDir, "manifest.json");
-    const internalManifest = fs.existsSync(internalManifestPath)
-      ? JSON.parse(fs.readFileSync(internalManifestPath, "utf8"))
-      : null;
+    let internalManifest: any = null;
+    try {
+      internalManifest = fs.existsSync(internalManifestPath)
+        ? JSON.parse(fs.readFileSync(internalManifestPath, "utf8"))
+        : null;
+    } catch {
+      markAttemptFailed();
+      throw new Error("Internal evidence manifest is not valid JSON.");
+    }
     const internalScenarioIds = internalManifest?.scenarios ? Object.keys(internalManifest.scenarios) : [];
 
     const manifest: DiagnosisRunManifest = {
       runId: modelEvidence.runId,
+      attemptId,
+      status: "completed",
       timestamp: new Date().toISOString(),
       provider: this.provider.name,
       model: this.provider.model,
       scenariosDiagnosed: 0,
-      totalScenarios: modelEvidence.scenarios.length,
+      totalScenarios: options.scenarioId
+        ? modelEvidence.scenarios.filter((scenario: any) => scenario.scenarioId === options.scenarioId).length
+        : modelEvidence.scenarios.length,
       results: {},
+      scenarioAliases: [],
       outputArtifactsDirectory: outputDir,
     };
+    if (manifest.totalScenarios === 0) {
+      markAttemptFailed();
+      throw new Error(`Scenario '${options.scenarioId}' was not found in run '${modelEvidence.runId}'.`);
+    }
 
     let scenarioIndex = 0;
-    for (const scenario of modelEvidence.scenarios) {
+    const canonicalIds = new Set<string>();
+    for (const [evidenceIndex, scenario] of modelEvidence.scenarios.entries()) {
       if (options.scenarioId && scenario.scenarioId !== options.scenarioId) {
         continue;
       }
 
       console.log(`Diagnosing scenario '${scenario.scenarioId}' using ${this.provider.name} (${this.provider.model})...`);
       const currentIdx = scenarioIndex++;
-      const result = await this.diagnoseScenario(targetRunDir, scenario, currentIdx);
-      manifest.results[scenario.scenarioId] = result;
-
-      // Correlate with internal scenario ID if available
-      const internalId = internalScenarioIds[currentIdx];
-      if (internalId && internalId !== scenario.scenarioId) {
-        manifest.results[internalId] = result;
+      const internalId = internalScenarioIds[evidenceIndex];
+      const canonicalScenarioId = internalId || scenario.scenarioId;
+      if (typeof canonicalScenarioId !== "string" || !canonicalScenarioId.trim() || canonicalIds.has(canonicalScenarioId)) {
+        markAttemptFailed();
+        throw new Error("Evidence contains duplicate or invalid canonical scenario identities.");
+      }
+      canonicalIds.add(canonicalScenarioId);
+      let result: DiagnosisResult;
+      try {
+        result = await this.diagnoseScenario(targetRunDir, scenario, currentIdx);
+      } catch (error: any) {
+        const safeError = safeErrorDetails(error);
+        result = {
+          scenarioId: scenario.scenarioId,
+          status: "error",
+          diagnosis: { schema_version: "1.0", status: "error", summary: "Diagnosis analysis failed.", defects: [], limitations: [safeError.code] },
+          model: this.provider.model,
+          provider: this.provider.name,
+          executionTimeMs: 0,
+          sanitizedEvidenceRef: { baselineScreenshot: scenario.baselineScreenshot, defectiveScreenshot: scenario.defectiveScreenshot, viewport: scenario.viewport },
+          error: safeError.message,
+          errorCode: safeError.code,
+        };
+      }
+      result.scenarioId = canonicalScenarioId;
+      manifest.results[canonicalScenarioId] = result;
+      if (canonicalScenarioId !== scenario.scenarioId) {
+        manifest.scenarioAliases.push({ alias: scenario.scenarioId, canonicalScenarioId });
       }
       manifest.scenariosDiagnosed++;
 
       // Save individual scenario diagnosis artifact
-      const scenarioOutputPath = path.join(outputDir, `${scenario.scenarioId}-diagnosis.json`);
+      lock.assertOwned();
+      const scenarioOutputPath = path.join(attemptDir, `${canonicalScenarioId}-diagnosis.json`);
       fs.writeFileSync(scenarioOutputPath, JSON.stringify(result, null, 2), "utf8");
     }
 
-    // Save diagnosis run manifest
-    fs.writeFileSync(path.join(outputDir, "diagnoses-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    const failures = Object.values(manifest.results).filter((result) => result.status === "error" || result.diagnosis.status === "error");
+    if (manifest.scenariosDiagnosed !== manifest.totalScenarios || failures.length > 0) {
+      manifest.status = "failed";
+      const attemptManifestPath = path.join(attemptDir, "diagnoses-manifest.json");
+      fs.writeFileSync(attemptManifestPath, JSON.stringify(manifest, null, 2), "utf8");
+      const failedState = { ...state, status: "failed", manifestPath: attemptManifestPath, updatedAt: new Date().toISOString() };
+      const failedStateTemp = `${statePath}.${attemptId}.tmp`;
+      fs.writeFileSync(failedStateTemp, JSON.stringify(failedState, null, 2), "utf8");
+      fs.renameSync(failedStateTemp, statePath);
+      throw new Error(`Diagnosis attempt ${attemptId} failed for ${failures.length} scenario(s); no completed manifest was published.`);
+    }
+
+    const attemptManifestPath = path.join(attemptDir, "diagnoses-manifest.json");
+    fs.writeFileSync(attemptManifestPath, JSON.stringify(manifest, null, 2), "utf8");
+    const publishedPath = path.join(outputDir, "diagnoses-manifest.json");
+    const publishedTemp = `${publishedPath}.${attemptId}.tmp`;
+    lock.assertOwned();
+    fs.copyFileSync(attemptManifestPath, publishedTemp);
+    fs.renameSync(publishedTemp, publishedPath);
+    lock.assertOwned();
+    const completedState = { ...state, status: "completed", manifestPath: publishedPath, updatedAt: new Date().toISOString() };
+    const completedStateTemp = `${statePath}.${attemptId}.tmp`;
+    fs.writeFileSync(completedStateTemp, JSON.stringify(completedState, null, 2), "utf8");
+    fs.renameSync(completedStateTemp, statePath);
 
     return manifest;
+    } finally {
+      lock.release();
+    }
   }
+}
+
+function safeErrorDetails(error: unknown): { code: string; message: string } {
+  if (error instanceof VlmProviderError) return { code: error.code, message: error.code };
+  return { code: "analysis_error", message: "Diagnosis analysis failed." };
 }

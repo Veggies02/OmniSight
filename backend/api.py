@@ -19,11 +19,14 @@ import hmac
 import json
 import logging
 import os
+import re
+import urllib.parse
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from browser_runner import BrowserRunner, RunnerError, runner_from_env
 from job_schemas import (
@@ -43,6 +46,7 @@ from job_schemas import (
     ProposalRequest,
     PullRequestCreateRequest,
     PullRequestResponse,
+    ScenarioEvidenceRef,
 )
 from job_store import JobNotFoundError, JobStore
 from github_client import (
@@ -67,6 +71,38 @@ logger = logging.getLogger("omnisight.backend")
 DEFAULT_DB_PATH = Path(__file__).with_name("jobs.db")
 SUPPORTED_CI_EVENTS = {"build_success"}
 MAX_PROPOSAL_BYTES = 200_000
+
+# Secure artifact gateway controls
+ALLOWED_ARTIFACT_CATEGORIES = {
+    "visual-evidence",
+    "repair-executions",
+    "verification",
+    "screenshots",
+}
+
+SAFE_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".json": "application/json",
+    ".log": "text/plain; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".html": "text/plain; charset=utf-8",
+    ".htm": "text/plain; charset=utf-8",
+}
+
+BLOCKED_FILENAMES = {
+    "ground_truth_eval.json",
+    "jobs.db",
+    "jobs.db-wal",
+    "jobs.db-shm",
+    ".env",
+    ".gitignore",
+    "id_ed25519",
+    "id_ed25519.pub",
+    "authorized_keys",
+}
 
 
 def run_inspection(store: JobStore, runner: BrowserRunner, job_id: str, website_url: str) -> None:
@@ -143,12 +179,35 @@ def create_app(
     repair_runner: Optional[RepairRunner] = None,
     operator_token: Optional[str] = None,
     github_client: Optional[GitHubClient] = None,
+    artifacts_dir: Optional[Path] = None,
 ) -> FastAPI:
     store = JobStore(db_path or os.getenv("OMNISIGHT_DB_PATH") or DEFAULT_DB_PATH)
     browser_runner = runner or runner_from_env()
     repairer = repair_runner or repair_runner_from_env()
     gh_client = github_client or github_client_from_env()
     token = operator_token if operator_token is not None else os.getenv("OMNISIGHT_OPERATOR_TOKEN", "")
+
+    # Resolve artifacts root directory
+    if artifacts_dir:
+        resolved_artifacts_dir = Path(artifacts_dir).resolve()
+    elif os.getenv("OMNISIGHT_ARTIFACTS_DIR"):
+        resolved_artifacts_dir = Path(os.getenv("OMNISIGHT_ARTIFACTS_DIR")).resolve()
+    elif os.getenv("OMNISIGHT_REPO_ROOT"):
+        resolved_artifacts_dir = (Path(os.getenv("OMNISIGHT_REPO_ROOT")).resolve() / "artifacts").resolve()
+    else:
+        # Traverse upwards from current file to find the workspace artifacts folder
+        cur = Path(__file__).resolve().parent
+        candidate_artifacts = None
+        for _ in range(6):
+            candidate = cur / "artifacts"
+            if candidate.is_dir() and candidate != cur:
+                if (candidate / "visual-evidence").is_dir() or (cur / "package.json").is_file():
+                    candidate_artifacts = candidate.resolve()
+                    break
+            if cur.parent == cur:
+                break
+            cur = cur.parent
+        resolved_artifacts_dir = candidate_artifacts or (Path(__file__).resolve().parent.parent / "artifacts").resolve()
 
     app = FastAPI(
         title="OmniSight Backend",
@@ -202,6 +261,9 @@ def create_app(
         job = store.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
+        ev_map = _build_job_evidence(job)
+        if ev_map:
+            job["evidence"] = ev_map
         return job
 
     @router.get("/jobs/{job_id}/artifacts", response_model=List[ArtifactRef])
@@ -210,6 +272,299 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
         return job["artifacts"]
+
+    # ------------------------------------------------ secure artifact gateway
+    def _serve_artifact(category: str, rel_path: str, x_operator_token: Optional[str] = None) -> FileResponse:
+        # 1. Validate category format and allowlist
+        if not re.match(r"^[a-zA-Z0-9_\-]+$", category):
+            raise HTTPException(status_code=403, detail="Invalid artifact category identifier.")
+        if category not in ALLOWED_ARTIFACT_CATEGORIES:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Artifact category '{category}' is not accessible via the public gateway.",
+            )
+
+        # 2. Operator authorization check for sensitive execution reports
+        if category == "repair-executions":
+            if token:
+                if not x_operator_token or not hmac.compare_digest(x_operator_token.encode(), token.encode()):
+                    raise HTTPException(status_code=401, detail="Missing or wrong X-Operator-Token.")
+
+        # 3. Path traversal string checks (raw and decoded)
+        raw_check = rel_path.lower()
+        if ".." in raw_check or "%2e" in raw_check or "%5c" in raw_check:
+            raise HTTPException(status_code=403, detail="Path traversal sequences are forbidden.")
+        if "\x00" in rel_path or "%00" in raw_check:
+            raise HTTPException(status_code=400, detail="Null bytes are forbidden.")
+        if "\\" in rel_path:
+            raise HTTPException(status_code=403, detail="Backslash path separators are forbidden.")
+
+        try:
+            decoded_path = urllib.parse.unquote(rel_path)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid URL encoding in path.")
+
+        decoded_lower = decoded_path.lower()
+        if ".." in decoded_lower or "\x00" in decoded_path or "\\" in decoded_path:
+            raise HTTPException(status_code=403, detail="Path traversal sequences are forbidden.")
+
+        # 4. Check individual path segments
+        segments = [s for s in decoded_path.strip("/").split("/") if s]
+        if not segments:
+            raise HTTPException(status_code=404, detail="Artifact path cannot be empty.")
+
+        for seg in segments:
+            if seg in {"..", "."}:
+                raise HTTPException(status_code=403, detail="Path traversal sequences are forbidden.")
+            if seg.startswith("."):
+                raise HTTPException(status_code=403, detail="Access to hidden files or directories is forbidden.")
+
+        # 5. Filesystem canonicalization & symlink escape verification
+        category_root = (resolved_artifacts_dir / category).resolve()
+        if not category_root.exists() or not category_root.is_dir():
+            raise HTTPException(status_code=404, detail="Artifact category directory not found.")
+
+        candidate = (category_root / "/".join(segments)).resolve()
+        try:
+            candidate.relative_to(category_root)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path traversal / symlink escape detected.")
+
+        if candidate.is_dir():
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+
+        # 6. Check filename and blocked patterns
+        target_name = segments[-1]
+        target_name_lower = target_name.lower()
+        if "ground_truth" in target_name_lower:
+            raise HTTPException(status_code=403, detail="Access to ground truth evaluation data is forbidden.")
+        if target_name_lower in BLOCKED_FILENAMES:
+            raise HTTPException(status_code=403, detail=f"Access to '{target_name}' is forbidden.")
+
+        # 7. Check extension and MIME type allowlist
+        ext = Path(target_name).suffix.lower()
+        if not ext or ext not in SAFE_MIME_TYPES:
+            raise HTTPException(
+                status_code=415,
+                detail=f"File extension '{ext}' is not permitted. Allowed: {sorted(SAFE_MIME_TYPES.keys())}",
+            )
+
+        if not candidate.exists() or not candidate.is_file():
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+
+        # 8. Return secure FileResponse with strict defense-in-depth headers
+        # HTML DOM snapshots are served strictly as text/plain to prevent stored XSS attacks
+        media_type = SAFE_MIME_TYPES[ext]
+        return FileResponse(
+            path=str(candidate),
+            media_type=media_type,
+            headers={
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "DENY",
+                "Cache-Control": "private, max-age=3600",
+                "Content-Disposition": "inline",
+            },
+        )
+
+    @router.get("/artifacts/{category}/{file_path:path}")
+    def get_artifact(
+        category: str,
+        file_path: str,
+        x_operator_token: Optional[str] = Header(default=None),
+    ):
+        """Secure artifact gateway: serves authorized visual and execution artifacts."""
+        return _serve_artifact(category, file_path, x_operator_token)
+
+    @router.get("/artifacts/{file_path:path}")
+    def get_artifact_shorthand(
+        file_path: str,
+        x_operator_token: Optional[str] = Header(default=None),
+    ):
+        """Shorthand artifact gateway: auto-detects category prefix or defaults to visual-evidence."""
+        cleaned = file_path.strip("/")
+        parts = cleaned.split("/", 1)
+        if len(parts) == 2 and parts[0] in ALLOWED_ARTIFACT_CATEGORIES:
+            return _serve_artifact(parts[0], parts[1], x_operator_token)
+        return _serve_artifact("visual-evidence", cleaned, x_operator_token)
+
+    # ------------------------------------------------ structured evidence contract
+    def _parse_and_validate_manifest(manifest_path: Path) -> Dict[str, Any]:
+        """Validates manifest structure and ensures all referenced paths are within visual-evidence."""
+        if not manifest_path.is_file():
+            raise HTTPException(status_code=404, detail="Evidence manifest not found.")
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid manifest JSON: {exc}")
+
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=422, detail="Manifest must be a JSON object.")
+        if "runId" not in data or "scenarios" not in data:
+            raise HTTPException(status_code=422, detail="Manifest missing required runId or scenarios fields.")
+
+        run_id = str(data["runId"])
+        if not re.match(r"^[A-Za-z0-9._\-]+$", run_id) or ".." in run_id:
+            raise HTTPException(status_code=403, detail="Invalid runId format in manifest.")
+
+        category_root = (resolved_artifacts_dir / "visual-evidence").resolve()
+        run_dir = (category_root / run_id).resolve()
+        try:
+            run_dir.relative_to(category_root)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Manifest run directory escapes visual-evidence boundary.")
+
+        # Validate scenario paths
+        for sid, sc in (data.get("scenarios") or {}).items():
+            if not re.match(r"^[A-Za-z0-9._\-]+$", sid) or ".." in sid:
+                raise HTTPException(status_code=403, detail=f"Invalid scenario ID format: {sid}")
+            for side in ("baseline", "defective"):
+                part = sc.get(side) or {}
+                for k in ("screenshotPath", "domPath", "measurementsPath"):
+                    p_val = part.get(k)
+                    if p_val:
+                        p_str = str(p_val)
+                        if ".." in p_str or "\\" in p_str or p_str.startswith("/") or "%2e" in p_str.lower():
+                            raise HTTPException(status_code=403, detail=f"Path traversal detected in manifest: {p_str}")
+                        target = (run_dir / p_str).resolve()
+                        try:
+                            target.relative_to(run_dir)
+                        except ValueError:
+                            raise HTTPException(status_code=403, detail=f"File escapes run directory: {p_str}")
+
+        return data
+
+    def _build_evidence_contracts(manifest_data: Dict[str, Any]) -> Dict[str, ScenarioEvidenceRef]:
+        run_id = manifest_data["runId"]
+        timestamp = manifest_data.get("timestamp")
+        scenarios = manifest_data.get("scenarios") or {}
+        contracts: Dict[str, ScenarioEvidenceRef] = {}
+
+        for sid, sc in scenarios.items():
+            b_part = sc.get("baseline") or {}
+            d_part = sc.get("defective") or {}
+
+            # Construct secure gateway URLs
+            b_shot = f"/artifacts/visual-evidence/{run_id}/{b_part['screenshotPath']}" if b_part.get("screenshotPath") else None
+            d_shot = f"/artifacts/visual-evidence/{run_id}/{d_part['screenshotPath']}" if d_part.get("screenshotPath") else None
+            b_dom = f"/artifacts/visual-evidence/{run_id}/{b_part['domPath']}" if b_part.get("domPath") else None
+            d_dom = f"/artifacts/visual-evidence/{run_id}/{d_part['domPath']}" if d_part.get("domPath") else None
+
+            # Load measurements if available
+            meas_url = None
+            meas_data = None
+            if d_part.get("measurementsPath"):
+                meas_file = (resolved_artifacts_dir / "visual-evidence" / run_id / d_part["measurementsPath"]).resolve()
+                if meas_file.is_file():
+                    meas_url = f"/artifacts/visual-evidence/{run_id}/{d_part['measurementsPath']}"
+                    try:
+                        meas_data = json.loads(meas_file.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+            elif (resolved_artifacts_dir / "visual-evidence" / run_id / sid / "measurements.json").is_file():
+                meas_file = (resolved_artifacts_dir / "visual-evidence" / run_id / sid / "measurements.json").resolve()
+                meas_url = f"/artifacts/visual-evidence/{run_id}/{sid}/measurements.json"
+                try:
+                    meas_data = json.loads(meas_file.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+            contracts[sid] = ScenarioEvidenceRef(
+                scenario_id=sid,
+                defect_id=sc.get("defectId", sid),
+                route=sc.get("route"),
+                viewport=sc.get("viewport"),
+                run_id=run_id,
+                captured_at=timestamp,
+                is_mock=False,
+                baseline_screenshot_url=b_shot,
+                defective_screenshot_url=d_shot,
+                baseline_dom_url=b_dom,
+                defective_dom_url=d_dom,
+                measurements_url=meas_url,
+                manifest_url=f"/artifacts/visual-evidence/{run_id}/manifest.json",
+                measurements=meas_data,
+            )
+        return contracts
+
+    def _build_job_evidence(job: Dict) -> Dict[str, ScenarioEvidenceRef]:
+        """Resolves evidence contracts for a job from its inspection run or stored artifacts."""
+        run_id = None
+        if job.get("inspection") and job["inspection"].get("run_id"):
+            run_id = job["inspection"]["run_id"]
+        else:
+            for art in job.get("artifacts") or []:
+                if art["uri"].endswith("manifest.json") and "visual-evidence" in art["uri"]:
+                    m = re.search(r"visual-evidence/([^/]+)/manifest\.json", art["uri"])
+                    if m:
+                        run_id = m.group(1)
+                        break
+
+        if run_id:
+            manifest_file = resolved_artifacts_dir / "visual-evidence" / run_id / "manifest.json"
+            if manifest_file.is_file():
+                data = _parse_and_validate_manifest(manifest_file)
+                return _build_evidence_contracts(data)
+
+        # Check for mock artifacts
+        has_mock = any(art.get("mock") for art in job.get("artifacts") or [])
+        if has_mock:
+            return {
+                "mock-scenario": ScenarioEvidenceRef(
+                    scenario_id="mock-scenario",
+                    run_id="mock-run",
+                    is_mock=True,
+                    baseline_screenshot_url=f"mock://artifacts/{job['job_id']}/homepage.png",
+                    defective_screenshot_url=f"mock://artifacts/{job['job_id']}/homepage.png",
+                )
+            }
+
+        return {}
+
+    @router.get("/jobs/{job_id}/evidence", response_model=List[ScenarioEvidenceRef])
+    def get_job_evidence(job_id: str):
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        evidence_map = _build_job_evidence(job)
+        return list(evidence_map.values())
+
+    @router.get("/jobs/{job_id}/evidence/{scenario_id}", response_model=ScenarioEvidenceRef)
+    def get_job_scenario_evidence(job_id: str, scenario_id: str):
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        evidence_map = _build_job_evidence(job)
+        if scenario_id not in evidence_map:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Evidence for scenario '{scenario_id}' not found for job {job_id}.",
+            )
+        return evidence_map[scenario_id]
+
+    @router.get("/evidence/latest", response_model=List[ScenarioEvidenceRef])
+    def get_latest_evidence():
+        """Returns evidence contracts from the latest valid visual-evidence run in the workspace."""
+        ve_dir = (resolved_artifacts_dir / "visual-evidence").resolve()
+        if not ve_dir.is_dir():
+            return []
+        candidates = sorted(
+            [d for d in ve_dir.iterdir() if d.is_dir() and (d / "manifest.json").is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            return []
+        data = _parse_and_validate_manifest(candidates[0] / "manifest.json")
+        return list(_build_evidence_contracts(data).values())
+
+    @router.get("/evidence/latest/{scenario_id}", response_model=ScenarioEvidenceRef)
+    def get_latest_scenario_evidence(scenario_id: str):
+        """Returns evidence for a specific scenario from the latest visual-evidence run."""
+        all_ev = get_latest_evidence()
+        for ev in all_ev:
+            if ev.scenario_id == scenario_id:
+                return ev
+        raise HTTPException(status_code=404, detail=f"Latest evidence for scenario '{scenario_id}' not found.")
 
     # ------------------------------------------------------------ repair flow
     @router.post("/jobs/{job_id}/proposal", response_model=JobResponse)

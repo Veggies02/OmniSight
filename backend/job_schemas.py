@@ -176,6 +176,25 @@ class ArtifactRef(ArtifactDraft):
     created_at: str
 
 
+class ScenarioEvidenceRef(BaseModel):
+    """Normalized evidence contract for a single defect scenario."""
+
+    scenario_id: str = Field(description="Scenario identifier, e.g. product-image-distortion")
+    defect_id: Optional[str] = Field(default=None, description="Defect identifier")
+    route: Optional[str] = Field(default=None, description="Target application route, e.g. /products")
+    viewport: Optional[Dict[str, int]] = Field(default=None, description="Browser viewport width and height")
+    run_id: Optional[str] = Field(default=None, description="Browser capture run identifier")
+    captured_at: Optional[str] = Field(default=None, description="ISO timestamp of evidence capture")
+    is_mock: bool = Field(default=False, description="True if placeholder/mock, False if real browser capture")
+    baseline_screenshot_url: Optional[str] = Field(default=None, description="Secure gateway URL to baseline screenshot")
+    defective_screenshot_url: Optional[str] = Field(default=None, description="Secure gateway URL to defective screenshot")
+    baseline_dom_url: Optional[str] = Field(default=None, description="Secure gateway URL to baseline DOM snapshot (text/plain)")
+    defective_dom_url: Optional[str] = Field(default=None, description="Secure gateway URL to defective DOM snapshot (text/plain)")
+    measurements_url: Optional[str] = Field(default=None, description="Secure gateway URL to quantitative measurements JSON")
+    manifest_url: Optional[str] = Field(default=None, description="Secure gateway URL to capture manifest JSON")
+    measurements: Optional[Dict[str, Any]] = Field(default=None, description="Parsed quantitative measurements payload")
+
+
 # --------------------------------------------------------------------------- #
 # Inspection result summary and job responses
 # --------------------------------------------------------------------------- #
@@ -211,6 +230,9 @@ class JobResponse(BaseModel):
     )
     error: Optional[str] = None
     artifacts: List[ArtifactRef] = Field(default_factory=list)
+    evidence: Optional[Dict[str, ScenarioEvidenceRef]] = Field(
+        default=None, description="Structured scenario evidence map"
+    )
 
 
 class JobListResponse(BaseModel):

@@ -21,6 +21,13 @@ export interface VlmProvider {
   diagnose(payload: VlmRequestPayload): Promise<StructuredDiagnosis>;
 }
 
+export class VlmProviderError extends Error {
+  constructor(public readonly code: "provider_http_error" | "provider_timeout" | "provider_network_error" | "provider_invalid_response" | "provider_unavailable") {
+    super(code);
+    this.name = "VlmProviderError";
+  }
+}
+
 export interface ProviderConfig {
   providerName?: string;
   modelName?: string;
@@ -239,7 +246,7 @@ export class GeminiVlmProvider implements VlmProvider {
     this.model = config.modelName || process.env.OMNISIGHT_VLM_MODEL || "gemini-1.5-flash";
     this.apiKey = config.apiKey || process.env.GEMINI_API_KEY || "";
     this.timeoutMs = config.timeoutMs || Number(process.env.OMNISIGHT_VLM_TIMEOUT_MS) || 30000;
-    this.maxRetries = config.maxRetries || Number(process.env.OMNISIGHT_VLM_MAX_RETRIES) || 2;
+    this.maxRetries = config.maxRetries ?? (Number(process.env.OMNISIGHT_VLM_MAX_RETRIES) || 2);
 
     if (!this.apiKey) {
       throw new Error(
@@ -298,25 +305,28 @@ export class GeminiVlmProvider implements VlmProvider {
         clearTimeout(timer);
 
         if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Gemini API error (status ${response.status}): ${errorText}`);
+          throw new VlmProviderError("provider_http_error");
         }
 
         const data: any = await response.json();
         const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!rawContent) {
-          throw new Error("Gemini returned an empty candidate response.");
+          throw new VlmProviderError("provider_invalid_response");
         }
 
         const validation = parseAndValidateDiagnosis(rawContent);
         if (!validation.valid || !validation.diagnosis) {
-          throw new Error(`Invalid diagnosis structure from Gemini: ${validation.errors.join("; ")}`);
+          throw new VlmProviderError("provider_invalid_response");
         }
 
         return validation.diagnosis;
       } catch (err: any) {
-        lastError = err;
+        lastError = err instanceof VlmProviderError
+          ? err
+          : err?.name === "AbortError"
+            ? new VlmProviderError("provider_timeout")
+            : new VlmProviderError("provider_network_error");
         if (attempt <= this.maxRetries) {
           // Bounded exponential backoff: 1s, 2s
           await new Promise((res) => setTimeout(res, 1000 * attempt));
@@ -324,7 +334,7 @@ export class GeminiVlmProvider implements VlmProvider {
       }
     }
 
-    throw lastError || new Error(`Gemini provider failed after ${this.maxRetries} retries.`);
+    throw lastError || new VlmProviderError("provider_unavailable");
   }
 }
 

@@ -1,6 +1,9 @@
 import { test, expect } from "@playwright/test";
 import fs from "fs";
 import path from "path";
+import os from "os";
+import { spawnSync } from "child_process";
+import { spawn } from "child_process";
 import {
   parseAndValidateDiagnosis,
   validateDiagnosisSchema,
@@ -15,6 +18,8 @@ import {
   createVlmProvider,
   GeminiVlmProvider,
   MockVlmProvider,
+  STANDARD_VLM_PROMPT,
+  VlmProviderError,
 } from "../scripts/vlm/vlm-provider";
 import { DiagnosisService } from "../scripts/vlm/diagnosis-service";
 import { DiagnosisEvaluator } from "../scripts/vlm/diagnosis-evaluator";
@@ -159,6 +164,10 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
       expect(() => {
         assertNoGroundTruthLeakage("Safe neutral prompt for scenario_01.");
       }).not.toThrow();
+      expect(STANDARD_VLM_PROMPT).toContain("image_distortion");
+      expect(() => assertNoGroundTruthLeakage("A product image has a visibly stretched aspect ratio.")).not.toThrow();
+      expect(() => assertNoGroundTruthLeakage("&#105;mage_distortion")).toThrow(/CRITICAL LEAKAGE DETECTED/);
+      expect(() => assertNoGroundTruthLeakage("mobile-nav-overflow responsive-overflow")).toThrow(/CRITICAL LEAKAGE DETECTED/);
     });
   });
 
@@ -176,6 +185,28 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
       }).toThrow(/Gemini API key is missing/);
     });
 
+    test("Gemini HTTP errors never retain request credentials or provider response bodies", async () => {
+      const originalFetch = globalThis.fetch;
+      let responseBodyRead = false;
+      globalThis.fetch = (async () => ({
+        ok: false,
+        status: 401,
+        text: async () => { responseBodyRead = true; return "RAW key=private-value Authorization: Bearer secret"; },
+      } as any)) as typeof fetch;
+      try {
+        const provider = new GeminiVlmProvider({ apiKey: "query-secret-key", maxRetries: 0 });
+        let providerError: any;
+        await provider.diagnose({ prompt: "safe" }).catch((error) => { providerError = error; });
+        expect(providerError).toBeInstanceOf(VlmProviderError);
+        expect(providerError.code).toBe("provider_http_error");
+        expect(providerError.message).not.toContain("query-secret-key");
+        expect(providerError.message).not.toContain("RAW");
+        expect(responseBodyRead).toBe(false);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     test("mock provider returns deterministic diagnoses for visual cues", async () => {
       const mock = new MockVlmProvider();
       const res = await mock.diagnose({
@@ -185,6 +216,131 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
       expect(res.defects[0].category).toBe("image_distortion");
       expect(res.defects[0].confidence).toBeGreaterThan(0.9);
     });
+  });
+
+  test("provider failure records a failed attempt, preserves the previous manifest, and cannot feed proposals", async () => {
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "omnisight-diagnosis-failure-"));
+    const outputDir = path.join(runDir, "diagnoses");
+    fs.mkdirSync(outputDir);
+    const runId = `run-test-${Date.now()}`;
+    fs.writeFileSync(path.join(runDir, "baseline.png"), "baseline");
+    fs.writeFileSync(path.join(runDir, "defective.png"), "defective");
+    fs.writeFileSync(path.join(runDir, "dom.html"), "<main>Catalog products</main>");
+    fs.writeFileSync(path.join(runDir, "model_facing_evidence.json"), JSON.stringify({ runId, scenarios: [{
+      scenarioId: "scenario_01", route: "/products", viewport: { width: 1280, height: 800 },
+      baselineScreenshot: "baseline.png", defectiveScreenshot: "defective.png", baselineDom: "dom.html", defectiveDom: "dom.html",
+      pageTitle: "Catalog", consoleErrors: { baseline: [], defective: [] },
+    }] }));
+    const previous = { runId, attemptId: "attempt-previous", status: "completed", timestamp: new Date().toISOString(), provider: "mock", model: "mock", scenariosDiagnosed: 1, totalScenarios: 1, results: { scenario_01: { scenarioId: "scenario_01", status: "inconclusive", diagnosis: { schema_version: "1.0", status: "inconclusive", summary: "Prior result", defects: [], limitations: [] } } }, scenarioAliases: [], outputArtifactsDirectory: outputDir };
+    const canonicalManifest = path.join(outputDir, "diagnoses-manifest.json");
+    fs.writeFileSync(canonicalManifest, JSON.stringify(previous));
+    fs.writeFileSync(path.join(outputDir, "diagnosis-attempt.json"), JSON.stringify({ runId, attemptId: "attempt-previous", status: "completed" }));
+    const service = new DiagnosisService({ providerName: "mock" });
+    const suppliedSecrets = ["key=key-value", "?key=query-value", "API key spaced-value", "api_key=underscore-value", "Authorization: Bearer bearer-value", "https://user:url-secret@example.test/?key=url-value", "RAW provider response body value"].join(" | ");
+    (service as any).provider = { name: "mock", model: "mock-vlm-v1", diagnose: async () => { throw new Error(suppliedSecrets); } };
+
+    try {
+      await expect(service.diagnoseRun({ runDirectory: runDir })).rejects.toThrow(/failed.*scenario/);
+      expect(fs.readFileSync(canonicalManifest, "utf8")).toBe(JSON.stringify(previous));
+      const state = JSON.parse(fs.readFileSync(path.join(outputDir, "diagnosis-attempt.json"), "utf8"));
+      expect(state.status).toBe("failed");
+      expect(state.runId).toBe(runId);
+      expect(state.attemptId).toMatch(/^attempt-/);
+      const attemptManifest = JSON.parse(fs.readFileSync(state.manifestPath, "utf8"));
+      expect(attemptManifest.status).toBe("failed");
+      expect(attemptManifest.results.scenario_01.status).toBe("error");
+      const persisted = JSON.stringify({ attemptManifest, state });
+      for (const secret of ["key-value", "query-value", "spaced-value", "underscore-value", "bearer-value", "url-secret", "url-value", "response body value"]) {
+        expect(persisted).not.toContain(secret);
+      }
+      expect(() => new RepairProposalService().generateProposalsForRun(canonicalManifest, undefined, runId)).toThrow(/current attempt/);
+    } finally {
+      fs.rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnosis CLI exits nonzero when a required scenario cannot be analyzed", () => {
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "omnisight-cli-failure-"));
+    fs.writeFileSync(path.join(runDir, "model_facing_evidence.json"), JSON.stringify({ runId: `run-cli-${Date.now()}`, scenarios: [{
+      scenarioId: "scenario_01", route: "/products", viewport: { width: 1280, height: 800 },
+      baselineScreenshot: "missing-baseline.png", defectiveScreenshot: "missing-defective.png", baselineDom: "missing.html", defectiveDom: "missing.html",
+      pageTitle: "Catalog", consoleErrors: { baseline: [], defective: [] },
+    }] }));
+    try {
+      const cli = spawnSync(process.execPath, [path.resolve("node_modules/tsx/dist/cli.mjs"), path.resolve("scripts/run-diagnosis.ts"), "--run-dir", runDir, "--provider", "mock"], { encoding: "utf8" });
+      expect(cli.status).toBe(1);
+      expect(cli.stderr).toContain("Diagnosis pipeline failed");
+    } finally {
+      fs.rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  test("concurrent diagnosis process cannot overwrite the lock owner or attempt state", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "omnisight-diagnosis-lock-"));
+    const runDir = path.join(root, "run");
+    const outputDir = path.join(root, "diagnoses");
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, "baseline.png"), "baseline");
+    fs.writeFileSync(path.join(runDir, "defective.png"), "defective");
+    fs.writeFileSync(path.join(runDir, "dom.html"), "<main>Catalog</main>");
+    fs.writeFileSync(path.join(runDir, "model_facing_evidence.json"), JSON.stringify({ runId: "run-lock-test", scenarios: [{
+      scenarioId: "product-image-distortion", route: "/products", viewport: { width: 1280, height: 800 },
+      baselineScreenshot: "baseline.png", defectiveScreenshot: "defective.png", baselineDom: "dom.html", defectiveDom: "dom.html",
+      pageTitle: "Catalog", consoleErrors: { baseline: [], defective: [] },
+    }] }));
+    const worker = path.resolve("tests/fixtures/diagnosis-lock-worker.ts");
+    const tsx = path.resolve("node_modules/tsx/dist/cli.mjs");
+    const startedSignal = path.join(root, "first-worker-started");
+    const start = (delay: string, signalPath?: string) => spawn(process.execPath, [tsx, worker, runDir, outputDir, delay, signalPath || ""], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    const collect = (child: ReturnType<typeof spawn>) => new Promise<{ code: number | null; stderr: string }>((resolve) => {
+      let stderr = "";
+      child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+      child.on("close", (code) => resolve({ code, stderr }));
+    });
+    try {
+      const first = start("900", startedSignal);
+      const deadline = Date.now() + 10000;
+      while (!fs.existsSync(startedSignal) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(fs.existsSync(startedSignal)).toBe(true);
+      const second = start("0");
+      const [firstResult, secondResult] = await Promise.all([collect(first), collect(second)]);
+      expect(firstResult.code).toBe(0);
+      expect(secondResult.code).toBe(1);
+      expect(secondResult.stderr).toContain("lock is held");
+      const manifest = JSON.parse(fs.readFileSync(path.join(outputDir, "diagnoses-manifest.json"), "utf8"));
+      const state = JSON.parse(fs.readFileSync(path.join(outputDir, "diagnosis-attempt.json"), "utf8"));
+      expect(state.status).toBe("completed");
+      expect(state.attemptId).toBe(manifest.attemptId);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnosis publishes one canonical scenario with an explicit neutral alias", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "omnisight-diagnosis-alias-"));
+    const runDir = path.join(root, "input");
+    const outputDir = path.join(root, "diagnoses");
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, "baseline.png"), "baseline");
+    fs.writeFileSync(path.join(runDir, "defective.png"), "defective");
+    fs.writeFileSync(path.join(runDir, "dom.html"), "<main>Product catalog</main>");
+    fs.writeFileSync(path.join(runDir, "model_facing_evidence.json"), JSON.stringify({ runId: "run-alias-test", scenarios: [{
+      scenarioId: "scenario_01", route: "/products", viewport: { width: 1280, height: 800 },
+      baselineScreenshot: "baseline.png", defectiveScreenshot: "defective.png", baselineDom: "dom.html", defectiveDom: "dom.html",
+      pageTitle: "Catalog", consoleErrors: { baseline: [], defective: [] },
+    }] }));
+    fs.writeFileSync(path.join(runDir, "manifest.json"), JSON.stringify({ scenarios: { "product-image-distortion": {} } }));
+    try {
+      const result = await new DiagnosisService({ providerName: "mock" }).diagnoseRun({ runDirectory: runDir, outputDirectory: outputDir });
+      expect(Object.keys(result.results)).toEqual(["product-image-distortion"]);
+      expect(result.results["product-image-distortion"].scenarioId).toBe("product-image-distortion");
+      expect(result.scenarioAliases).toEqual([{ alias: "scenario_01", canonicalScenarioId: "product-image-distortion" }]);
+      expect(result.totalScenarios).toBe(1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // D. Evaluator Scoring Tests
@@ -284,7 +440,7 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
       const evidenceBaseDir = path.resolve(process.cwd(), "artifacts/visual-evidence");
       const runs = fs
         .readdirSync(evidenceBaseDir)
-        .filter((d) => d.startsWith("run-") && fs.statSync(path.join(evidenceBaseDir, d)).isDirectory())
+        .filter((d) => d.startsWith("run-") && fs.statSync(path.join(evidenceBaseDir, d)).isDirectory() && fs.existsSync(path.join(evidenceBaseDir, d, "model_facing_evidence.json")))
         .sort()
         .reverse();
 
@@ -298,6 +454,9 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
 
       expect(manifest.scenariosDiagnosed).toBe(4);
       expect(manifest.totalScenarios).toBe(4);
+      expect(manifest.runId).toBe(latestRun);
+      expect(manifest.attemptId).toMatch(/^attempt-/);
+      expect(manifest.status).toBe("completed");
       expect(fs.existsSync(path.join(manifest.outputArtifactsDirectory, "diagnoses-manifest.json"))).toBe(true);
 
       // 2. Run evaluation against existing ground_truth_eval.json
@@ -331,7 +490,7 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
       // 1. Locate latest evidence run
       const runs = fs
         .readdirSync(evidenceBaseDir)
-        .filter((d) => d.startsWith("run-") && fs.statSync(path.join(evidenceBaseDir, d)).isDirectory())
+        .filter((d) => d.startsWith("run-") && fs.statSync(path.join(evidenceBaseDir, d)).isDirectory() && fs.existsSync(path.join(evidenceBaseDir, d, "model_facing_evidence.json")))
         .sort()
         .reverse();
       expect(runs.length).toBeGreaterThan(0);
@@ -369,7 +528,11 @@ test.describe("Step 4.3 VLM Integration & Blind Defect Diagnosis Unit & Pipeline
 
       // 5. Generate repair proposal via RepairProposalService
       const proposalService = new RepairProposalService({ isMock: true });
-      const proposal = proposalService.generateProposal(diagnosisResult);
+      const proposal = proposalService.generateProposal(diagnosisResult, {
+        runId: path.basename(targetRunDir),
+        attemptId: "direct-test-attempt",
+        diagnosisManifestPath: path.relative(process.cwd(), path.join(targetRunDir, "diagnoses", "diagnoses-manifest.json")),
+      });
 
       expect(proposal.schemaVersion).toBe("1.0");
       expect(proposal.scenarioId).toBe(imageDistortionScenario.scenarioId);

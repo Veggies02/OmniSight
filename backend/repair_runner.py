@@ -53,7 +53,7 @@ class RepairApproval(BaseModel):
 
 
 class RepairResult(BaseModel):
-    outcome: Literal["passed", "failed", "rejected", "error"]
+    outcome: Literal["passed", "failed", "rejected", "unsupported", "error"]
     passed: bool
     job_id: str
     message: str
@@ -69,6 +69,8 @@ class RepairResult(BaseModel):
     cleanup: Optional[Dict[str, Any]] = None
     proposal_path: Optional[str] = None
     report_path: Optional[str] = Field(default=None, description="Relative to the repo root")
+    branch: Optional[str] = Field(default=None)
+    commit_sha: Optional[str] = Field(default=None)
     duration_seconds: Optional[float] = None
     stdout_tail: Optional[str] = None
     stderr_tail: Optional[str] = None
@@ -211,6 +213,12 @@ class RepairRunner:
             approved["humanReviewStatus"] = "approved"
             approved["reviewedBy"] = approval.reviewed_by
             approved["reviewedAt"] = approval.reviewed_at
+            if approval.patch_digest_sha256:
+                approved["approvalDigest"] = approval.patch_digest_sha256
+            elif approved.get("approvalDigest"):
+                pass
+            elif approved.get("proposalDigest"):
+                approved["approvalDigest"] = approved["proposalDigest"]
             job_dir = self.job_dir(job_id)
             job_dir.mkdir(parents=True)
             proposal_file = job_dir / "proposal.json"
@@ -272,6 +280,12 @@ class RepairRunner:
         approval_ok = (report.get("approvalValidation") or {}).get("approved")
         if approval_ok is None and summary:
             approval_ok = summary.get("approved")
+        branch = report.get("branch") if isinstance(report.get("branch"), str) else None
+        commit_sha = (
+            report.get("commitSha")
+            if isinstance(report.get("commitSha"), str)
+            else (report.get("commit_sha") if isinstance(report.get("commit_sha"), str) else None)
+        )
         fields: Dict[str, Any] = dict(
             final_state=final_state,
             failure_reason=report.get("failureReason"),
@@ -283,6 +297,8 @@ class RepairRunner:
             proposal_id=report.get("proposalId"),
             cleanup=report.get("cleanupStatus"),
             report_path=self._rel(report_path),
+            branch=branch,
+            commit_sha=commit_sha,
         )
 
         if exit_code == 0 and final_state == "PASSED":
@@ -292,7 +308,10 @@ class RepairRunner:
         if exit_code == 0:
             # Contract says exit 0 means PASSED. Anything else means we misread something.
             return error(f"CLI exited 0 but report state is {final_state!r}; treating as an error.", **fields)
-        outcome = "rejected" if approval_ok is False else "failed"
+        if final_state == "UNSUPPORTED":
+            outcome = "unsupported"
+        else:
+            outcome = "rejected" if approval_ok is False else "failed"
         reason = report.get("failureReason") or final_state
         return RepairResult(
             outcome=outcome,

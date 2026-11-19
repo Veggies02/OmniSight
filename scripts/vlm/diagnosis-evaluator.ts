@@ -92,6 +92,10 @@ export class DiagnosisEvaluator {
 
       let diagResult: DiagnosisResult | undefined = diagnosisManifest.results[scenarioId];
       if (!diagResult) {
+        const mapped = diagnosisManifest.scenarioAliases?.find((alias: any) => alias.alias === scenarioId);
+        if (mapped) diagResult = diagnosisManifest.results[mapped.canonicalScenarioId];
+      }
+      if (!diagResult) {
         // Fall back to correlation via neutral alias or case identifier
         const sIdx = scenarioKeys.indexOf(scenarioId);
         if (sIdx >= 0) {

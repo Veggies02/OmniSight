@@ -256,3 +256,4 @@ OmniSight enforces strict zero-trust operational security boundaries across all 
 ```
 
 OmniSight version `1.1.0-rc1` is certified as **RELEASE CANDIDATE READY** for deployment to production staging environments.
+

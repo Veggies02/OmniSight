@@ -1,70 +1,137 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { runRepairJob } from '../scripts/run-repair-job';
 import { runPostRepairVerification } from '../scripts/repair/post-repair-verifier';
 import { exportVerificationReport } from '../scripts/export-verification-report';
 import { computeFileHash } from '../scripts/vlm/source-path-security';
 import { type RepairProposal } from '../scripts/vlm/repair-proposal-schema';
+import { proposalDigestPayload } from '../scripts/vlm/proposal-digest';
 
 test.describe('Step 4.7 End-to-End Self-Healing Repair Workflow Tests', () => {
   const repoRoot = process.cwd();
   const validCssPath = path.resolve(repoRoot, 'src/index.css');
   const validHash = computeFileHash(validCssPath);
+  const fixtureDirs: string[] = [];
+
+  test.afterAll(() => {
+    for (const d of fixtureDirs) {
+      try {
+        fs.rmSync(d, { recursive: true, force: true });
+      } catch {}
+    }
+  });
 
   // Helper fixture to construct valid, strictly typed proposals
-  const createProposalFixture = (overrides: Partial<RepairProposal> = {}): RepairProposal => ({
-    schemaVersion: '1.0',
-    proposalId: `prop_e2e_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    scenarioId: 'product-image-distortion',
-    diagnosisRef: {
-      diagnosisStatus: 'diagnosed',
-      model: 'mock-vlm-v1',
-      provider: 'mock',
-      primaryDefectCategory: 'image_distortion',
-      reportedConfidence: 0.95,
-    },
-    defectCategory: 'image_distortion',
-    severity: 'medium',
-    localization: {
-      status: 'localized',
-      filePath: 'src/index.css',
-      fileHash: validHash,
-      componentOrSelector: '.product-image',
-      excerpt: {
-        filePath: 'src/index.css',
-        startLine: 452,
-        endLine: 470,
-        content: '.product-image { object-fit: fill; }',
-        sha256: validHash,
+  const createProposalFixture = (overrides: Partial<RepairProposal> = {}): RepairProposal => {
+    const sequence = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const scenarioId = overrides.scenarioId ?? 'product-image-distortion';
+    const runId = `run-e2e-provenance-${sequence}`;
+    const attemptId = `attempt-e2e-${sequence}`;
+    const diagnosisDir = path.join(repoRoot, 'artifacts/visual-evidence', runId, 'diagnoses');
+    const manifestPath = path.join(diagnosisDir, 'diagnoses-manifest.json');
+    fixtureDirs.push(path.join(repoRoot, 'artifacts/visual-evidence', runId));
+
+    const proposal: any = {
+      schemaVersion: '1.0',
+      proposalId: `prop_e2e_${sequence}`,
+      scenarioId,
+      runId,
+      attemptId,
+      diagnosisManifestPath: path.relative(repoRoot, manifestPath),
+      registeredPatchId: scenarioId === 'product-image-distortion' ? 'patch-product-image-distortion-001' : null,
+      diagnosisRef: {
+        diagnosisStatus: 'diagnosed',
+        model: 'mock-vlm-v1',
+        provider: 'mock',
+        primaryDefectCategory: 'image_distortion',
+        reportedConfidence: 0.95,
       },
-      evidence: [],
-      uncertaintyNotes: [],
-    },
-    suspectedRootCause: 'Container height override and object-fit: fill applied.',
-    evidenceExplanation: ['Rendered image height distorted compared to baseline.'],
-    proposedCorrection: {
-      type: 'css_rule_modification',
-      targetSelectorOrComponent: '.product-image',
-      currentCode: '.product-image { object-fit: fill; }',
-      proposedCode: '.product-image { object-fit: cover; }',
-      diffSummary: 'Restore object-fit: cover preserving aspect ratio.',
-    },
-    expectedVisualImprovement: 'Restore square aspect ratio.',
-    confidence: 'high',
-    confidenceScore: 0.95,
-    potentialRisks: [],
-    requiredValidationTests: ['tests/responsive.spec.ts'],
-    humanReviewStatus: 'approved',
-    status: 'proposed',
-    createdAt: new Date().toISOString(),
-    isMock: true,
-    sourceFreshness: 'fresh',
-    reviewedBy: 'lead-reviewer@omnisight.ai',
-    reviewedAt: new Date().toISOString(),
-    reviewNotes: 'Verified and authorized by human review gate.',
-    ...overrides,
-  });
+      defectCategory: 'image_distortion',
+      severity: 'medium',
+      localization: {
+        status: 'localized',
+        filePath: 'src/index.css',
+        fileHash: validHash,
+        componentOrSelector: '.product-image',
+        excerpt: {
+          filePath: 'src/index.css',
+          startLine: 452,
+          endLine: 470,
+          content: '.product-image { object-fit: fill; }',
+          sha256: validHash,
+        },
+        evidence: [],
+        uncertaintyNotes: [],
+      },
+      suspectedRootCause: 'Container height override and object-fit: fill applied.',
+      evidenceExplanation: ['Rendered image height distorted compared to baseline.'],
+      proposedCorrection: {
+        type: 'css_rule_modification',
+        targetSelectorOrComponent: '.product-image',
+        currentCode: '.product-image { object-fit: fill; }',
+        proposedCode: '.product-image { object-fit: cover; }',
+        diffSummary: 'Restore object-fit: cover preserving aspect ratio.',
+      },
+      expectedVisualImprovement: 'Restore square aspect ratio.',
+      confidence: 'high',
+      confidenceScore: 0.95,
+      potentialRisks: [],
+      requiredValidationTests: ['tests/responsive.spec.ts'],
+      humanReviewStatus: 'approved',
+      status: 'proposed',
+      createdAt: new Date().toISOString(),
+      isMock: true,
+      sourceFreshness: 'fresh',
+      reviewedBy: 'lead-reviewer@omnisight.ai',
+      reviewedAt: new Date().toISOString(),
+      reviewNotes: 'Verified and authorized by human review gate.',
+      ...overrides,
+    };
+
+    proposal.proposalDigest = crypto.createHash('sha256').update(proposalDigestPayload(proposal)).digest('hex');
+    if (proposal.humanReviewStatus === 'approved') proposal.approvalDigest = proposal.proposalDigest;
+
+    fs.mkdirSync(diagnosisDir, { recursive: true });
+    const diagnosis = {
+      schema_version: '1.0',
+      status: 'diagnosed',
+      summary: 'Test diagnosis',
+      limitations: [],
+      defects: [{
+        category: proposal.defectCategory,
+        severity: 'medium',
+        confidence: 0.95,
+        description: 'Test defect',
+        evidence: ['Test visual evidence'],
+        affected_element: { description: 'Product image' },
+        suspected_cause: 'Test cause',
+        suggested_fix: 'Test fix',
+      }],
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      runId,
+      attemptId,
+      status: 'completed',
+      timestamp: new Date().toISOString(),
+      provider: 'mock',
+      model: 'mock',
+      scenariosDiagnosed: 1,
+      totalScenarios: 1,
+      results: { [scenarioId]: { scenarioId, status: 'diagnosed', diagnosis, model: 'mock', provider: 'mock' } },
+      scenarioAliases: [],
+      outputArtifactsDirectory: diagnosisDir,
+    }));
+    fs.writeFileSync(path.join(diagnosisDir, 'diagnosis-attempt.json'), JSON.stringify({
+      runId,
+      attemptId,
+      status: 'completed',
+      manifestPath: path.resolve(manifestPath),
+    }));
+
+    return proposal;
+  };
 
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {

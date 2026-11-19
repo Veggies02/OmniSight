@@ -79,6 +79,7 @@ def create_hardened_app(
     repair_runner: Any = None,
     operator_token: Optional[str] = None,
     github_client: Any = None,
+    artifacts_dir: Optional[Path] = None,
 ) -> FastAPI:
     """Factory creating an OmniSight FastAPI application with decoupled security integration.
 
@@ -89,6 +90,7 @@ def create_hardened_app(
         repair_runner: Optional repair runner instance.
         operator_token: Optional operator token for repair authentication.
         github_client: Optional GitHub client instance.
+        artifacts_dir: Optional custom Path to artifacts directory.
 
     Returns:
         Configured FastAPI application instance with unrestricted subprocess dispatch.
@@ -104,6 +106,7 @@ def create_hardened_app(
             repair_runner=repair_runner,
             operator_token=operator_token,
             github_client=github_client,
+            artifacts_dir=artifacts_dir,
         )
     except ImportError:
         logger.debug("Backend API module not in path; creating standalone hardened app")

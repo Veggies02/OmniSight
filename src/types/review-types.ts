@@ -61,10 +61,44 @@ export interface VisualEvidencePair {
   runId?: string;
   postRepairRunId?: string;
   postRepairJobId?: string;
+  // Enhanced evidence reference fields
+  baselineDomUrl?: string;
+  defectiveDomUrl?: string;
+  measurementsUrl?: string;
+  manifestUrl?: string;
+  capturedAt?: string;
+  isRealEvidence?: boolean;
+  mockFallback?: {
+    baselineScreenshotUrl: string;
+    defectiveScreenshotUrl: string;
+  };
+}
+
+export interface ScenarioEvidenceContract {
+  scenarioId: string;
+  defectId?: string;
+  route?: string;
+  viewport?: { width: number; height: number };
+  runId?: string;
+  capturedAt?: string;
+  isMock: boolean;
+  baselineScreenshotUrl?: string;
+  defectiveScreenshotUrl?: string;
+  baselineDomUrl?: string;
+  defectiveDomUrl?: string;
+  measurementsUrl?: string;
+  manifestUrl?: string;
+  measurements?: Record<string, any>;
 }
 
 export interface ReviewProposalItem {
   schemaVersion: "1.0";
+  runId?: string;
+  attemptId?: string;
+  diagnosisManifestPath?: string;
+  registeredPatchId?: string | null;
+  proposalDigest?: string;
+  approvalDigest?: string;
   proposalId: string;
   scenarioId: string;
   diagnosisRef: {

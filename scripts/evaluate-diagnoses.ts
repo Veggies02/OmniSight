@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { DiagnosisEvaluator } from "./vlm/diagnosis-evaluator";
+import { readCurrentDiagnosisManifest } from "./vlm/diagnosis-manifest";
+import { acquireDiagnosisLock } from "./vlm/diagnosis-attempt-lock";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -35,6 +37,7 @@ async function main() {
   const targetRunDir = path.join(evidenceBaseDir, runId);
   const diagnosesManifestPath = path.join(targetRunDir, "diagnoses", "diagnoses-manifest.json");
   const groundTruthPath = path.join(targetRunDir, "ground_truth_eval.json");
+  const evaluationLock = acquireDiagnosisLock(path.dirname(diagnosesManifestPath));
 
   if (!fs.existsSync(diagnosesManifestPath)) {
     console.error(`Error: diagnoses manifest not found at '${diagnosesManifestPath}'. Run 'npm run diagnose:evidence' first.`);
@@ -46,7 +49,7 @@ async function main() {
     process.exit(1);
   }
 
-  const diagnosisManifest = JSON.parse(fs.readFileSync(diagnosesManifestPath, "utf8"));
+  const diagnosisManifest = readCurrentDiagnosisManifest(diagnosesManifestPath, runId);
   const groundTruthData = JSON.parse(fs.readFileSync(groundTruthPath, "utf8"));
 
   console.log("==================================================");
@@ -78,6 +81,7 @@ async function main() {
 
   console.log("\nEvaluation report saved to:");
   console.log(report.evaluationArtifactPath);
+  evaluationLock.release();
   process.exit(0);
 }
 

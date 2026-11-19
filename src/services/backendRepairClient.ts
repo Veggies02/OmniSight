@@ -9,7 +9,7 @@
  * - GET  /jobs/{job_id}
  */
 
-import type { ReviewProposalItem } from "../types/review-types";
+import type { ReviewProposalItem, ScenarioEvidenceContract } from "../types/review-types";
 
 export type BackendJobStatus =
   | "queued"
@@ -397,11 +397,12 @@ export class BackendRepairClient {
    */
   public async recordApproval(
     jobId: string,
-    reviewedBy: string
+    reviewedBy: string,
+    extra: { patch_digest_sha256?: string; review_notes?: string } = {}
   ): Promise<BackendJobResponse> {
     return this.request<BackendJobResponse>(`jobs/${encodeURIComponent(jobId)}/approval`, {
       method: "POST",
-      body: JSON.stringify({ reviewed_by: reviewedBy }),
+      body: JSON.stringify({ reviewed_by: reviewedBy, ...extra }),
       requireAuth: true,
     });
   }
@@ -444,6 +445,50 @@ export class BackendRepairClient {
         return null;
       }
       throw err;
+    }
+  }
+
+  // ============================================================================
+  // Structured Visual Evidence Gateway Methods (Phase 2)
+  // ============================================================================
+
+  /**
+   * Retrieve all structured scenario evidence contracts associated with an inspection job
+   * GET /jobs/{job_id}/evidence
+   */
+  public async getJobEvidence(jobId: string): Promise<ScenarioEvidenceContract[]> {
+    return this.request<ScenarioEvidenceContract[]>(`jobs/${encodeURIComponent(jobId)}/evidence`);
+  }
+
+  /**
+   * Retrieve structured visual evidence for a specific scenario on a job
+   * GET /jobs/{job_id}/evidence/{scenario_id}
+   */
+  public async getScenarioEvidence(
+    jobId: string,
+    scenarioId: string
+  ): Promise<ScenarioEvidenceContract> {
+    return this.request<ScenarioEvidenceContract>(
+      `jobs/${encodeURIComponent(jobId)}/evidence/${encodeURIComponent(scenarioId)}`
+    );
+  }
+
+  /**
+   * Retrieve the latest captured evidence across the workspace for a scenario
+   * GET /evidence/latest/{scenario_id}
+   */
+  public async getLatestScenarioEvidence(
+    scenarioId: string
+  ): Promise<ScenarioEvidenceContract | null> {
+    try {
+      return await this.request<ScenarioEvidenceContract>(
+        `evidence/latest/${encodeURIComponent(scenarioId)}`
+      );
+    } catch (err: unknown) {
+      if (err instanceof BackendRepairError && (err.status === 404 || err.status === 0)) {
+        return null;
+      }
+      return null;
     }
   }
 

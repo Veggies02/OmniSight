@@ -8,17 +8,33 @@ import {
 } from '../scripts/run-repair-job';
 import { WorktreeManager } from '../scripts/repair/worktree-manager';
 import { computeFileHash } from '../scripts/vlm/source-path-security';
+import crypto from 'crypto';
+import { proposalDigestPayload } from '../scripts/vlm/proposal-digest';
 
 test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
   const repoRoot = process.cwd();
   const validCssPath = path.resolve(repoRoot, 'src/index.css');
   const validHash = computeFileHash(validCssPath);
+  let proposalFixtureCounter = 0;
+  const proposalFixtureDirs: string[] = [];
 
   // Helper fixture for a valid approved proposal
-  const makeProposal = (overrides: Record<string, any> = {}) => ({
+  const makeProposal = (overrides: Record<string, any> = {}) => {
+    const sequence = `${process.pid}-${++proposalFixtureCounter}-${crypto.randomUUID()}`;
+    const scenarioId = overrides.scenarioId ?? 'product-image-distortion';
+    const runId = `run-test-provenance-${sequence}`;
+    const attemptId = `attempt-test-${sequence}`;
+    const diagnosisDir = path.join(repoRoot, 'artifacts/visual-evidence', runId, 'diagnoses');
+    const manifestPath = path.join(diagnosisDir, 'diagnoses-manifest.json');
+    proposalFixtureDirs.push(path.join(repoRoot, 'artifacts/visual-evidence', runId));
+    const proposal: any = {
     schemaVersion: '1.0',
-    proposalId: `prop_test_${Date.now()}`,
-    scenarioId: 'product-image-distortion',
+    proposalId: overrides.proposalId || `prop_test_${sequence}`,
+    runId,
+    attemptId,
+    diagnosisManifestPath: path.relative(repoRoot, manifestPath),
+    registeredPatchId: scenarioId ? 'patch-product-image-distortion-001' : null,
+    scenarioId,
     diagnosisRef: {
       diagnosisStatus: 'diagnosed',
       model: 'mock-vision',
@@ -65,6 +81,23 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
     reviewedAt: new Date().toISOString(),
     reviewNotes: 'Verified and authorized for automated worktree repair.',
     ...overrides,
+    };
+    const diagnosisCategory = proposal.diagnosisRef.primaryDefectCategory || 'image_distortion';
+    proposal.registeredPatchId = scenarioId === 'product-image-distortion' ? 'patch-product-image-distortion-001' : null;
+    proposal.proposalDigest = crypto.createHash('sha256').update(proposalDigestPayload(proposal)).digest('hex');
+    if (proposal.humanReviewStatus === 'approved') proposal.approvalDigest = proposal.proposalDigest;
+    fs.mkdirSync(diagnosisDir, { recursive: true });
+    const diagnosis = {
+      schema_version: '1.0', status: 'diagnosed', summary: 'Test diagnosis', limitations: [],
+      defects: [{ category: diagnosisCategory, severity: 'medium', confidence: 0.95, description: 'Test defect', evidence: ['Test visual evidence'], affected_element: { description: 'Product image' }, suspected_cause: 'Test cause', suggested_fix: 'Test fix' }],
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify({ runId, attemptId, status: 'completed', timestamp: new Date().toISOString(), provider: 'mock', model: 'mock', scenariosDiagnosed: 1, totalScenarios: 1, results: { [scenarioId || 'legacy-scenario']: { scenarioId: scenarioId || 'legacy-scenario', status: 'diagnosed', diagnosis, model: 'mock', provider: 'mock' } }, scenarioAliases: [], outputArtifactsDirectory: diagnosisDir }));
+    fs.writeFileSync(path.join(diagnosisDir, 'diagnosis-attempt.json'), JSON.stringify({ runId, attemptId, status: 'completed', manifestPath: path.resolve(manifestPath) }));
+    return proposal;
+  };
+
+  test.afterAll(() => {
+    for (const dir of proposalFixtureDirs) fs.rmSync(dir, { recursive: true, force: true });
   });
 
   // A. CLI Argument Parsing Tests
@@ -268,6 +301,27 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
       }
     });
 
+    test('rejects explicit and implicit proposals after a newer diagnosis attempt fails', async () => {
+      const staleProposal = makeProposal({ humanReviewStatus: 'approved' });
+      const tempProposalPath = path.resolve(repoRoot, 'artifacts/temp_superseded_proposal.json');
+      const diagnosisManifestPath = path.resolve(repoRoot, staleProposal.diagnosisManifestPath!);
+      const statePath = path.join(path.dirname(diagnosisManifestPath), 'diagnosis-attempt.json');
+      const previousState = fs.readFileSync(statePath, 'utf8');
+      fs.writeFileSync(tempProposalPath, JSON.stringify(staleProposal));
+      const implicitDir = path.resolve(repoRoot, 'artifacts/repair-proposals', `zz-stale-repro-${Date.now()}`);
+      fs.mkdirSync(implicitDir, { recursive: true });
+      fs.writeFileSync(path.join(implicitDir, 'repair_proposals.json'), JSON.stringify({ runId: staleProposal.runId, attemptId: staleProposal.attemptId, status: 'completed', results: { [staleProposal.scenarioId]: staleProposal } }));
+      fs.writeFileSync(statePath, JSON.stringify({ runId: staleProposal.runId, attemptId: `attempt-newer-${Date.now()}`, status: 'failed', manifestPath: diagnosisManifestPath }));
+      try {
+        await expect(runRepairJob(['--proposal', tempProposalPath], repoRoot)).rejects.toThrow(/current attempt/);
+        await expect(runRepairJob([], repoRoot)).rejects.toThrow(/current attempt/);
+      } finally {
+        fs.writeFileSync(statePath, previousState);
+        fs.rmSync(tempProposalPath, { force: true });
+        fs.rmSync(implicitDir, { recursive: true, force: true });
+      }
+    });
+
     test('strictly rejects unknown or unregistered patch ID', async () => {
       const approvedProposal = makeProposal({ humanReviewStatus: 'approved' });
       const tempPath = path.resolve(repoRoot, 'artifacts/temp_approved.json');
@@ -442,7 +496,7 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
       }
     });
 
-    test('preserves backward compatibility: falls back to defectCategory only when scenarioId is missing', async () => {
+    test('rejects legacy executable proposals without a canonical scenarioId', async () => {
       const originalConsoleError = console.error;
       const loggedErrors: string[] = [];
       console.error = (...args: any[]) => {
@@ -460,15 +514,10 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
       fs.writeFileSync(tempPath, JSON.stringify(legacyProposal));
 
       try {
-        const result = await runRepairJob(
+        await expect(runRepairJob(
           ['--proposal', tempPath, '--job-id', 'test-legacy-fallback-job'],
           repoRoot
-        );
-        // It successfully resolved the fallback patch (patch-product-image-distortion-001)
-        // and stopped at the human review gate (not UNSUPPORTED!)
-        expect(result.report.finalState).toBe('REJECTED');
-        expect(result.report.failureReason).toContain("must be 'approved' before code repair");
-        expect(result.report.patchId).toBe('patch-product-image-distortion-001');
+        )).rejects.toThrow('canonical scenarioId');
       } finally {
         console.error = originalConsoleError;
         if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
@@ -536,17 +585,35 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
               category: 'image_distortion',
               severity: 'medium',
               confidence: 0.95,
+              description: 'Product image is distorted',
               evidence: ['Aspect ratio distortion'],
               suspected_cause: 'object-fit: fill with distorting scale transform',
               suggested_fix: 'object-fit: cover',
-              affected_element: { selector: '.product-image' },
+              affected_element: { description: 'Product image', selector: '.product-image' },
             },
           ],
         },
       };
 
-      // 1. Generate proposal directly via service
-      const generated = service.generateProposal(mockDiagnosis);
+      // Generate through the authoritative manifest path so the proposal has
+      // verifiable run and attempt provenance at execution time.
+      const runId = `run-generated-proposal-${crypto.randomUUID()}`;
+      const attemptId = `attempt-generated-${crypto.randomUUID()}`;
+      const diagnosisDir = path.resolve(repoRoot, 'artifacts', 'visual-evidence', runId, 'diagnoses');
+      const diagnosisManifestPath = path.join(diagnosisDir, 'diagnoses-manifest.json');
+      proposalFixtureDirs.push(path.dirname(diagnosisDir));
+      fs.mkdirSync(diagnosisDir, { recursive: true });
+      fs.writeFileSync(diagnosisManifestPath, JSON.stringify({
+        runId, attemptId, status: 'completed', timestamp: new Date().toISOString(),
+        provider: 'mock', model: 'mock-vlm-v1', scenariosDiagnosed: 1, totalScenarios: 1,
+        results: { [mockDiagnosis.scenarioId]: { ...mockDiagnosis, diagnosis: { ...mockDiagnosis.diagnosis, status: 'diagnosed', limitations: [] } } }, scenarioAliases: [],
+        outputArtifactsDirectory: diagnosisDir,
+      }));
+      fs.writeFileSync(path.join(diagnosisDir, 'diagnosis-attempt.json'), JSON.stringify({
+        runId, attemptId, status: 'completed', manifestPath: path.resolve(diagnosisManifestPath),
+      }));
+      const proposalRun = service.generateProposalsForRun(diagnosisManifestPath, undefined, runId);
+      const generated = proposalRun.results[mockDiagnosis.scenarioId];
       expect(generated.requiredValidationTests).not.toContain('tests/defect-injection.spec.ts');
       expect(generated.requiredValidationTests).toContain('tests/responsive.spec.ts');
 
@@ -558,6 +625,7 @@ test.describe('Step 4.6 run-repair-job CLI & Contract Validation Tests', () => {
         reviewedAt: new Date().toISOString(),
         reviewNotes: 'Authorized for execution',
       };
+      approved.approvalDigest = approved.proposalDigest;
 
       const tempPath = path.resolve(repoRoot, 'artifacts/temp_gen_approved.json');
       fs.mkdirSync(path.dirname(tempPath), { recursive: true });

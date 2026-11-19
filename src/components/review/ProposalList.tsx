@@ -90,8 +90,8 @@ export const ProposalList: React.FC<ProposalListProps> = ({ proposals }) => {
               </td>
 
               <td>
-                <span className={`status-badge ${getFreshnessBadgeClass(item.sourceFreshness)}`}>
-                  {item.sourceFreshness.toUpperCase()}
+                <span className={`status-badge ${getFreshnessBadgeClass(item.sourceFreshness || "fresh")}`}>
+                  {(item.sourceFreshness || "fresh").toUpperCase()}
                 </span>
               </td>
 

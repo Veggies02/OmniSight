@@ -8,6 +8,8 @@ import {
   sanitizeDomSnapshot,
   sanitizeUrlOrRoute,
 } from "../scripts/vlm/evidence-sanitizer";
+import { STANDARD_VLM_PROMPT } from "../scripts/vlm/vlm-provider";
+import { readCurrentDiagnosisManifest } from "../scripts/vlm/diagnosis-manifest";
 import { stripInspectionMetadataFromDom } from "../scripts/evidence-helpers";
 import {
   prepareEvaluationBundle,
@@ -125,6 +127,40 @@ test.describe("OmniSight Evaluation Dataset Bundle Verification", () => {
       expect(content).not.toContain("expected_category");
       expect(content).not.toContain("expected_symptom");
       expect(content).not.toContain("omnisight-defect-metadata");
+    }
+  });
+
+  test("trusted diagnosis instructions retain categories while evidence-only checks reject leaked labels", () => {
+    expect(STANDARD_VLM_PROMPT).toContain('"image_distortion"');
+    expect(STANDARD_VLM_PROMPT).toContain('"responsive_overflow"');
+    expect(() => assertNoGroundTruthLeakage("An image appears stretched against the baseline.")).not.toThrow();
+    expect(() => assertNoGroundTruthLeakage("%69mage_distortion")).toThrow(/LEAKAGE DETECTED/);
+    expect(FORBIDDEN_LEAKAGE_TOKENS).toContain("image_distortion");
+  });
+
+  test("evaluation manifest reader rejects missing, failed, and mismatched attempt state", () => {
+    const fixtureDir = path.resolve(process.cwd(), `artifacts/temp_evaluation_provenance_${Date.now()}`);
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    const runId = `run-evaluation-${Date.now()}`;
+    const attemptId = `attempt-evaluation-${Date.now()}`;
+    const manifestPath = path.join(fixtureDir, "diagnoses-manifest.json");
+    const manifest = {
+      runId, attemptId, status: "completed", timestamp: new Date().toISOString(), provider: "mock", model: "mock",
+      scenariosDiagnosed: 1, totalScenarios: 1,
+      results: { product: { scenarioId: "product", status: "inconclusive", diagnosis: { schema_version: "1.0", status: "inconclusive", summary: "Unclear evidence", defects: [], limitations: [] } } },
+      scenarioAliases: [], outputArtifactsDirectory: fixtureDir,
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    try {
+      expect(() => readCurrentDiagnosisManifest(manifestPath, runId)).toThrow(/state is missing/);
+      const statePath = path.join(fixtureDir, "diagnosis-attempt.json");
+      fs.writeFileSync(statePath, JSON.stringify({ runId, attemptId, status: "completed", manifestPath: path.resolve(manifestPath) }));
+      expect(readCurrentDiagnosisManifest(manifestPath, runId).attemptId).toBe(attemptId);
+      expect(() => readCurrentDiagnosisManifest(manifestPath, "another-run")).toThrow(/does not match requested/);
+      fs.writeFileSync(statePath, JSON.stringify({ runId, attemptId, status: "failed", manifestPath: path.resolve(manifestPath) }));
+      expect(() => readCurrentDiagnosisManifest(manifestPath, runId)).toThrow(/current attempt state/);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
 

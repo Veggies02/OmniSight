@@ -47,6 +47,7 @@ export interface DiagnosisResult {
     viewport: { width: number; height: number };
   };
   error?: string;
+  errorCode?: string;
 }
 
 export interface ValidationResult {

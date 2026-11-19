@@ -60,6 +60,21 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
   const hasBefore = Boolean(beforeUrl) && !beforeImgError;
   const hasAfter = Boolean(afterUrl) && !afterImgError;
 
+  // Provenance determination: Real Playwright capture vs static demonstration data
+  const isRealEvidence = Boolean(
+    visualEvidence?.isRealEvidence ||
+      (visualEvidence?.runId &&
+        !visualEvidence.runId.startsWith("mock") &&
+        !beforeUrl?.startsWith("data:image/svg"))
+  );
+
+  const formatMeasurementKey = (key: string): string =>
+    key
+      .replace(/([A-Z])/g, " $1")
+      .replace(/[._-]/g, " ")
+      .replace(/^./, (s) => s.toUpperCase())
+      .trim();
+
   // Dimension and aspect ratio comparison
   const aspectTolerance = 0.05; // 5% ratio variance tolerance
   const aspectMismatch = Boolean(
@@ -211,6 +226,12 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
 
         {/* Status Chip & Viewport */}
         <div className="evidence-status-bar">
+          <span
+            className={`evidence-provenance-pill ${isRealEvidence ? "pill-real-evidence" : "pill-mock-evidence"}`}
+            data-testid="evidence-provenance-pill"
+          >
+            {isRealEvidence ? "● Real Playwright Evidence" : "○ Demonstration Data"}
+          </span>
           <span
             className={`evidence-status-pill ${verificationStatusClass}`}
             data-testid="verification-status-pill"
@@ -417,6 +438,30 @@ export const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
           </div>
         )}
       </div>
+
+      {/* Scenario Quantitative Defect Measurements Panel */}
+      {visualEvidence?.measurements && Object.keys(visualEvidence.measurements).length > 0 && (
+        <div className="evidence-measurements-panel" data-testid="evidence-measurements-panel">
+          <div className="measurements-header">
+            <h4>Scenario Quantitative Measurements</h4>
+            {visualEvidence.runId && (
+              <span className="run-id-tag" data-testid="evidence-run-id">
+                Capture Run: <code>{visualEvidence.runId}</code>
+              </span>
+            )}
+          </div>
+          <div className="measurements-grid" data-testid="measurements-grid">
+            {Object.entries(visualEvidence.measurements).map(([key, val]) => (
+              <div key={key} className="measurement-card" data-testid={`measurement-${key}`}>
+                <span className="measurement-key">{formatMeasurementKey(key)}:</span>
+                <span className="measurement-val">
+                  {typeof val === "object" ? JSON.stringify(val) : String(val)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Verification Check Badges & Quantitative Metrics */}
       {repairResult?.verificationChecks && repairResult.verificationChecks.length > 0 && !hasProposalMismatch && (

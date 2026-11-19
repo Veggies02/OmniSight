@@ -30,6 +30,10 @@ export default defineConfig(({ mode }) => {
           target: backendTarget,
           changeOrigin: true,
         },
+        '/artifacts': {
+          target: backendTarget,
+          changeOrigin: true,
+        },
       },
     },
   }

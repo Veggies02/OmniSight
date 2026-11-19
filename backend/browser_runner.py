@@ -199,7 +199,9 @@ class PlaywrightCliRunner:
 
     def _check_app_reachable(self) -> None:
         try:
-            urllib.request.urlopen(self.base_url, timeout=5).close()
+            # Bypass environment proxies for local app health verification
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            opener.open(self.base_url, timeout=5).close()
         except urllib.error.HTTPError:
             return  # the server answered, so it is up
         except (urllib.error.URLError, OSError) as exc:

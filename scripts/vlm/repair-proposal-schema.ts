@@ -48,6 +48,12 @@ export interface SourceLocalizationResult {
 
 export interface RepairProposal {
   schemaVersion: "1.0";
+  runId?: string;
+  attemptId?: string;
+  diagnosisManifestPath?: string;
+  registeredPatchId?: string | null;
+  proposalDigest?: string;
+  approvalDigest?: string;
   proposalId: string;
   scenarioId: string;
   diagnosisRef: {

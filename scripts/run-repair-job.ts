@@ -1,14 +1,17 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { RepairExecutionService } from './repair/repair-execution-service';
 import { RepairJobContract, RepairExecutionReport } from './repair/repair-job-schema';
 import {
-  findPatchForDefect,
   findPatchForScenario,
   getExpectedCategoryForScenario,
   getRegisteredPatch,
 } from './repair/patch-registry';
 import { validateRepairProposalSchema, RepairProposal } from './vlm/repair-proposal-schema';
+import { readCurrentDiagnosisManifest } from './vlm/diagnosis-manifest';
+import { proposalDigestPayload } from './vlm/proposal-digest';
+import { acquireDiagnosisLock } from './vlm/diagnosis-attempt-lock';
 
 export interface RunRepairJobCliArgs {
   proposalPath?: string;
@@ -180,6 +183,34 @@ export function loadAndValidateProposal(
   return { proposal, resolvedPath };
 }
 
+export function validateProposalExecutionProvenance(proposal: RepairProposal, repoRoot: string): void {
+  if (!proposal.runId || !proposal.attemptId || !proposal.diagnosisManifestPath || !proposal.proposalDigest) {
+    throw new Error('Proposal is missing diagnosis provenance or proposal digest.');
+  }
+  const expectedDigest = crypto.createHash('sha256').update(proposalDigestPayload(proposal as any)).digest('hex');
+  if (proposal.proposalDigest !== expectedDigest) throw new Error('Proposal content or registered patch changed after generation.');
+  if (!proposal.scenarioId?.trim()) throw new Error('Executable proposals must include a canonical scenarioId.');
+  if (proposal.status !== 'proposed') throw new Error('Only actionable proposed repairs may be executed.');
+  if (proposal.humanReviewStatus === 'approved' && proposal.approvalDigest !== proposal.proposalDigest) {
+    throw new Error('Human approval is not bound to this exact proposal digest.');
+  }
+  const diagnosisPath = resolveProposalDiagnosisManifestPath(proposal, repoRoot);
+  const diagnosisManifest = readCurrentDiagnosisManifest(diagnosisPath, proposal.runId);
+  if (diagnosisManifest.attemptId !== proposal.attemptId) throw new Error('Proposal belongs to a superseded diagnosis attempt.');
+  const expectedPatch = findPatchForScenario(proposal.scenarioId)?.patchId || null;
+  if (proposal.registeredPatchId !== expectedPatch) throw new Error('Proposal patch does not match the authoritative scenario mapping.');
+}
+
+function resolveProposalDiagnosisManifestPath(proposal: RepairProposal, repoRoot: string): string {
+  if (!proposal.diagnosisManifestPath) throw new Error('Proposal is missing diagnosis provenance.');
+  const resolvedRoot = path.resolve(repoRoot);
+  const diagnosisPath = path.resolve(resolvedRoot, proposal.diagnosisManifestPath);
+  if (diagnosisPath !== resolvedRoot && !diagnosisPath.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error('Proposal diagnosis manifest path is outside the repository.');
+  }
+  return diagnosisPath;
+}
+
 /**
  * Main execution function callable directly or via CLI.
  */
@@ -189,6 +220,11 @@ export async function runRepairJob(
 ): Promise<{ success: boolean; report: RepairExecutionReport; reportPath: string }> {
   const cliArgs = parseRepairJobCliArgs(argv);
   const { proposal, resolvedPath } = loadAndValidateProposal(cliArgs.proposalPath, repoRoot);
+  const diagnosisPath = resolveProposalDiagnosisManifestPath(proposal, repoRoot);
+  const diagnosisLock = acquireDiagnosisLock(path.dirname(diagnosisPath));
+  try {
+  diagnosisLock.assertOwned();
+  validateProposalExecutionProvenance(proposal, repoRoot);
 
   const jobId = cliArgs.jobId || `job-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const targetBaseCommit = cliArgs.baseCommit || (proposal as any).baseCommitSha || 'HEAD';
@@ -237,7 +273,7 @@ export async function runRepairJob(
   // - An explicit CLI --patch matching the scenario patch is allowed.
   // - An explicit CLI --patch conflicting with the scenario patch is strictly rejected.
   // - An unknown scenario cannot be rescued by --patch or AI defectCategory fallback.
-  // - Legacy proposals genuinely lacking scenarioId retain defectCategory fallback.
+  // - Proposals without a canonical scenarioId are never executable.
   const hasScenarioId = Boolean(proposal.scenarioId && proposal.scenarioId.trim() !== '');
   const scenarioId = hasScenarioId ? proposal.scenarioId.trim() : undefined;
   const scenarioPatch = scenarioId ? findPatchForScenario(scenarioId) : undefined;
@@ -288,15 +324,7 @@ export async function runRepairJob(
 
     patch = scenarioPatch;
   } else {
-    // Legacy proposals genuinely lacking scenarioId fall back to defectCategory
-    patch = findPatchForDefect(proposal.defectCategory);
-    if (!patch) {
-      return createEarlyExitReport(
-        'UNSUPPORTED',
-        'unknown',
-        `No registered patch found for defect category: ${proposal.defectCategory}`
-      );
-    }
+    return createEarlyExitReport('UNSUPPORTED', 'unknown', 'Executable proposals must include a canonical scenarioId.');
   }
 
   if (hasScenarioId && proposal.defectCategory) {
@@ -338,6 +366,9 @@ export async function runRepairJob(
 
   const success = report.finalState === 'PASSED';
   return { success, report, reportPath };
+  } finally {
+    diagnosisLock.release();
+  }
 }
 
 async function main() {

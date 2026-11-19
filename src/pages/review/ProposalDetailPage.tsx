@@ -173,7 +173,7 @@ export const ProposalDetailPage: React.FC = () => {
                   }`}
                   data-testid="detail-freshness-status"
                 >
-                  {proposal.sourceFreshness.toUpperCase()}
+                  {(proposal.sourceFreshness || "fresh").toUpperCase()}
                 </span>
                 {proposal.isMock && <span className="mock-badge">MOCK VLM SIMULATION</span>}
               </div>
